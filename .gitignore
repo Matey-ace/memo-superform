@@ -5,6 +5,11 @@ __pycache__/
 # 本地运行文件（进程号，重启后自动变）
 server.pid
 
+# 打包产物（体积大，不入库，需要时重新打包）
+build/
+dist/
+*.spec
+
 # 编辑器 / 系统文件
 .idea/
 .vscode/

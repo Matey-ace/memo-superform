@@ -17,6 +17,8 @@ import json
 import os
 import sys
 import io
+import webbrowser
+import threading
 from urllib.parse import urlparse, parse_qs
 
 # 修复 Windows 控制台编码问题
@@ -25,7 +27,8 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 PORT = 8888
-WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+# 打包为 exe 时静态资源在 PyInstaller 的解压目录 _MEIPASS 中
+WEB_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 MAIMEMO_BASE = "https://open.maimemo.com/open"
 
 class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
@@ -154,19 +157,22 @@ def main():
     for port in [PORT, 8889, 8890, 3000, 5000]:
         try:
             with socketserver.ThreadingTCPServer(("127.0.0.1", port), MemoProxyHandler) as httpd:
+                url = "http://localhost:%d" % port
                 print("")
                 print("  ========================================")
                 print("  Memo Superform proxy server started")
                 print("  ========================================")
                 print("")
                 print("  Web dir:  %s" % WEB_DIR)
-                print("  URL:      http://localhost:%d" % port)
+                print("  URL:      %s" % url)
                 print("  API proxy: /proxy/memo/* -> open.maimemo.com")
                 print("  AI proxy:  /proxy/ai")
                 print("")
                 print("  Press Ctrl+C to stop")
                 print("")
                 print("  %s" % ("-" * 40))
+                # 稍等服务器就绪后自动打开浏览器
+                threading.Timer(1.0, lambda: webbrowser.open(url)).start()
                 httpd.serve_forever()
                 return
         except OSError:
