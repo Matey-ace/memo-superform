@@ -333,6 +333,13 @@ const LayoutManager = (function() {
 
     // 拖拽状态
     let dragState = null;
+    let dragEndCallback = null;
+
+    // 是否正在拖拽（供自动刷新模块查询，拖拽期间暂停刷新）
+    function isDragging() { return dragState !== null; }
+
+    // 注册拖拽结束回调（拖拽完成后触发，用于补刷被跳过的自动刷新）
+    function setDragEndCallback(fn) { dragEndCallback = fn; }
 
     function setupDragAndDrop() {
         // 整块磁贴都可作为拖拽手柄（图表容器和控件区域除外，留给图表交互）
@@ -456,57 +463,93 @@ const LayoutManager = (function() {
             // 平滑滑到目标格子（无回弹），动画结束后再互换 DOM 位置，视觉无缝
             animateSwapTo(tile, target, state);
         } else {
-            // 未对准目标：平滑弹回原位
-            tile.style.transition = 'transform 0.18s ease';
+            // 未对准目标：平滑弹回原位（带惯性减速）
+            tile.style.transition = 'transform 0.32s cubic-bezier(0.22, 1, 0.36, 1)';
             tile.style.transform = '';
             setTimeout(() => {
                 tile.style.transition = '';
-            }, 200);
+                if (dragEndCallback) dragEndCallback();
+            }, 340);
         }
     }
 
-    // 平滑吸附：两块磁贴同时滑动互换位置，动画结束后互换网格位置
+    // 平滑交换：FLIP 技术——先滑动到目标位置，再无跳变交换 DOM，最后平滑过渡到最终位置
     function animateSwapTo(tile, target, state) {
-        // 记录当前视觉位置（A 含拖动位移，B 在原位）
-        const tileRect = tile.getBoundingClientRect();
-        const targetRect = target.getBoundingClientRect();
-        const originLeft = state.startRect.left;
-        const originTop = state.startRect.top;
-        const duration = 220;
-        // 标准平滑曲线，无回弹
+        var tileRect = tile.getBoundingClientRect();
+        var targetRect = target.getBoundingClientRect();
+        var originLeft = state.startRect.left;
+        var originTop = state.startRect.top;
+        var glideDuration = 260;
+        var glideEase = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-        // A 滑到 B 的位置（相对 A 原位）
-        const tx = targetRect.left - originLeft;
-        const ty = targetRect.top - originTop;
-        // B 滑到 A 当前视觉位置（相对 B 原位）
-        const bx = tileRect.left - targetRect.left;
-        const by = tileRect.top - targetRect.top;
+        // 阶段1：两块磁贴同时滑动到对方位置
+        var tx = targetRect.left - originLeft;
+        var ty = targetRect.top - originTop;
+        var bx = tileRect.left - targetRect.left;
+        var by = tileRect.top - targetRect.top;
 
-        tile.style.transition = 'transform ' + duration + 'ms cubic-bezier(0.25, 0.1, 0.25, 1)';
+        tile.style.transition = 'transform ' + glideDuration + 'ms ' + glideEase;
         tile.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(1)';
-        target.style.transition = 'transform ' + duration + 'ms cubic-bezier(0.25, 0.1, 0.25, 1)';
+        target.style.transition = 'transform ' + glideDuration + 'ms ' + glideEase;
         target.style.transform = 'translate(' + bx + 'px, ' + by + 'px)';
 
-        // 动画真正结束后再换位，避免丢帧导致提前截断动画产生跳变
-        let finalized = false;
+        var finalized = false;
         function finalize() {
             if (finalized) return;
             finalized = true;
-            tile.style.transition = '';
+
+            // === FLIP 技术核心 ===
+            // First: 记录 DOM 交换前的视觉位置
+            var tileFirst = tile.getBoundingClientRect();
+            var targetFirst = target.getBoundingClientRect();
+
+            // 清除动画 transform，让磁贴回到 transform 为空的视觉状态
+            tile.style.transition = 'none';
             tile.style.transform = '';
-            target.style.transition = '';
+            target.style.transition = 'none';
             target.style.transform = '';
-            // 短暂静置，防止换位瞬间触发 hover 上浮造成"弹"的错觉
+
+            // 交换 DOM 位置（此时视觉上磁贴在原位，但 DOM 已换位）
             tile.classList.add('settling');
             target.classList.add('settling');
             swapPositions(tile, target);
+
+            // Last: DOM 交换后磁贴的新位置
+            var tileLast = tile.getBoundingClientRect();
+            var targetLast = target.getBoundingClientRect();
+
+            // Invert: 计算位置差，用 transform 反转回交换前的视觉位置
+            var tileDx = tileFirst.left - tileLast.left;
+            var tileDy = tileFirst.top - tileLast.top;
+            var targetDx = targetFirst.left - targetLast.left;
+            var targetDy = targetFirst.top - targetLast.top;
+
+            tile.style.transform = 'translate(' + tileDx + 'px, ' + tileDy + 'px)';
+            target.style.transform = 'translate(' + targetDx + 'px, ' + targetDy + 'px)';
+
+            // 强制浏览器同步计算（消除 Invert 状态）
+            void tile.offsetWidth;
+            void target.offsetWidth;
+
+            // Play: 平滑过渡到最终位置（transform 归零）
+            var settleDuration = 200;
+            var settleEase = 'cubic-bezier(0.22, 1, 0.36, 1)';
+            tile.classList.remove('settling');
+            target.classList.remove('settling');
+            tile.style.transition = 'transform ' + settleDuration + 'ms ' + settleEase;
+            target.style.transition = 'transform ' + settleDuration + 'ms ' + settleEase;
+            tile.style.transform = '';
+            target.style.transform = '';
+
             setTimeout(function() {
-                tile.classList.remove('settling');
-                target.classList.remove('settling');
-            }, 260);
+                tile.style.transition = '';
+                target.style.transition = '';
+            }, settleDuration + 50);
+
+            if (dragEndCallback) dragEndCallback();
         }
 
-        // 监听磁贴的 transform 过渡结束（精确时机）
+        // 监听滑动动画结束
         tile.addEventListener('transitionend', function handler(e) {
             if (e.propertyName === 'transform' && e.target === tile) {
                 tile.removeEventListener('transitionend', handler);
@@ -514,8 +557,8 @@ const LayoutManager = (function() {
             }
         });
 
-        // 兜底：万一 transitionend 没触发，也确保收尾
-        setTimeout(finalize, duration + 300);
+        // 兜底
+        setTimeout(finalize, glideDuration + 300);
     }
 
     // 互换两个磁贴在网格中的位置（内容跟随磁贴一起移动）
@@ -556,7 +599,9 @@ const LayoutManager = (function() {
         switchLayout,
         openFullscreen,
         closeFullscreen,
-        getCurrentLayout: () => currentLayout
+        getCurrentLayout: () => currentLayout,
+        isDragging,
+        setDragEndCallback
     };
 })();
 

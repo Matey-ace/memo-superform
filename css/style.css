@@ -1,4 +1,4 @@
-﻿/* ========== 全局变量 ========== */
+/* ========== 全局变量 ========== */
 :root {
     --bg-color: #f0f2f5;
     --card-bg: #ffffff;
@@ -1029,4 +1029,105 @@ body.dark .tile.dragging {
 
 .swatch-name {
     white-space: nowrap;
+}
+
+/* ========== 自动刷新 ========== */
+.auto-refresh-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 16px;
+    background: var(--bg-color);
+    margin-right: 4px;
+}
+
+.auto-refresh-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+}
+
+.auto-refresh-btn:hover {
+    background: #e6e9ef;
+    color: var(--text-primary);
+}
+
+.auto-refresh-btn.active {
+    color: #52c41a;
+}
+
+.auto-refresh-btn.active:hover {
+    background: rgba(82, 196, 26, 0.1);
+}
+
+.auto-refresh-btn.refreshing svg {
+    animation: ar-spin 0.8s linear infinite;
+}
+
+@keyframes ar-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.auto-refresh-select {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    padding: 2px 0;
+}
+
+.auto-refresh-countdown {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    min-width: 38px;
+    text-align: center;
+}
+
+.auto-refresh-countdown.paused {
+    opacity: 0.5;
+}
+
+@media (max-width: 768px) {
+    .auto-refresh-countdown,
+    .auto-refresh-select {
+        display: none;
+    }
+}
+
+body.dark .auto-refresh-group {
+    background: var(--bg-color);
+}
+
+body.dark .auto-refresh-btn:hover {
+    background: #334155;
+}
+
+body.dark .auto-refresh-btn.active {
+    color: #95de64;
+}
+
+body.dark .auto-refresh-btn.active:hover {
+    background: rgba(149, 222, 100, 0.1);
+}
+
+body.dark .auto-refresh-select {
+    color: var(--text-secondary);
+}
+
+body.dark .auto-refresh-select option {
+    background: var(--card-bg);
+    color: var(--text-primary);
 }

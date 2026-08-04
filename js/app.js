@@ -1,10 +1,18 @@
-﻿// ==========================================
+// ==========================================
 // Memo Superform - 应用入口
 // ==========================================
 
 const App = (function() {
     let isLoading = false;
     let proxyOnline = false;
+    
+    // ---- 自动刷新状态 ----
+    let autoRefreshTimer = null;
+    let countdownTimer = null;
+    let nextRefreshTime = 0;
+    let pendingRefresh = false;
+    let autoRefreshEnabled = localStorage.getItem('auto_refresh_enabled') !== 'false';
+    let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
     
     function init() {
         setupSettingsPanel();
@@ -13,6 +21,7 @@ const App = (function() {
         setupAIClassifyButton();
         setupTheme();
         LayoutManager.init();
+        setupAutoRefresh();
         
         checkProxyServer().then(online => {
             if (online && MaimemoAPI.hasToken()) {
@@ -303,7 +312,124 @@ const App = (function() {
         });
     }
     
-    // ---- 加载所有数据 ----
+    // ---- 自动刷新 ----
+    
+    function setupAutoRefresh() {
+        // 拖拽结束回调：拖拽期间跳过的刷新，在拖拽完成后补刷
+        LayoutManager.setDragEndCallback(function() {
+            if (pendingRefresh) {
+                pendingRefresh = false;
+                doDeferredRefresh();
+            }
+        });
+        
+        var toggle = document.getElementById('autoRefreshToggle');
+        var select = document.getElementById('autoRefreshInterval');
+        
+        toggle.classList.toggle('active', autoRefreshEnabled);
+        select.value = String(autoRefreshInterval);
+        
+        toggle.addEventListener('click', function() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            localStorage.setItem('auto_refresh_enabled', autoRefreshEnabled ? 'true' : 'false');
+            toggle.classList.toggle('active', autoRefreshEnabled);
+            if (autoRefreshEnabled) {
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        });
+        
+        select.addEventListener('change', function() {
+            autoRefreshInterval = parseInt(this.value, 10);
+            localStorage.setItem('auto_refresh_interval', String(autoRefreshInterval));
+            if (autoRefreshEnabled) {
+                startAutoRefresh();
+            }
+        });
+        
+        if (autoRefreshEnabled) {
+            startAutoRefresh();
+        } else {
+            updateCountdown();
+        }
+    }
+    
+    function startAutoRefresh() {
+        stopAutoRefresh();
+        nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
+        autoRefreshTimer = setInterval(function() {
+            if (LayoutManager.isDragging()) {
+                pendingRefresh = true;
+                return;
+            }
+            doAutoRefresh();
+        }, autoRefreshInterval * 60 * 1000);
+        countdownTimer = setInterval(updateCountdown, 1000);
+        updateCountdown();
+    }
+    
+    function stopAutoRefresh() {
+        if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        updateCountdown();
+    }
+    
+    var pendingRecords = null;
+
+    async function doAutoRefresh() {
+        if (isLoading) return;
+        if (!proxyOnline) return;
+        var toggle = document.getElementById('autoRefreshToggle');
+        if (toggle) toggle.classList.add('refreshing');
+        isLoading = true;
+        try {
+            var records = await MaimemoAPI.getAllStudyRecords(false);
+            // await 返回后可能用户已经开始新一轮拖拽，此时重绘会导致 DOM 与图表错位
+            // 先保存数据，若正在拖拽则延迟到拖拽结束后再重绘
+            if (LayoutManager.isDragging()) {
+                pendingRecords = records;
+                pendingRefresh = true;
+                return;
+            }
+            ChartManager.setRecords(records);
+            ChartManager.renderVisibleFromSelectors(true);
+            nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
+            updateCountdown();
+        } catch (e) {
+            console.warn('自动刷新失败:', e);
+        } finally {
+            isLoading = false;
+            if (toggle) toggle.classList.remove('refreshing');
+        }
+    }
+
+    // 拖拽结束后补刷：如果数据已拉取完成，直接重绘（无需重新请求 API）
+    function doDeferredRefresh() {
+        if (pendingRecords) {
+            ChartManager.setRecords(pendingRecords);
+            pendingRecords = null;
+        }
+        ChartManager.renderVisibleFromSelectors(true);
+        nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
+        updateCountdown();
+    }
+    
+    function updateCountdown() {
+        var el = document.getElementById('autoRefreshCountdown');
+        if (!el) return;
+        if (!autoRefreshEnabled) {
+            el.textContent = '已暂停';
+            el.classList.add('paused');
+            return;
+        }
+        el.classList.remove('paused');
+        var remaining = Math.max(0, nextRefreshTime - Date.now());
+        var mins = Math.floor(remaining / 60000);
+        var secs = Math.floor((remaining % 60000) / 1000);
+        el.textContent = mins + ':' + String(secs).padStart(2, '0');
+    }
+        // ---- 加载所有数据 ----
     
     async function loadAllData(forceRefresh = false) {
         if (isLoading) return;
@@ -332,11 +458,9 @@ const App = (function() {
                 } catch (e) {}
             }
             
-            ChartManager.render(0, 'heatmap');
-            setTimeout(() => {
-                ChartManager.render(1, 'trend', { days: 30 });
-                ChartManager.render(2, 'memory');
-                ChartManager.render(3, 'aiclass');
+            // 根据磁贴下拉框的实际值渲染，确保标题与内容一致
+            setTimeout(function() {
+                ChartManager.renderVisibleFromSelectors(false);
             }, 100);
         } catch (e) {
             console.error('加载数据失败:', e);
