@@ -1,6 +1,6 @@
 ﻿// ==========================================
 // Memo Superform - 图表模块
-// 使用 ECharts 渲染 4 个核心图表
+// 使用 ECharts 渲染多个核心图表
 // ==========================================
 
 const ChartManager = (function() {
@@ -9,6 +9,7 @@ const ChartManager = (function() {
     // 缓存数据
     let cachedRecords = null;
     let cachedAIClassification = null;
+    let cachedNotepadWords = null;
     
     // ---- 数据处理工具 ----
     
@@ -696,6 +697,242 @@ const ChartManager = (function() {
         return chart;
     }
     
+    // 5. 词书单词进度表
+    // 展示每个云词本（词书）的单词量，以及各词的记忆状态分布
+    function renderNotepadProgress(containerId, records, notepadWords) {
+        const chart = echarts.init(document.getElementById(containerId));
+
+        if (!notepadWords || notepadWords.length === 0) {
+            chart.setOption({
+                title: {
+                    text: '词书单词进度',
+                    subtext: '云词本里还没有单词，先添加一些单词到词书吧',
+                    left: 'center',
+                    top: 'center',
+                    textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
+                    subtextStyle: { fontSize: 11, color: '#6b7280' }
+                }
+            });
+            return chart;
+        }
+
+        // 构建 单词 -> 记忆状态 映射（小写拼写）
+        const statusMap = {};
+        for (const r of records) {
+            const w = (r.voc_spelling || '').toLowerCase().trim();
+            if (w) statusMap[w] = r.last_response || '';
+        }
+
+        // 按词书分组统计
+        const notepadMap = {};
+        for (const item of notepadWords) {
+            const name = item.notepad || '未分类';
+            if (!notepadMap[name]) {
+                notepadMap[name] = { total: 0, unlearned: 0, well: 0, familiar: 0, vague: 0, forget: 0 };
+            }
+            const stat = notepadMap[name];
+            stat.total++;
+            const resp = statusMap[item.word] || '';
+            switch (resp) {
+                case 'WELL_FAMILIAR': stat.well++; break;
+                case 'FAMILIAR': stat.familiar++; break;
+                case 'VAGUE': stat.vague++; break;
+                case 'FORGET': stat.forget++; break;
+                default: stat.unlearned++; break; // 词本里有但学习记录中没反馈 = 尚未学习
+            }
+        }
+
+        const notepads = Object.keys(notepadMap);
+        const stats = notepads.map(name => notepadMap[name]);
+        const totalWords = stats.reduce((s, x) => s + x.total, 0);
+
+        const seriesDefs = [
+            { key: 'unlearned', name: '未学习', color: '#d9d9d9' },
+            { key: 'well', name: '已熟知', color: '#52c41a' },
+            { key: 'familiar', name: '认识', color: '#1890ff' },
+            { key: 'vague', name: '模糊', color: '#fa8c16' },
+            { key: 'forget', name: '忘记', color: '#f5222d' }
+        ];
+
+        const option = {
+            title: {
+                text: '词书单词进度',
+                subtext: notepads.length + ' 本词书 · 共 ' + totalWords + ' 词',
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
+                subtextStyle: { fontSize: 11, color: '#6b7280' }
+            },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: function(params) {
+                    const idx = params[0].dataIndex;
+                    const s = stats[idx];
+                    let html = '<strong>' + notepads[idx] + '</strong><br/>' +
+                        '总词数：' + s.total + '<br/>' +
+                        '未学习：' + s.unlearned + '<br/>' +
+                        '已熟知：' + s.well + '<br/>' +
+                        '认识：' + s.familiar + '<br/>' +
+                        '模糊：' + s.vague + '<br/>' +
+                        '忘记：' + s.forget;
+                    return html;
+                }
+            },
+            legend: {
+                data: seriesDefs.map(s => s.name),
+                bottom: 5,
+                textStyle: { fontSize: 11, color: '#6b7280' }
+            },
+            grid: {
+                left: 30,
+                right: 40,
+                top: 60,
+                bottom: 40
+            },
+            xAxis: {
+                type: 'value',
+                axisLabel: { fontSize: 10, color: '#9ca3af' },
+                splitLine: { lineStyle: { color: '#f3f4f6' } }
+            },
+            yAxis: {
+                type: 'category',
+                data: notepads,
+                axisLabel: {
+                    fontSize: 11,
+                    color: '#1a1a2e',
+                    width: 90,
+                    overflow: 'truncate'
+                },
+                axisLine: { lineStyle: { color: '#e5e7eb' } },
+                axisTick: { show: false }
+            },
+            series: seriesDefs.map(def => ({
+                name: def.name,
+                type: 'bar',
+                stack: 'total',
+                barWidth: 26,
+                data: stats.map(s => s[def.key]),
+                itemStyle: { color: def.color, borderRadius: 0 },
+                label: {
+                    show: def.key === 'unlearned' || def.key === 'well',
+                    position: 'inside',
+                    fontSize: 10,
+                    color: def.key === 'unlearned' ? '#8c8c8c' : '#fff',
+                    formatter: function(p) { return p.value > 0 ? p.value : ''; }
+                }
+            }))
+        };
+
+        chart.setOption(option);
+        return chart;
+    }
+
+    // 6. 词汇量增长曲线
+    // 按添加日期累计展示词汇量的增长过程
+    function renderVocabularyGrowth(containerId, records) {
+        const chart = echarts.init(document.getElementById(containerId));
+
+        // 按月份聚合新增词汇
+        const monthMap = {};
+        for (const r of records) {
+            const addDate = r.add_date;
+            if (!addDate) continue;
+            const d = new Date(addDate);
+            if (isNaN(d.getTime())) continue;
+            const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+            monthMap[key] = (monthMap[key] || 0) + 1;
+        }
+
+        const months = Object.keys(monthMap).sort();
+        const monthlyNew = months.map(m => monthMap[m]);
+        const cumulative = [];
+        let sum = 0;
+        for (const n of monthlyNew) { sum += n; cumulative.push(sum); }
+
+        const totalWords = cumulative.length > 0 ? cumulative[cumulative.length - 1] : 0;
+
+        const option = {
+            title: {
+                text: '词汇量增长曲线',
+                subtext: '累计 ' + totalWords + ' 词 · 最早从 ' + (months[0] || '-') + ' 开始',
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
+                subtextStyle: { fontSize: 11, color: '#6b7280' }
+            },
+            tooltip: {
+                trigger: 'axis',
+                formatter: function(params) {
+                    const idx = params[0].dataIndex;
+                    let html = '<strong>' + months[idx] + '</strong><br/>';
+                    html += '当月新增：' + monthlyNew[idx] + ' 词<br/>';
+                    html += '累计词汇：' + cumulative[idx] + ' 词';
+                    return html;
+                }
+            },
+            legend: {
+                data: ['累计词汇量', '当月新增'],
+                bottom: 5,
+                textStyle: { fontSize: 11, color: '#6b7280' }
+            },
+            grid: {
+                left: 50,
+                right: 30,
+                top: 60,
+                bottom: 45
+            },
+            xAxis: {
+                type: 'category',
+                data: months,
+                axisLabel: {
+                    fontSize: 10,
+                    color: '#9ca3af',
+                    interval: Math.max(0, Math.floor(months.length / 10))
+                },
+                axisLine: { lineStyle: { color: '#e5e7eb' } }
+            },
+            yAxis: {
+                type: 'value',
+                name: '词汇量',
+                nameTextStyle: { fontSize: 11, color: '#6b7280' },
+                axisLabel: { fontSize: 10, color: '#9ca3af' },
+                splitLine: { lineStyle: { color: '#f3f4f6' } }
+            },
+            series: [
+                {
+                    name: '累计词汇量',
+                    type: 'line',
+                    data: cumulative,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 6,
+                    lineStyle: { color: '#eb2f96', width: 3 },
+                    itemStyle: { color: '#eb2f96' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(235, 47, 150, 0.2)' },
+                            { offset: 1, color: 'rgba(235, 47, 150, 0)' }
+                        ])
+                    }
+                },
+                {
+                    name: '当月新增',
+                    type: 'bar',
+                    data: monthlyNew,
+                    barWidth: '40%',
+                    itemStyle: {
+                        color: 'rgba(19, 194, 194, 0.65)',
+                        borderRadius: [3, 3, 0, 0]
+                    }
+                }
+            ]
+        };
+
+        chart.setOption(option);
+        return chart;
+    }
+
     // ---- 公共 API ----
     
     // 设置/更新学习记录数据
@@ -713,6 +950,15 @@ const ChartManager = (function() {
     
     function getAIClassification() {
         return cachedAIClassification;
+    }
+
+    // 设置/获取云词本单词列表
+    function setNotepadWords(words) {
+        cachedNotepadWords = words;
+    }
+
+    function getNotepadWords() {
+        return cachedNotepadWords;
     }
     
     // 渲染指定图表
@@ -740,6 +986,12 @@ const ChartManager = (function() {
                 break;
             case 'aiclass':
                 chart = renderAIClassificationChart(containerId, cachedAIClassification);
+                break;
+            case 'notepad':
+                chart = renderNotepadProgress(containerId, cachedRecords || [], cachedNotepadWords);
+                break;
+            case 'growth':
+                chart = renderVocabularyGrowth(containerId, cachedRecords || []);
                 break;
         }
         
@@ -788,6 +1040,8 @@ const ChartManager = (function() {
         getRecords,
         setAIClassification,
         getAIClassification,
+        setNotepadWords,
+        getNotepadWords,
         render,
         rerenderAll,
         getInstance,

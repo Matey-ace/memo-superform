@@ -6,7 +6,6 @@
 const LayoutManager = (function() {
     let currentLayout = 'single';
     let fullscreenChartBackup = null;
-    let dragSrcTile = null;
 
     const layoutTileCount = {
         'single': 1, 'split2': 2, 'split3': 3, 'grid4': 4
@@ -16,7 +15,9 @@ const LayoutManager = (function() {
         'heatmap': { icon: '🔥', title: '打卡热力图', color: '#52c41a', toolbar: 'heatmap' },
         'trend':   { icon: '📈', title: '学习趋势',   color: '#1890ff', toolbar: 'trend' },
         'memory':  { icon: '🧠', title: '记忆曲线',   color: '#722ed1', toolbar: null },
-        'aiclass': { icon: '🤖', title: 'AI 单词分类', color: '#fa8c16', toolbar: 'ai' }
+        'aiclass': { icon: '🤖', title: 'AI 单词分类', color: '#fa8c16', toolbar: 'ai' },
+        'notepad': { icon: '📚', title: '词书进度',   color: '#13c2c2', toolbar: null },
+        'growth':  { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null }
     };
 
     function init() {
@@ -299,91 +300,217 @@ const LayoutManager = (function() {
         updateTileToolbar(tile, chartType);
     }
 
-    // ========== 拖拽互换 ==========
+    // ========== 拖拽互换（自定义指针拖拽 + 平滑吸附） ==========
+
+    // 拖拽状态
+    let dragState = null;
 
     function setupDragAndDrop() {
-        const tiles = document.querySelectorAll('.tile');
+        // 整块磁贴都可作为拖拽手柄（图表容器和控件区域除外，留给图表交互）
+        document.querySelectorAll('.tile').forEach(tileEl => {
+            tileEl.addEventListener('pointerdown', function(e) {
+                // 单格布局或磁贴未显示时禁用
+                if (currentLayout === 'single') return;
+                // 从控件区域 / 工具栏按钮开始不触发拖拽（图表容器可拖，磁贴整块都能拖）
+                if (e.target.closest('select, button, input, .chart-toolbar, .ai-toolbar')) return;
+                // 只响应鼠标主键
+                if (e.button !== 0) return;
 
-        tiles.forEach(tile => {
-            // dragstart - 开始拖拽
-            tile.addEventListener('dragstart', function(e) {
-                // 如果从控件区域开始拖拽，取消
-                if (e.target.closest('select, button, input, .chart-toolbar, .ai-toolbar')) {
-                    e.preventDefault();
-                    return;
-                }
+                const tile = this;
+                if (!tile || tile.style.display === 'none') return;
 
-                dragSrcTile = this;
-                this.classList.add('dragging');
-                e.dataTransfer.effectAllowed = 'move';
-                // Firefox 需要设置 data
-                e.dataTransfer.setData('text/plain', this.dataset.tile);
-            });
+                const rect = tile.getBoundingClientRect();
+                dragState = {
+                    tile: tile,
+                    pointerId: e.pointerId,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+                    dx: 0,
+                    dy: 0,
+                    moved: false,
+                    target: null
+                };
 
-            // dragend - 拖拽结束
-            tile.addEventListener('dragend', function() {
-                this.classList.remove('dragging');
-                // 清除所有 drag-over 标记
-                document.querySelectorAll('.tile.drag-over').forEach(t => t.classList.remove('drag-over'));
-                dragSrcTile = null;
-            });
-
-            // dragover - 拖拽经过（必须 preventDefault 才能 drop）
-            tile.addEventListener('dragover', function(e) {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                if (this !== dragSrcTile) {
-                    this.classList.add('drag-over');
-                }
-            });
-
-            // dragleave - 拖拽离开
-            tile.addEventListener('dragleave', function(e) {
-                // 检查是否真的离开了这个 tile（不是进入子元素）
-                if (!this.contains(e.relatedTarget)) {
-                    this.classList.remove('drag-over');
-                }
-            });
-
-            // drop - 放置
-            tile.addEventListener('drop', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-
-                this.classList.remove('drag-over');
-
-                if (dragSrcTile && dragSrcTile !== this) {
-                    swapTiles(dragSrcTile, this);
-                }
-            });
+                tile.setPointerCapture(e.pointerId);
+                tile.classList.add('dragging');
+                document.body.classList.add('no-select');
+            }, true);
         });
+
+        // 拖动中：磁贴跟手 + 更新吸附目标
+        document.addEventListener('pointermove', function(e) {
+            if (!dragState) return;
+            // 只处理当前拖拽的指针
+            if (e.pointerId !== dragState.pointerId) return;
+
+            const dx = e.clientX - dragState.startX;
+            const dy = e.clientY - dragState.startY;
+
+            // 移动超过阈值才视为拖动（避免误触）
+            if (!dragState.moved && Math.abs(dx) + Math.abs(dy) < 6) return;
+            dragState.moved = true;
+            dragState.dx = dx;
+            dragState.dy = dy;
+
+            const tile = dragState.tile;
+            // 拖拽期间不要 transition，保证跟手
+            tile.style.transform = 'translate(' + dx + 'px, ' + dy + 'px) scale(1.03)';
+
+            // 更新吸附目标高亮
+            updateDragTarget(e.clientX, e.clientY);
+        }, true);
+
+        // 松开：先平滑吸附，再交换图表
+        document.addEventListener('pointerup', function(e) {
+            if (!dragState) return;
+            if (e.pointerId !== dragState.pointerId) return;
+            finishDrag(e.clientX, e.clientY);
+        }, true);
+
+        document.addEventListener('pointercancel', function() {
+            if (dragState) finishDrag(dragState.startX, dragState.startY);
+        }, true);
     }
 
-    // 交换两个磁贴的图表内容
-    function swapTiles(tileA, tileB) {
+    // 判断指针当前位置吸附到哪个磁贴
+    function updateDragTarget(x, y) {
+        const tile = dragState.tile;
+        let target = null;
+        const margin = 12; // 吸附余量，磁贴外 12px 内也算命中
+
+        document.querySelectorAll('.tile').forEach(t => {
+            if (t === tile || t.style.display === 'none') return;
+            const r = t.getBoundingClientRect();
+            if (x >= r.left - margin && x <= r.right + margin &&
+                y >= r.top - margin && y <= r.bottom + margin) {
+                target = t;
+            }
+        });
+
+        // 更新高亮
+        if (dragState.target !== target) {
+            if (dragState.target) dragState.target.classList.remove('drag-over');
+            if (target) target.classList.add('drag-over');
+            dragState.target = target;
+        }
+    }
+
+    function clearDragTarget() {
+        if (dragState && dragState.target) {
+            dragState.target.classList.remove('drag-over');
+            dragState.target = null;
+        }
+        document.querySelectorAll('.tile.drag-over').forEach(t => t.classList.remove('drag-over'));
+    }
+
+    // 结束拖拽：有目标平滑滑到位后换位，否则弹回原位
+    function finishDrag(x, y) {
+        const state = dragState;
+        const tile = state.tile;
+        const target = state.target;
+        dragState = null;
+
+        tile.classList.remove('dragging');
+        document.body.classList.remove('no-select');
+
+        // 未实际拖动：直接复位
+        if (!state.moved) {
+            tile.style.transform = '';
+            clearDragTarget();
+            return;
+        }
+
+        clearDragTarget();
+
+        if (target && target !== tile) {
+            // 平滑滑到目标格子（无回弹），动画结束后再互换 DOM 位置，视觉无缝
+            animateSwapTo(tile, target, state);
+        } else {
+            // 未对准目标：平滑弹回原位
+            tile.style.transition = 'transform 0.18s ease';
+            tile.style.transform = '';
+            setTimeout(() => {
+                tile.style.transition = '';
+            }, 200);
+        }
+    }
+
+    // 平滑吸附：两块磁贴同时滑动互换位置，动画结束后互换网格位置
+    function animateSwapTo(tile, target, state) {
+        // 记录当前视觉位置（A 含拖动位移，B 在原位）
+        const tileRect = tile.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const originLeft = state.startRect.left;
+        const originTop = state.startRect.top;
+        const duration = 220;
+        // 标准平滑曲线，无回弹
+
+        // A 滑到 B 的位置（相对 A 原位）
+        const tx = targetRect.left - originLeft;
+        const ty = targetRect.top - originTop;
+        // B 滑到 A 当前视觉位置（相对 B 原位）
+        const bx = tileRect.left - targetRect.left;
+        const by = tileRect.top - targetRect.top;
+
+        tile.style.transition = 'transform ' + duration + 'ms cubic-bezier(0.25, 0.1, 0.25, 1)';
+        tile.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(1)';
+        target.style.transition = 'transform ' + duration + 'ms cubic-bezier(0.25, 0.1, 0.25, 1)';
+        target.style.transform = 'translate(' + bx + 'px, ' + by + 'px)';
+
+        // 动画真正结束后再换位，避免丢帧导致提前截断动画产生跳变
+        let finalized = false;
+        function finalize() {
+            if (finalized) return;
+            finalized = true;
+            tile.style.transition = '';
+            tile.style.transform = '';
+            target.style.transition = '';
+            target.style.transform = '';
+            // 短暂静置，防止换位瞬间触发 hover 上浮造成"弹"的错觉
+            tile.classList.add('settling');
+            target.classList.add('settling');
+            swapPositions(tile, target);
+            setTimeout(function() {
+                tile.classList.remove('settling');
+                target.classList.remove('settling');
+            }, 260);
+        }
+
+        // 监听磁贴的 transform 过渡结束（精确时机）
+        tile.addEventListener('transitionend', function handler(e) {
+            if (e.propertyName === 'transform' && e.target === tile) {
+                tile.removeEventListener('transitionend', handler);
+                finalize();
+            }
+        });
+
+        // 兜底：万一 transitionend 没触发，也确保收尾
+        setTimeout(finalize, duration + 300);
+    }
+
+    // 互换两个磁贴在网格中的位置（内容跟随磁贴一起移动）
+    function swapPositions(tileA, tileB) {
+        const parent = tileA.parentNode;
+        if (!parent) return;
+
+        // 根据 DOM 顺序决定插入位置，实现真正的换位
+        const aBeforeB = (tileA.compareDocumentPosition(tileB) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        if (aBeforeB) {
+            parent.insertBefore(tileB, tileA);
+        } else {
+            parent.insertBefore(tileA, tileB);
+        }
+
+        // 换位只做纯 DOM 操作；图表尺寸适配延后，避免与换位同帧造成卡顿
         const indexA = parseInt(tileA.dataset.tile);
         const indexB = parseInt(tileB.dataset.tile);
-
-        // 获取两个磁贴当前的图表类型
-        const typeA = ChartManager.getChartType(indexA) || 'heatmap';
-        const typeB = ChartManager.getChartType(indexB) || 'heatmap';
-
-        // 如果类型相同，不需要交换
-        if (typeA === typeB) return;
-
-        // 交换：A 显示 B 的图表，B 显示 A 的图表
-        applyChartToTile(tileA, typeB);
-        applyChartToTile(tileB, typeA);
-
-        // 重新渲染两个图表
-        // 趋势图需要保留 days 参数
-        const optionsA = typeB === 'trend' ? { days: 30 } : {};
-        const optionsB = typeA === 'trend' ? { days: 30 } : {};
-
-        setTimeout(() => {
-            ChartManager.render(indexA, typeB, optionsA);
-            ChartManager.render(indexB, typeA, optionsB);
-        }, 50);
+        setTimeout(function() {
+            const instA = ChartManager.getInstance(indexA);
+            const instB = ChartManager.getInstance(indexB);
+            if (instA) instA.resize();
+            if (instB) instB.resize();
+        }, 120);
     }
 
     // ========== 窗口大小变化 ==========

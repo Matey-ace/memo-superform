@@ -4,6 +4,12 @@
     user-select: none;
 }
 
+/* 拖动过程中禁止选中文本 */
+body.no-select {
+    user-select: none;
+    cursor: grabbing;
+}
+
 /* 拖拽手柄 - tile header */
 .tile-header {
     cursor: grab;
@@ -15,33 +21,21 @@
 
 /* 正在被拖拽的磁贴 */
 .tile.dragging {
-    opacity: 0.4;
-    transform: scale(0.97);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-/* 拖拽放置目标 */
-.tile.drag-over {
-    border: 2px dashed var(--accent-blue);
-    box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.15), var(--shadow-md);
-}
-
-/* 拖拽时的遮罩提示 */
-.tile.drag-over::after {
-    content: '⇄ 交换位置';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--accent-blue);
-    background: rgba(255, 255, 255, 0.9);
-    padding: 8px 16px;
-    border-radius: 8px;
-    z-index: 10;
+    opacity: 0.92;
+    z-index: 200;
     pointer-events: none;
-    white-space: nowrap;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+    /* transform 由 JS 实时控制，保证跟手 */
+    transition: box-shadow 0.2s ease;
+}
+
+/* 拖拽吸附目标 */
+.tile.drag-over {
+    outline: 3px solid var(--accent-blue);
+    outline-offset: -3px;
+    box-shadow: 0 0 0 6px rgba(24, 144, 255, 0.15), var(--shadow-md);
+    transform: scale(1.02);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 /* 禁止拖拽的元素（控件区域） */
@@ -59,7 +53,13 @@
     -webkit-user-drag: none;
     user-drag: none;
 }
+
 /* 单格布局下禁用拖拽光标 */
 .layout-single .tile-header {
     cursor: default;
+}
+/* 换位后的短暂静置：防止悬停上浮造成弹动 */
+.tile.settling {
+    transform: none !important;
+    transition: none !important;
 }
