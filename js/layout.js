@@ -238,6 +238,8 @@ const LayoutManager = (function() {
                 });
             });
             // 配色切换
+            var easterEggClicks = 0;
+            var easterEggTimer = null;
             toolbar.querySelectorAll('.palette-swatch').forEach(sw => {
                 sw.addEventListener('click', function() {
                     const idx = parseInt(this.dataset.palette);
@@ -248,6 +250,18 @@ const LayoutManager = (function() {
                     const ct = ChartManager.getChartType(tileIndex);
                     if (ct === 'heatmap') {
                         ChartManager.render(tileIndex, 'heatmap', { month: currentMonth });
+                    }
+                    // 彩蛋：连续点击 5 次樱粉配色后跳转
+                    if (idx === 1) {
+                        easterEggClicks++;
+                        clearTimeout(easterEggTimer);
+                        easterEggTimer = setTimeout(function() { easterEggClicks = 0; }, 3000);
+                        if (easterEggClicks >= 5) {
+                            easterEggClicks = 0;
+                            window.open('https://www.bilibili.com/video/BV1FD421j7EQ/', '_blank');
+                        }
+                    } else {
+                        easterEggClicks = 0;
                     }
                 });
             });
