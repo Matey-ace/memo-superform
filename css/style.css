@@ -848,3 +848,185 @@ body {
     color: var(--accent-green);
     border-color: var(--accent-green);
 }
+/* ========== 暗色主题 ========== */
+body.dark {
+    --bg-color: #0f172a;
+    --card-bg: #1e293b;
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --border-color: #334155;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+body.dark .topbar {
+    background: var(--card-bg);
+    border-bottom-color: var(--border-color);
+}
+
+body.dark .layout-switcher {
+    background: var(--bg-color);
+}
+
+body.dark .layout-btn.active {
+    background: var(--card-bg);
+}
+
+body.dark .icon-btn {
+    background: var(--bg-color);
+}
+
+body.dark .icon-btn:hover {
+    background: #334155;
+}
+
+body.dark .tile::before {
+    opacity: 0.9;
+}
+
+body.dark .tile-header {
+    border-bottom-color: var(--border-color);
+}
+
+body.dark .chart-toolbar,
+body.dark .ai-toolbar {
+    border-bottom-color: var(--border-color);
+}
+
+body.dark .chart-selector,
+body.dark .ai-source-select,
+body.dark .ai-date-field,
+body.dark .ai-date-input,
+body.dark .range-btn,
+body.dark .heatmap-nav-btn,
+body.dark .heatmap-today-btn,
+body.dark .ai-range-btn {
+    background: var(--bg-color);
+    color: var(--text-secondary);
+    border-color: var(--border-color);
+}
+
+body.dark .range-btn:hover,
+body.dark .heatmap-nav-btn:hover,
+body.dark .heatmap-today-btn:hover,
+body.dark .ai-range-btn:hover {
+    color: var(--text-primary);
+    background: #334155;
+}
+
+body.dark .range-btn.active {
+    background: var(--accent-blue);
+    color: #fff;
+}
+
+body.dark .ai-range-btn.active {
+    background: var(--accent-orange);
+    color: #fff;
+}
+
+body.dark .setting-item input[type="text"],
+body.dark .setting-item input[type="password"] {
+    background: var(--bg-color);
+    color: var(--text-primary);
+    border-color: var(--border-color);
+}
+
+body.dark .setting-item input:focus {
+    background: #0f172a;
+}
+
+body.dark .settings-content {
+    background: var(--card-bg);
+}
+
+body.dark .settings-header,
+body.dark .setting-group h3,
+body.dark .settings-footer {
+    border-color: var(--border-color);
+}
+
+body.dark .server-status.checking {
+    background: #334155;
+    color: #94a3b8;
+}
+
+body.dark .server-status.online {
+    background: rgba(82, 196, 26, 0.15);
+    color: #95de64;
+}
+
+body.dark .server-status.offline {
+    background: rgba(245, 34, 45, 0.15);
+    color: #ff7875;
+}
+
+body.dark .welcome-card {
+    background: var(--card-bg);
+}
+
+body.dark .fullscreen-chart {
+    background: var(--card-bg);
+}
+
+body.dark .tile.dragging {
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+/* ========== 热力图配色选择器 ========== */
+.palette-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.palette-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.palette-swatches {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.palette-swatch {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+
+.palette-swatch:hover {
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+}
+
+.palette-swatch.active {
+    border-color: var(--accent-blue);
+    background: rgba(24, 144, 255, 0.1);
+    color: var(--accent-blue);
+    font-weight: 600;
+}
+
+.swatch-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    border: 1px solid rgba(0,0,0,0.1);
+}
+
+.swatch-name {
+    white-space: nowrap;
+}
