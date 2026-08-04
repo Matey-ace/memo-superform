@@ -90,20 +90,4 @@ memo-superform/
 - GET /api/v1/memo/notepads/{id} - 获取云词本详情
 - POST /api/v1/memo/study/get_study_progress - 获取今日进度
 
-## 📦 打包为 Windows 可执行文件
-
-需要先安装 PyInstaller：
-
-```bash
-pip install pyinstaller
-```
-
-然后在项目目录执行：
-
-```bash
-python -m PyInstaller --noconfirm --onefile --name MemoSuperform ^
-  --add-data "index.html;." --add-data "css;css" ^
-  --add-data "js;js" --add-data "vendor;vendor" server.py
-```
-
-打包完成后，双击 `dist/MemoSuperform.exe` 即可运行，会自动打开浏览器；关闭控制台窗口即停止服务。exe 内已内置 ECharts，离线也能查看图表（拉取数据与 AI 分类仍需联网）。
+双击 `dist/MemoSuperform.exe` 即可运行，会自动打开浏览器；关闭控制台窗口即停止服务。exe 内已内置 ECharts，离线也能查看图表（拉取数据与 AI 分类仍需联网）。
