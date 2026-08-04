@@ -287,6 +287,14 @@ const App = (function() {
         try {
             const records = await MaimemoAPI.getAllStudyRecords(!forceRefresh);
             ChartManager.setRecords(records);
+
+            // 预取云词本单词，供词书进度图使用
+            try {
+                const notepadWords = await MaimemoAPI.getAllNotepadWords();
+                ChartManager.setNotepadWords(notepadWords);
+            } catch (e) {
+                console.warn('加载云词本失败:', e.message);
+            }
             
             const aiCache = localStorage.getItem('ai_classification_cache');
             if (aiCache) {
