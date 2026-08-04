@@ -1,10 +1,10 @@
-﻿# 🧲 Memo Superform
+﻿#Memo Superform
 
 > 把墨墨背单词的学习数据，变成一块块好看的磁贴。
 
 Memo Superform 是一个纯前端、本地运行的**墨墨背单词数据可视化仪表盘**。它通过墨墨官方开放 API 拉取你的学习记录和云词本，把枯燥的数字变成直观的图表，让你一眼看清自己的背词状态。
 
-## ✨ 特性
+##特性
 
 - **磁贴卡片交互**：每张图表是一块圆角磁贴，支持拖拽互换位置、分屏对比（单格 / 左右 / 三分 / 田字格）、点击全屏放大
 - **月度学习日历**：按月展示每天的学习量，数字直接标在格子上，支持前后翻月
@@ -14,11 +14,11 @@ Memo Superform 是一个纯前端、本地运行的**墨墨背单词数据可视
 - **隐私安全**：Token 和 AI Key 只存在浏览器本地，数据不上传任何第三方，代理服务器仅运行在你自己的电脑上
 - **本地缓存**：API 数据本地缓存，减少请求、打开更快
 
-## 🛠 技术栈
+##技术栈
 
 原生 HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python 轻量本地代理，零依赖安装，下载即用。
 
-## 🚀 Quick Start
+##Quick Start
 
 ### 1. 启动代理服务器
 ```bash
@@ -47,7 +47,7 @@ python server.py
 
 代理服务器只运行在你的本地，Token 不会经过任何第三方。
 
-## 📊 图表
+##图表
 
 | 图表 | 说明 |
 |------|------|
@@ -69,7 +69,7 @@ python server.py
 - 模型：默认 deepseek-flash
 - 数据源：云词本全部单词，或按自定义时间区间筛选学习记录中的单词
 
-## 📁 文件结构
+## 文件结构
 ```
 memo-superform/
 ├── server.py       # 本地代理服务器
@@ -83,7 +83,7 @@ memo-superform/
 └── README.md
 ```
 
-## 📡 API 说明
+## API 说明
 基于墨墨开放 API (https://open.maimemo.com/) 开发：
 - POST /api/v1/memo/study/query_study_records - 查询学习记录
 - GET /api/v1/memo/notepads - 查询云词本列表
