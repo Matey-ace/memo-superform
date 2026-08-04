@@ -1,0 +1,65 @@
+﻿/* ========== 拖拽样式 ========== */
+.tile {
+    /* 允许拖拽 */
+    user-select: none;
+}
+
+/* 拖拽手柄 - tile header */
+.tile-header {
+    cursor: grab;
+}
+
+.tile-header:active {
+    cursor: grabbing;
+}
+
+/* 正在被拖拽的磁贴 */
+.tile.dragging {
+    opacity: 0.4;
+    transform: scale(0.97);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* 拖拽放置目标 */
+.tile.drag-over {
+    border: 2px dashed var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.15), var(--shadow-md);
+}
+
+/* 拖拽时的遮罩提示 */
+.tile.drag-over::after {
+    content: '⇄ 交换位置';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    background: rgba(255, 255, 255, 0.9);
+    padding: 8px 16px;
+    border-radius: 8px;
+    z-index: 10;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+/* 禁止拖拽的元素（控件区域） */
+.tile-header select,
+.tile-header button,
+.chart-toolbar,
+.chart-toolbar *,
+.ai-toolbar,
+.ai-toolbar * {
+    cursor: auto;
+}
+
+.tile-header select,
+.tile-header button {
+    -webkit-user-drag: none;
+    user-drag: none;
+}
+/* 单格布局下禁用拖拽光标 */
+.layout-single .tile-header {
+    cursor: default;
+}

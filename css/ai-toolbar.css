@@ -1,0 +1,144 @@
+﻿/* ========== AI 分类工具栏 ========== */
+.ai-toolbar {
+    padding: 10px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+    border-bottom: 1px solid rgba(0,0,0,0.03);
+}
+
+/* 第一行：数据源 + 日期选择 + 日期类型 */
+.ai-source-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* 第二行：快速范围 + AI按钮 */
+.ai-action-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* 统一所有控件的高度和样式 */
+.ai-source-select,
+.ai-date-field,
+.ai-date-input {
+    height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 12px;
+    background: var(--bg-color);
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+    transition: all 0.2s;
+    font-family: inherit;
+    box-sizing: border-box;
+    line-height: 28px;
+}
+
+.ai-source-select:hover,
+.ai-date-field:hover,
+.ai-date-input:hover {
+    border-color: var(--accent-orange);
+}
+
+.ai-source-select:focus,
+.ai-date-field:focus,
+.ai-date-input:focus {
+    border-color: var(--accent-orange);
+    background: white;
+    box-shadow: 0 0 0 2px rgba(250, 140, 22, 0.1);
+}
+
+/* 日期范围容器 - 去掉 label，改用 placeholder */
+.ai-date-range {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ai-date-sep {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 30px;
+}
+
+/* date input 特有的图标空间调整 */
+.ai-date-input {
+    padding: 0 8px;
+    line-height: 28px;
+}
+
+/* 快速范围按钮 */
+.ai-quick-range {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.ai-range-btn {
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+    line-height: 28px;
+    box-sizing: border-box;
+}
+
+.ai-range-btn:hover {
+    background: var(--bg-color);
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.ai-range-btn.active {
+    background: var(--accent-orange);
+    color: white;
+    border-color: var(--accent-orange);
+}
+
+.ai-status {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 2px 0;
+    min-height: 16px;
+}
+
+.ai-btn {
+    height: 30px;
+    padding: 0 16px;
+    border: none;
+    background: linear-gradient(135deg, #fa8c16, #f5222d);
+    color: white;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+    white-space: nowrap;
+    line-height: 30px;
+    box-sizing: border-box;
+}
+
+.ai-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(250, 140, 22, 0.3);
+}
+
+.ai-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
