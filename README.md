@@ -66,7 +66,7 @@ python server.py
 ### AI 分类配置
 支持 OpenAI 兼容接口（DeepSeek、智谱、通义千问等）：
 - API Endpoint：默认 https://api.deepseek.com/v1
-- 模型：默认 deepseek-chat
+- 模型：默认 deepseek-flash
 - 数据源：云词本全部单词，或按自定义时间区间筛选学习记录中的单词
 
 ## 📁 文件结构
