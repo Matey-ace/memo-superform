@@ -1,4 +1,4 @@
-﻿/* ========== 拖拽样式 ========== */
+/* ========== 拖拽样式 ========== */
 .tile {
     /* 允许拖拽 */
     user-select: none;
@@ -58,8 +58,11 @@ body.no-select {
 .layout-single .tile-header {
     cursor: default;
 }
-/* 换位后的短暂静置：防止悬停上浮造成弹动 */
+/* 换位后的短暂静置：禁止 hover 上浮干扰 FLIP 动画 */
 .tile.settling {
-    transform: none !important;
-    transition: none !important;
+    pointer-events: none;
+}
+.tile.settling:hover {
+    transform: none;
+    box-shadow: var(--shadow-sm);
 }

@@ -541,39 +541,30 @@ const ChartManager = (function() {
     
     // 3. 记忆曲线图
     function renderMemoryChart(containerId, records) {
-        const C = getThemeColors();
-        const chart = echarts.init(document.getElementById(containerId));
-        const result = generateMemoryCurveData(records);
+        var C = getThemeColors();
+        var chart = echarts.init(document.getElementById(containerId));
+        var result = generateMemoryCurveData(records);
+        var series = result.series;
 
-        const consolidating = result.familiarTotal + result.vagueTotal + result.forgetTotal;
-        const totalWords = result.totalWithFeedback || 0;
+        var categories = series.map(function(s) { return s.label; });
+        var rateData = series.map(function(s) { return s.rate; });
+        var wellData = series.map(function(s) { return s.well; });
+        var familiarData = series.map(function(s) { return s.familiar; });
+        var vagueData = series.map(function(s) { return s.vague; });
+        var forgetData = series.map(function(s) { return s.forget; });
 
-        // 记忆状态数据（过滤为 0 的状态，保持图表干净）
-        const states = [
-            { name: '已熟知', value: result.wellTotal, color: '#52c41a', desc: '掌握牢固，无需再复习' },
-            { name: '认识', value: result.familiarTotal, color: '#1890ff', desc: '能认出，需要按计划复习' },
-            { name: '模糊', value: result.vagueTotal, color: '#fa8c16', desc: '印象模糊，容易遗忘' },
-            { name: '忘记', value: result.forgetTotal, color: '#f5222d', desc: '已遗忘，需要重新学习' }
-        ].filter(s => s.value > 0);
-
-        const pieData = states.map(s => ({
-            name: s.name,
-            value: s.value,
-            itemStyle: { color: s.color }
-        }));
-
-        // 记忆健康度评级
-        let rating = '';
-        let ratingColor = '#52c41a';
-        if (result.overallRate >= 80) rating = '记忆状态优秀';
-        else if (result.overallRate >= 60) { rating = '记忆状态良好'; ratingColor = '#52c41a'; }
+        var totalWords = result.totalWithFeedback || 0;
+        var rating = '';
+        var ratingColor = '#52c41a';
+        if (result.overallRate >= 80) { rating = '记忆状态优秀'; }
+        else if (result.overallRate >= 60) { rating = '记忆状态良好'; }
         else if (result.overallRate >= 40) { rating = '需要加强复习'; ratingColor = '#fa8c16'; }
         else { rating = '急需巩固'; ratingColor = '#f5222d'; }
 
-        const option = {
+        var option = {
             title: {
-                text: '记忆掌握度',
-                subtext: `共 ${totalWords} 词 · 待巩固 ${consolidating} 词 · ${rating}`,
+                text: '记忆保持曲线',
+                subtext: '总掌握率 ' + result.overallRate + '% · ' + rating + ' · 共 ' + totalWords + ' 词',
                 left: 'center',
                 top: 5,
                 textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
@@ -583,79 +574,124 @@ const ChartManager = (function() {
                 backgroundColor: C.tooltipBg,
                 borderColor: C.tooltipBorder,
                 textStyle: { color: C.tooltipText },
-                trigger: 'item',
+                trigger: 'axis',
                 formatter: function(params) {
-                    const state = states.find(s => s.name === params.name);
-                    const pct = totalWords > 0 ? (params.value / totalWords * 100).toFixed(1) : '0';
-                    return `<strong>${params.name}</strong><br/>` +
-                        `单词数：${params.value} 个（${pct}%）<br/>` +
-                        `<span style="color:#6b7280;font-size:11px">${state ? state.desc : ''}</span>`;
+                    var idx2 = params[0].dataIndex;
+                    var s = series[idx2];
+                    var html = '<strong>距上次学习 ' + s.label + '</strong><br/>';
+                    html += '保持率：' + (s.rate !== null ? s.rate + '%' : '无数据') + '<br/>';
+                    html += '总词数：' + s.total + '<br/>';
+                    html += '<span style="color:#52c41a">● 已熟知：' + s.well + '</span><br/>';
+                    html += '<span style="color:#1890ff">● 认识：' + s.familiar + '</span><br/>';
+                    html += '<span style="color:#fa8c16">● 模糊：' + s.vague + '</span><br/>';
+                    html += '<span style="color:#f5222d">● 忘记：' + s.forget + '</span>';
+                    return html;
                 }
             },
             legend: {
-                orient: 'vertical',
-                right: 20,
-                top: 'middle',
-                textStyle: { fontSize: 12, color: C.subtext },
-                formatter: function(name) {
-                    const s = states.find(x => x.name === name);
-                    const pct = totalWords > 0 ? Math.round(s.value / totalWords * 100) : 0;
-                    return name + '  ' + s.value + '词 (' + pct + '%)';
-                }
+                data: ['保持率', '已熟知', '认识', '模糊', '忘记'],
+                bottom: 2,
+                textStyle: { fontSize: 11, color: C.subtext },
+                itemWidth: 12,
+                itemHeight: 8
             },
-            series: [{
-                name: '记忆状态',
-                type: 'pie',
-                radius: ['48%', '72%'],
-                center: ['40%', '56%'],
-                avoidLabelOverlap: true,
-                itemStyle: {
-                    borderRadius: 8,
-                    borderColor: '#fff',
-                    borderWidth: 3
+            grid: {
+                left: 52,
+                right: 20,
+                top: 55,
+                bottom: 40
+            },
+            xAxis: {
+                type: 'category',
+                name: '距上次学习',
+                nameTextStyle: { fontSize: 10, color: C.subtext },
+                data: categories,
+                axisLabel: { fontSize: 10, color: C.axis },
+                axisLine: { lineStyle: { color: C.axisLine } },
+                boundaryGap: false
+            },
+            yAxis: [
+                {
+                    type: 'value',
+                    name: '保持率(%)',
+                    nameTextStyle: { fontSize: 10, color: C.subtext },
+                    min: 0,
+                    max: 100,
+                    axisLabel: { fontSize: 10, color: C.axis, formatter: '{value}%' },
+                    splitLine: { lineStyle: { color: C.splitLine } },
+                    axisLine: { show: false }
                 },
-                label: {
-                    show: false
-                },
-                emphasis: {
-                    scaleSize: 6,
-                    label: {
-                        show: true,
-                        fontSize: 14,
-                        fontWeight: 'bold',
-                        formatter: '{b}\n{c}词 ({d}%)'
-                    }
-                },
-                labelLine: { show: false },
-                data: pieData
-            }],
-            graphic: [{
-                type: 'group',
-                left: '40%',
-                top: '46%',
-                children: [
-                    {
-                        type: 'text',
-                        style: {
-                            text: result.overallRate + '%',
-                            fontSize: 34,
-                            fontWeight: 700,
-                            fill: ratingColor,
-                            textAlign: 'center'
-                        }
+                {
+                    type: 'value',
+                    name: '词数',
+                    nameTextStyle: { fontSize: 10, color: C.subtext },
+                    min: 0,
+                    axisLabel: { fontSize: 10, color: C.axis },
+                    splitLine: { show: false },
+                    axisLine: { show: false }
+                }
+            ],
+            series: [
+                {
+                    name: '保持率',
+                    type: 'line',
+                    yAxisIndex: 0,
+                    data: rateData,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    lineStyle: { color: '#722ed1', width: 3 },
+                    itemStyle: { color: '#722ed1', borderColor: '#fff', borderWidth: 2 },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(114, 46, 209, 0.25)' },
+                            { offset: 1, color: 'rgba(114, 46, 209, 0)' }
+                        ])
                     },
-                    {
-                        type: 'text',
-                        top: 42,
-                        style: {
-                            text: '总体掌握率',
-                            fontSize: 12,
-                            fill: C.subtext,
-                            textAlign: 'center'
-                        }
+                    z: 3,
+                    connectNulls: true,
+                    markLine: {
+                        silent: true,
+                        symbol: 'none',
+                        lineStyle: { color: ratingColor, type: 'dashed', width: 1.5 },
+                        label: { show: false },
+                        data: [{ yAxis: result.overallRate }]
                     }
-                ]
-            }]
+                },
+                {
+                    name: '已熟知',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: wellData,
+                    barWidth: '35%',
+                    itemStyle: { color: '#52c41a' }
+                },
+                {
+                    name: '认识',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: familiarData,
+                    itemStyle: { color: '#1890ff' }
+                },
+                {
+                    name: '模糊',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: vagueData,
+                    itemStyle: { color: '#fa8c16' }
+                },
+                {
+                    name: '忘记',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: forgetData,
+                    itemStyle: { color: '#f5222d' }
+                }
+            ]
         };
 
         chart.setOption(option);
@@ -1090,8 +1126,39 @@ const ChartManager = (function() {
             render(parseInt(tileIndex), info.chartType, info.options || {});
         });
     }
+    // 重新渲染所有可见图表（跳过 AI 分类，用于自动刷新）
+    // 从磁贴的下拉选择器读取当前图表类型，确保标题与内容始终一致
+    function rerenderExceptAI() {
+        Object.keys(chartInstances).forEach(tileIndex => {
+            const tileEl = document.querySelector(`.tile[data-tile="${tileIndex}"]`);
+            if (!tileEl || tileEl.style.display === 'none') return;
+            // 以磁贴下拉框的实际值为准，而非 chartInstances 中可能过期的记录
+            const selector = tileEl.querySelector('.chart-selector');
+            const chartType = selector ? selector.value : chartInstances[tileIndex].chartType;
+            if (chartType === 'aiclass') return;
+            const savedOptions = chartInstances[tileIndex] ? (chartInstances[tileIndex].options || {}) : {};
+            render(parseInt(tileIndex), chartType, savedOptions);
+        });
+    }
     
-    // 获取指定 tile 的图表实例
+    // 根据磁贴下拉框的实际值渲染所有可见图表（统一入口，确保标题与内容始终一致）
+    // skipAI=true 时跳过 AI 分类（用于自动刷新）
+    function renderVisibleFromSelectors(skipAI) {
+        document.querySelectorAll('.tile').forEach(function(tile) {
+            if (tile.style.display === 'none') return;
+            var tileIndex = parseInt(tile.dataset.tile);
+            var selector = tile.querySelector('.chart-selector');
+            if (!selector || !selector.value) return;
+            var chartType = selector.value;
+            if (skipAI && chartType === 'aiclass') return;
+            var info = chartInstances[tileIndex];
+            var opts = info ? Object.assign({}, info.options || {}) : {};
+            if (chartType === 'trend' && !opts.days) opts.days = 30;
+            render(tileIndex, chartType, opts);
+        });
+    }
+    
+        // 获取指定 tile 的图表实例
     function getInstance(tileIndex) {
         return chartInstances[tileIndex]?.instance || null;
     }
@@ -1126,6 +1193,8 @@ const ChartManager = (function() {
         render,
         rerenderAll,
         renderAll,
+        rerenderExceptAI,
+        renderVisibleFromSelectors,
         getInstance,
         getChartType,
         getHeatmapPalettes,
