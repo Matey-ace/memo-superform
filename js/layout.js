@@ -1,4 +1,4 @@
-﻿// ==========================================
+// ==========================================
 // Memo Superform - 布局模块
 // 含分屏切换、全屏放大、拖拽互换
 // ==========================================
@@ -157,6 +157,17 @@ const LayoutManager = (function() {
     function buildHeatmapToolbar() {
         const today = new Date();
         const monthLabel = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
+        const palettes = ChartManager.getHeatmapPalettes();
+        const currentIdx = ChartManager.getPaletteIndex();
+        let swatchesHtml = '';
+        palettes.forEach(function(p, i) {
+            const isActive = i === currentIdx ? ' active' : '';
+            swatchesHtml += '<button class="palette-swatch' + isActive + '" data-palette="' + i + '" title="' + p.name + '">'
+                + '<span class="swatch-dot" style="background:' + p.colors[2] + '"></span>'
+                + '<span class="swatch-dot" style="background:' + p.colors[3] + '"></span>'
+                + '<span class="swatch-name">' + p.name + '</span>'
+                + '</button>';
+        });
         return `
             <div class="chart-toolbar heatmap-toolbar">
                 <div class="heatmap-nav">
@@ -164,6 +175,10 @@ const LayoutManager = (function() {
                     <span class="heatmap-month-label">${monthLabel}</span>
                     <button class="heatmap-nav-btn" data-dir="1" title="下个月">›</button>
                     <button class="heatmap-today-btn" title="回到本月">今天</button>
+                </div>
+                <div class="palette-row">
+                    <span class="palette-label">配色</span>
+                    <div class="palette-swatches">${swatchesHtml}</div>
                 </div>
             </div>
         `;
@@ -220,6 +235,20 @@ const LayoutManager = (function() {
                     const date = new Date(y, m - 1 + dir, 1);
                     currentMonth = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
                     renderMonth(currentMonth);
+                });
+            });
+            // 配色切换
+            toolbar.querySelectorAll('.palette-swatch').forEach(sw => {
+                sw.addEventListener('click', function() {
+                    const idx = parseInt(this.dataset.palette);
+                    ChartManager.setPaletteIndex(idx);
+                    toolbar.querySelectorAll('.palette-swatch').forEach(s => s.classList.remove('active'));
+                    this.classList.add('active');
+                    const tileIndex = parseInt(tile.dataset.tile);
+                    const ct = ChartManager.getChartType(tileIndex);
+                    if (ct === 'heatmap') {
+                        ChartManager.render(tileIndex, 'heatmap', { month: currentMonth });
+                    }
                 });
             });
 
@@ -494,13 +523,12 @@ const LayoutManager = (function() {
         const parent = tileA.parentNode;
         if (!parent) return;
 
-        // 根据 DOM 顺序决定插入位置，实现真正的换位
-        const aBeforeB = (tileA.compareDocumentPosition(tileB) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-        if (aBeforeB) {
-            parent.insertBefore(tileB, tileA);
-        } else {
-            parent.insertBefore(tileA, tileB);
-        }
+        // 真正交换两个磁贴的 DOM 位置，保持其他磁贴顺序不变。
+        // 只交换 A、B 两个节点；中间磁贴不受影响，避免连锁移位。
+        // 算法：记下 A 原位置的锚点，先搬 A 到 B 前，再把 B 搬到锚点前。
+        const aNext = tileA.nextSibling === tileB ? tileA : tileA.nextSibling;
+        parent.insertBefore(tileA, tileB);
+        parent.insertBefore(tileB, aNext);
 
         // 换位只做纯 DOM 操作；图表尺寸适配延后，避免与换位同帧造成卡顿
         const indexA = parseInt(tileA.dataset.tile);

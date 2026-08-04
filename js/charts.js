@@ -1,4 +1,4 @@
-﻿// ==========================================
+// ==========================================
 // Memo Superform - 图表模块
 // 使用 ECharts 渲染多个核心图表
 // ==========================================
@@ -10,6 +10,17 @@ const ChartManager = (function() {
     let cachedRecords = null;
     let cachedAIClassification = null;
     let cachedNotepadWords = null;
+
+    // 热力图配色预设（6 套，每套含亮色/暗色）
+    const heatmapPalettes = [
+        { name: 'GitHub绿', colors: ['#c6e48b', '#7bc96f', '#239a3b', '#216e39'], darkColors: ['#155e63', '#0e7490', '#06b6d4', '#22d3ee'] },
+        { name: '青蓝', colors: ['#b2ebf2', '#4dd0e1', '#00acc1', '#006064'], darkColors: ['#0c4a6e', '#0e7490', '#06b6d4', '#22d3ee'] },
+        { name: '紫韵', colors: ['#e1bee7', '#ba68c8', '#8e24aa', '#4a148c'], darkColors: ['#4a148c', '#7b1fa2', '#ab47bc', '#e1bee7'] },
+        { name: '暖橙', colors: ['#ffe0b2', '#ffa726', '#ef6c00', '#e65100'], darkColors: ['#7c2d12', '#c2410c', '#f97316', '#fdba74'] },
+        { name: '玫红', colors: ['#f8bbd0', '#f06292', '#c2185b', '#880e4f'], darkColors: ['#831843', '#be185d', '#ec4899', '#f9a8d4'] },
+        { name: '靛蓝', colors: ['#c5cae9', '#5c6bc0', '#283593', '#1a237e'], darkColors: ['#1e1b4b', '#4338ca', '#6366f1', '#a5b4fc'] }
+    ];
+    let currentPaletteIndex = parseInt(localStorage.getItem('heatmap_palette') || '0', 10);
     
     // ---- 数据处理工具 ----
     
@@ -259,20 +270,40 @@ const ChartManager = (function() {
         };
     }
     
+
+    // 根据当前主题返回图表文字颜色
+    function getThemeColors() {
+        const dark = document.body.classList.contains('dark');
+        return {
+            type: dark ? 'dark' : 'light',
+            title: dark ? '#e5e7eb' : '#1a1a2e',
+            subtext: dark ? '#9ca3af' : '#6b7280',
+            axis: dark ? '#8b95a5' : '#9ca3af',
+            axisLine: dark ? '#374151' : '#e5e7eb',
+            splitLine: dark ? '#1f2937' : '#f3f4f6',
+            tooltipBg: dark ? '#1f2937' : '#ffffff',
+            tooltipBorder: dark ? '#374151' : '#e5e7eb',
+            tooltipText: dark ? '#e5e7eb' : '#1a1a2e'
+        };
+    }
+
     // ---- 图表渲染函数 ----
     
     // 1. 热力图 - 月度学习日历
     // 当月颜色（按学习量分级）
-    function getHeatColor(count, maxCount) {
-        if (count === 0) return '#ebedf0';
+    function getHeatColor(count, maxCount, C, palette) {
+        const dark = C && C.type === 'dark';
+        if (count === 0) return dark ? '#2a2a3a' : '#ebedf0';
         const ratio = count / Math.max(maxCount, 1);
-        if (ratio < 0.25) return '#c6e48b';
-        if (ratio < 0.5) return '#7bc96f';
-        if (ratio < 0.75) return '#239a3b';
-        return '#216e39';
+        const colors = dark ? palette.darkColors : palette.colors;
+        if (ratio < 0.25) return colors[0];
+        if (ratio < 0.5) return colors[1];
+        if (ratio < 0.75) return colors[2];
+        return colors[3];
     }
 
     function renderHeatmap(containerId, records, options = {}) {
+        const C = getThemeColors();
         const chart = echarts.init(document.getElementById(containerId));
 
         // 目标月份：options.month 或当前月
@@ -290,8 +321,20 @@ const ChartManager = (function() {
         // 格子数据带颜色
         // 每个数据项单独指定格子颜色和数字颜色，保证深色格子上数字清晰可见
         const coloredData = result.data.map(([dateStr, count]) => {
-            const color = getHeatColor(count, result.maxCount);
-            const isDark = count > 0 && (count / Math.max(result.maxCount, 1)) >= 0.5;
+            const palette = heatmapPalettes[currentPaletteIndex] || heatmapPalettes[0];
+            const color = getHeatColor(count, result.maxCount, C, palette);
+            const darkTheme = C.type === 'dark';
+            const ratio = count / Math.max(result.maxCount, 1);
+            const isDarkCell = count > 0 && ratio >= 0.5;
+            let labelColor, borderColor;
+            if (count === 0) {
+                labelColor = darkTheme ? '#4a5568' : '#b0b7c3';
+            } else if (darkTheme) {
+                labelColor = '#ffffff';
+            } else {
+                labelColor = isDarkCell ? '#ffffff' : '#1a1a2e';
+            }
+            borderColor = darkTheme ? '#1a1a2e' : (isDarkCell ? palette.colors[3] : '#ffffff');
             return {
                 value: [dateStr, count],
                 itemStyle: {
@@ -299,9 +342,9 @@ const ChartManager = (function() {
                     borderRadius: 6
                 },
                 label: {
-                    color: count === 0 ? '#b0b7c3' : (isDark ? '#ffffff' : '#1a1a2e'),
-                    textBorderColor: isDark ? '#0f3d1f' : '#ffffff',
-                    textBorderWidth: isDark ? 2 : 1.5
+                    color: labelColor,
+                    textBorderColor: borderColor,
+                    textBorderWidth: isDarkCell ? 2 : 1.5
                 }
             };
         });
@@ -312,10 +355,13 @@ const ChartManager = (function() {
                 subtext: statsLine,
                 left: 'center',
                 top: 5,
-                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                subtextStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
             },
             tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
                 formatter: function(params) {
                     const count = params.value[1];
                     const dateStr = params.value[0];
@@ -338,7 +384,7 @@ const ChartManager = (function() {
                 range: targetMonth,
                 itemStyle: {
                     borderWidth: 3,
-                    borderColor: '#fff',
+                    borderColor: C.type === 'dark' ? '#1a1a2e' : '#fff',
                     borderRadius: 6
                 },
                 yearLabel: { show: false },
@@ -347,7 +393,7 @@ const ChartManager = (function() {
                     firstDay: 1,
                     nameMap: ['日', '一', '二', '三', '四', '五', '六'],
                     fontSize: 11,
-                    color: '#6b7280',
+                    color: C.subtext,
                     position: 'start',
                     margin: 8
                 },
@@ -382,6 +428,7 @@ const ChartManager = (function() {
     
     // 2. 学习趋势图
     function renderTrendChart(containerId, records, days = 30) {
+        const C = getThemeColors();
         const chart = echarts.init(document.getElementById(containerId));
         const { dates, dateMap } = aggregateDailyData(records, days);
         
@@ -400,17 +447,20 @@ const ChartManager = (function() {
                 subtext: `新学 ${totalNew} 词 · 复习 ${totalReview} 词 · 日均 ${avgDaily} 词`,
                 left: 'center',
                 top: 5,
-                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                subtextStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
             },
             tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
                 trigger: 'axis',
                 axisPointer: { type: 'cross' }
             },
             legend: {
                 data: ['新学', '复习', '总计'],
                 bottom: 5,
-                textStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 11, color: C.subtext }
             },
             grid: {
                 left: 50,
@@ -423,7 +473,7 @@ const ChartManager = (function() {
                 data: dates,
                 axisLabel: {
                     fontSize: 10,
-                    color: '#9ca3af',
+                    color: C.axis,
                     rotate: days > 30 ? 45 : 0,
                     formatter: function(value) {
                         if (days <= 7) return value.slice(5); // MM-DD
@@ -432,12 +482,12 @@ const ChartManager = (function() {
                         return value.slice(5);
                     }
                 },
-                axisLine: { lineStyle: { color: '#e5e7eb' } }
+                axisLine: { lineStyle: { color: C.axisLine } }
             },
             yAxis: {
                 type: 'value',
-                axisLabel: { fontSize: 10, color: '#9ca3af' },
-                splitLine: { lineStyle: { color: '#f3f4f6' } }
+                axisLabel: { fontSize: 10, color: C.axis },
+                splitLine: { lineStyle: { color: C.splitLine } }
             },
             series: [
                 {
@@ -491,6 +541,7 @@ const ChartManager = (function() {
     
     // 3. 记忆曲线图
     function renderMemoryChart(containerId, records) {
+        const C = getThemeColors();
         const chart = echarts.init(document.getElementById(containerId));
         const result = generateMemoryCurveData(records);
 
@@ -525,10 +576,13 @@ const ChartManager = (function() {
                 subtext: `共 ${totalWords} 词 · 待巩固 ${consolidating} 词 · ${rating}`,
                 left: 'center',
                 top: 5,
-                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                subtextStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
             },
             tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
                 trigger: 'item',
                 formatter: function(params) {
                     const state = states.find(s => s.name === params.name);
@@ -542,7 +596,7 @@ const ChartManager = (function() {
                 orient: 'vertical',
                 right: 20,
                 top: 'middle',
-                textStyle: { fontSize: 12, color: '#1a1a2e' },
+                textStyle: { fontSize: 12, color: C.subtext },
                 formatter: function(name) {
                     const s = states.find(x => x.name === name);
                     const pct = totalWords > 0 ? Math.round(s.value / totalWords * 100) : 0;
@@ -596,7 +650,7 @@ const ChartManager = (function() {
                         style: {
                             text: '总体掌握率',
                             fontSize: 12,
-                            fill: '#6b7280',
+                            fill: C.subtext,
                             textAlign: 'center'
                         }
                     }
@@ -610,6 +664,7 @@ const ChartManager = (function() {
     
     // 4. AI 单词分类图
     function renderAIClassificationChart(containerId, classificationData) {
+        const C = getThemeColors();
         const chart = echarts.init(document.getElementById(containerId));
         
         if (!classificationData) {
@@ -620,8 +675,8 @@ const ChartManager = (function() {
                     subtext: '点击上方按钮，使用 AI 分析你的单词分类',
                     left: 'center',
                     top: 'center',
-                    textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                    subtextStyle: { fontSize: 11, color: '#6b7280' }
+                    textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                    subtextStyle: { fontSize: 11, color: C.subtext }
                 }
             });
             return chart;
@@ -641,10 +696,13 @@ const ChartManager = (function() {
                 subtext: `共分析 ${totalWords} 个单词 · ${pieData.length} 个类别`,
                 left: 'center',
                 top: 5,
-                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                subtextStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
             },
             tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
                 trigger: 'item',
                 formatter: function(params) {
                     const words = classificationData[params.name] || [];
@@ -661,7 +719,7 @@ const ChartManager = (function() {
                 right: 10,
                 top: 50,
                 bottom: 20,
-                textStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 11, color: C.subtext }
             },
             series: [
                 {
@@ -700,6 +758,7 @@ const ChartManager = (function() {
     // 5. 词书单词进度表
     // 展示每个云词本（词书）的单词量，以及各词的记忆状态分布
     function renderNotepadProgress(containerId, records, notepadWords) {
+        const C = getThemeColors();
         const chart = echarts.init(document.getElementById(containerId));
 
         if (!notepadWords || notepadWords.length === 0) {
@@ -709,8 +768,8 @@ const ChartManager = (function() {
                     subtext: '云词本里还没有单词，先添加一些单词到词书吧',
                     left: 'center',
                     top: 'center',
-                    textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                    subtextStyle: { fontSize: 11, color: '#6b7280' }
+                    textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                    subtextStyle: { fontSize: 11, color: C.subtext }
                 }
             });
             return chart;
@@ -760,10 +819,13 @@ const ChartManager = (function() {
                 subtext: notepads.length + ' 本词书 · 共 ' + totalWords + ' 词',
                 left: 'center',
                 top: 5,
-                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                subtextStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
             },
             tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
                 trigger: 'axis',
                 axisPointer: { type: 'shadow' },
                 formatter: function(params) {
@@ -782,7 +844,7 @@ const ChartManager = (function() {
             legend: {
                 data: seriesDefs.map(s => s.name),
                 bottom: 5,
-                textStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 11, color: C.subtext }
             },
             grid: {
                 left: 30,
@@ -792,19 +854,19 @@ const ChartManager = (function() {
             },
             xAxis: {
                 type: 'value',
-                axisLabel: { fontSize: 10, color: '#9ca3af' },
-                splitLine: { lineStyle: { color: '#f3f4f6' } }
+                axisLabel: { fontSize: 10, color: C.axis },
+                splitLine: { lineStyle: { color: C.splitLine } }
             },
             yAxis: {
                 type: 'category',
                 data: notepads,
                 axisLabel: {
                     fontSize: 11,
-                    color: '#1a1a2e',
+                    color: C.subtext,
                     width: 90,
                     overflow: 'truncate'
                 },
-                axisLine: { lineStyle: { color: '#e5e7eb' } },
+                axisLine: { lineStyle: { color: C.axisLine } },
                 axisTick: { show: false }
             },
             series: seriesDefs.map(def => ({
@@ -831,6 +893,7 @@ const ChartManager = (function() {
     // 6. 词汇量增长曲线
     // 按添加日期累计展示词汇量的增长过程
     function renderVocabularyGrowth(containerId, records) {
+        const C = getThemeColors();
         const chart = echarts.init(document.getElementById(containerId));
 
         // 按月份聚合新增词汇
@@ -858,10 +921,13 @@ const ChartManager = (function() {
                 subtext: '累计 ' + totalWords + ' 词 · 最早从 ' + (months[0] || '-') + ' 开始',
                 left: 'center',
                 top: 5,
-                textStyle: { fontSize: 14, fontWeight: 600, color: '#1a1a2e' },
-                subtextStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
             },
             tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
                 trigger: 'axis',
                 formatter: function(params) {
                     const idx = params[0].dataIndex;
@@ -874,7 +940,7 @@ const ChartManager = (function() {
             legend: {
                 data: ['累计词汇量', '当月新增'],
                 bottom: 5,
-                textStyle: { fontSize: 11, color: '#6b7280' }
+                textStyle: { fontSize: 11, color: C.subtext }
             },
             grid: {
                 left: 50,
@@ -887,17 +953,17 @@ const ChartManager = (function() {
                 data: months,
                 axisLabel: {
                     fontSize: 10,
-                    color: '#9ca3af',
+                    color: C.axis,
                     interval: Math.max(0, Math.floor(months.length / 10))
                 },
-                axisLine: { lineStyle: { color: '#e5e7eb' } }
+                axisLine: { lineStyle: { color: C.axisLine } }
             },
             yAxis: {
                 type: 'value',
                 name: '词汇量',
-                nameTextStyle: { fontSize: 11, color: '#6b7280' },
-                axisLabel: { fontSize: 10, color: '#9ca3af' },
-                splitLine: { lineStyle: { color: '#f3f4f6' } }
+                nameTextStyle: { fontSize: 11, color: C.subtext },
+                axisLabel: { fontSize: 10, color: C.axis },
+                splitLine: { lineStyle: { color: C.splitLine } }
             },
             series: [
                 {
@@ -1016,6 +1082,14 @@ const ChartManager = (function() {
             }
         });
     }
+
+    // 按当前主题重绘所有已渲染图表（用于主题切换）
+    function renderAll() {
+        Object.keys(chartInstances).forEach(tileIndex => {
+            const info = chartInstances[tileIndex];
+            render(parseInt(tileIndex), info.chartType, info.options || {});
+        });
+    }
     
     // 获取指定 tile 的图表实例
     function getInstance(tileIndex) {
@@ -1035,6 +1109,13 @@ const ChartManager = (function() {
         Object.keys(chartInstances).forEach(k => delete chartInstances[k]);
     }
     
+    function getHeatmapPalettes() { return heatmapPalettes; }
+    function getPaletteIndex() { return currentPaletteIndex; }
+    function setPaletteIndex(idx) {
+        currentPaletteIndex = idx;
+        localStorage.setItem('heatmap_palette', String(idx));
+    }
+
     return {
         setRecords,
         getRecords,
@@ -1044,8 +1125,12 @@ const ChartManager = (function() {
         getNotepadWords,
         render,
         rerenderAll,
+        renderAll,
         getInstance,
         getChartType,
+        getHeatmapPalettes,
+        getPaletteIndex,
+        setPaletteIndex,
         disposeAll
     };
 })();

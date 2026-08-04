@@ -11,6 +11,7 @@ const App = (function() {
         setupRefreshButton();
         setupServerStatusCheck();
         setupAIClassifyButton();
+        setupTheme();
         LayoutManager.init();
         
         checkProxyServer().then(online => {
@@ -21,6 +22,31 @@ const App = (function() {
                 showWelcome();
             }
         });
+    }
+
+    // ---- 明暗主题切换 ----
+
+    function setupTheme() {
+        // 恢复上次的主题偏好
+        const saved = localStorage.getItem('theme') || 'light';
+        document.body.classList.toggle('dark', saved === 'dark');
+        updateThemeIcon();
+
+        document.getElementById('themeBtn').addEventListener('click', function() {
+            const dark = document.body.classList.toggle('dark');
+            localStorage.setItem('theme', dark ? 'dark' : 'light');
+            updateThemeIcon();
+            // 重绘所有图表以适配新主题的文字颜色
+            ChartManager.renderAll();
+        });
+    }
+
+    function updateThemeIcon() {
+        const dark = document.body.classList.contains('dark');
+        const sun = document.getElementById('iconSun');
+        const moon = document.getElementById('iconMoon');
+        if (sun) sun.style.display = dark ? '' : 'none';
+        if (moon) moon.style.display = dark ? 'none' : '';
     }
     
     // ---- 代理服务器检查 ----
