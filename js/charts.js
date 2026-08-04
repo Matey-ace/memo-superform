@@ -14,7 +14,7 @@ const ChartManager = (function() {
     // 热力图配色预设（6 套，每套含亮色/暗色）
     const heatmapPalettes = [
         { name: 'GitHub绿', colors: ['#c6e48b', '#7bc96f', '#239a3b', '#216e39'], darkColors: ['#155e63', '#0e7490', '#06b6d4', '#22d3ee'] },
-        { name: '青蓝', colors: ['#b2ebf2', '#4dd0e1', '#00acc1', '#006064'], darkColors: ['#0c4a6e', '#0e7490', '#06b6d4', '#22d3ee'] },
+        { name: '樱粉', colors: ['#ffe0e6', '#ffb3c4', '#ff8899', '#d63d5a'], darkColors: ['#831843', '#be185d', '#ff8899', '#ffb3c4'] },
         { name: '紫韵', colors: ['#e1bee7', '#ba68c8', '#8e24aa', '#4a148c'], darkColors: ['#4a148c', '#7b1fa2', '#ab47bc', '#e1bee7'] },
         { name: '暖橙', colors: ['#ffe0b2', '#ffa726', '#ef6c00', '#e65100'], darkColors: ['#7c2d12', '#c2410c', '#f97316', '#fdba74'] },
         { name: '玫红', colors: ['#f8bbd0', '#f06292', '#c2185b', '#880e4f'], darkColors: ['#831843', '#be185d', '#ec4899', '#f9a8d4'] },
