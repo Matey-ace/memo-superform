@@ -592,8 +592,8 @@ const LayoutManager = (function() {
         setTimeout(function() {
             const instA = ChartManager.getInstance(indexA);
             const instB = ChartManager.getInstance(indexB);
-            if (instA) instA.resize();
-            if (instB) instB.resize();
+            if (instA && typeof instA.resize === 'function') instA.resize();
+            if (instB && typeof instB.resize === 'function') instB.resize();
         }, 120);
     }
 

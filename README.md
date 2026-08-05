@@ -108,3 +108,7 @@ memo-superform/
 
 ## 打包
 双击 `dist/MemoSuperform.exe` 即可运行。exe 内已内置 ECharts，离线也能查看图表（拉取数据、AI 分类与推荐仍需联网 / SQL Server）。
+
+## License
+
+本项目基于 [MIT License](LICENSE) 开源，可自由使用、修改和分发，只需保留版权声明。
