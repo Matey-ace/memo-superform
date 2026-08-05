@@ -111,4 +111,4 @@ memo-superform/
 
 ## License
 
-本项目基于 [MIT License](LICENSE) 开源，可自由使用、修改和分发，只需保留版权声明。
+本项目基于 [AGPL v3](LICENSE) 开源。可自由使用、修改和分发，但任何衍生作品（包括通过网络提供的服务）必须以相同协议开源。
