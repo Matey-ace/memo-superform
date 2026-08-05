@@ -439,6 +439,14 @@ const App = (function() {
         try {
             const records = await MaimemoAPI.getAllStudyRecords(!forceRefresh);
             ChartManager.setRecords(records);
+            // 每日首次自动上传快照并生成智能推荐
+            try {
+                const _today = new Date().toLocaleDateString('sv-SE');
+                if (localStorage.getItem('memo_snapshot_date') !== _today) {
+                    await RecommendAPI.saveSnapshot(records, false);
+                    localStorage.setItem('memo_snapshot_date', _today);
+                }
+            } catch (e) { console.warn('快照保存失败:', e); }
 
             // 预取云词本单词，供词书进度图使用
             try {

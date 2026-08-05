@@ -1,4 +1,4 @@
-﻿// ==========================================
+// ==========================================
 // Memo Superform - API 模块
 // 封装墨墨背单词开放 API 和 AI API 调用
 // 通过本地代理服务器解决 CORS 问题
@@ -377,4 +377,32 @@ const AIAPI = (function() {
     }
     
     return { getConfig, setConfig, hasConfig, classifyWords };
+})();
+
+// ==========================================
+// 智能推荐 API 模块（本地 SQL Server）
+// ==========================================
+const RecommendAPI = (function() {
+    async function getToday() {
+        const resp = await fetch('/api/recommendations/today');
+        if (!resp.ok) throw new Error('获取推荐失败: ' + resp.status);
+        return resp.json();
+    }
+    async function markReviewed(id) {
+        const resp = await fetch('/api/recommendations/' + id + '/review', { method: 'POST' });
+        return resp.ok;
+    }
+    async function saveSnapshot(records, force) {
+        const resp = await fetch('/api/snapshot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ records: records, force: !!force })
+        });
+        return resp.json();
+    }
+    async function getHistoryStats(days) {
+        const resp = await fetch('/api/stats/history?days=' + (days || 30));
+        return resp.json();
+    }
+    return { getToday: getToday, markReviewed: markReviewed, saveSnapshot: saveSnapshot, getHistoryStats: getHistoryStats };
 })();
