@@ -1,3 +1,5 @@
+🌐 [English](./README.en.md) | 简体中文
+
 # Memo Superform
 
 > 把墨墨背单词的学习数据，变成一块块好看的磁贴。
