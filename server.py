@@ -46,6 +46,9 @@ INTERCEPTOR_JS = (
     + "function rw(u){if(typeof u!=='string')return u;return u.replace(TC,'/memo-tc').replace(API,'/memo-api').replace(WWW,'/memo-www').replace(ACC,'/memo-accounts');}"
     + "var of=window.fetch;window.fetch=function(i,n){if(typeof i==='string'){i=rw(i);}else if(i&&i.url){i=new Request(rw(i.url),i);}return of.call(this,i,n);};"
     + "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=Array.prototype.slice.call(arguments);a[1]=rw(u);return oo.apply(this,a)};"
+    + "var origOpen=window.open;window.open=function(u){if(typeof u==='string')u=rw(u);return origOpen.call(this,u);};"
+    + "try{var loc=window.location;var origHref=Object.getOwnPropertyDescriptor(Location.prototype,'href');if(origHref&&origHref.set){var origSet=origHref.set;Object.defineProperty(Location.prototype,'href',{set:function(v){return origSet.call(this,rw(v));},get:origHref.get,configurable:true});}}catch(e){};"
+    + "try{var origReplace=Location.prototype.replace;Location.prototype.replace=function(u){return origReplace.call(this,rw(u));};var origAssign=Location.prototype.assign;Location.prototype.assign=function(u){return origAssign.call(this,rw(u));};}catch(e){};"
     + '})();</script>'
 )
 
@@ -65,6 +68,20 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
     allow_reuse_address = True
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
+
+    def _rewrite_content(self, body, content_type):
+        """Rewrite maimemo domain URLs in JS/HTML/CSS content to proxy paths"""
+        if not body:
+            return body
+        ct = content_type.lower()
+        if 'javascript' not in ct and 'text/html' not in ct and 'text/css' not in ct and 'json' not in ct:
+            return body
+        text = body.decode('utf-8', errors='replace') if isinstance(body, bytes) else body
+        text = text.replace('https://tc-apis.maimemo.com', '/memo-tc')
+        text = text.replace('https://api.maimemo.com', '/memo-api')
+        text = text.replace('https://www.maimemo.com', '/memo-www')
+        text = text.replace('https://accounts.maimemo.com', '/memo-accounts')
+        return text.encode('utf-8') if isinstance(body, bytes) else text
 
     def _web_proxy_request(self, target_url, method="GET", inject_interceptor=False):
         content_length = int(self.headers.get('Content-Length', 0))
@@ -110,6 +127,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 html = INTERCEPTOR_JS + html
             resp_body = html.encode('utf-8')
+        else:
+            resp_body = self._rewrite_content(resp_body, content_type)
 
         self.send_response(status)
         self._send_cors_headers()
