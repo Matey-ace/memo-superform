@@ -38,11 +38,12 @@ MAIMEMO_BASE = "https://open.maimemo.com/open"
 TC_APIS_BASE = "https://tc-apis.maimemo.com"
 API_BASE = "https://api.maimemo.com"
 WWW_BASE = "https://www.maimemo.com"
+ACCOUNTS_BASE = "https://accounts.maimemo.com"
 
 INTERCEPTOR_JS = (
     '<script>(function(){'
-    + "var TC='https://tc-apis.maimemo.com',API='https://api.maimemo.com',WWW='https://www.maimemo.com';"
-    + "function rw(u){if(typeof u!=='string')return u;return u.replace(TC,'/memo-tc').replace(API,'/memo-api').replace(WWW,'/memo-www');}"
+    + "var TC='https://tc-apis.maimemo.com',API='https://api.maimemo.com',WWW='https://www.maimemo.com',ACC='https://accounts.maimemo.com';"
+    + "function rw(u){if(typeof u!=='string')return u;return u.replace(TC,'/memo-tc').replace(API,'/memo-api').replace(WWW,'/memo-www').replace(ACC,'/memo-accounts');}"
     + "var of=window.fetch;window.fetch=function(i,n){if(typeof i==='string'){i=rw(i);}else if(i&&i.url){i=new Request(rw(i.url),i);}return of.call(this,i,n);};"
     + "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=Array.prototype.slice.call(arguments);a[1]=rw(u);return oo.apply(this,a)};"
     + '})();</script>'
@@ -72,7 +73,9 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         req = urllib.request.Request(target_url, data=body, method=method)
 
         skip_headers = {'host', 'content-length', 'connection', 'accept-encoding',
-                        'transfer-encoding', 'upgrade', 'origin', 'referer'}
+                        'transfer-encoding', 'upgrade', 'origin', 'referer',
+                        'x-frame-options', 'content-security-policy',
+                        'strict-transport-security', 'x-content-type-options'}
         for key in self.headers:
             if key.lower() not in skip_headers:
                 req.add_header(key, self.headers[key])
@@ -114,7 +117,9 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         for key, val in resp_headers.items():
             lk = key.lower()
             if lk in ('content-length', 'transfer-encoding', 'connection',
-                       'content-encoding', 'keep-alive'):
+                       'content-encoding', 'keep-alive',
+                       'x-frame-options', 'content-security-policy',
+                       'strict-transport-security', 'x-content-type-options'):
                 continue
             if lk == 'set-cookie':
                 val = val.replace('Domain=maimemo.com;', '').replace('Domain=maimemo.com', '')
@@ -124,6 +129,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 val = val.replace('https://tc-apis.maimemo.com', '/memo-tc')
                 val = val.replace('https://api.maimemo.com', '/memo-api')
                 val = val.replace('https://www.maimemo.com', '/memo-www')
+                val = val.replace('https://accounts.maimemo.com', '/memo-accounts')
                 self.send_header('Location', val)
             else:
                 self.send_header(key, val)
@@ -181,6 +187,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/memo-www/"):
             sub = path[len("/memo-www/"):]
             target = WWW_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="GET", inject_interceptor=True)
+            return
+
+        if path.startswith("/memo-accounts/"):
+            sub = path[len("/memo-accounts/"):]
+            target = ACCOUNTS_BASE + "/" + sub
             if parsed.query: target += "?" + parsed.query
             self._web_proxy_request(target, method="GET", inject_interceptor=True)
             return
@@ -260,6 +273,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/memo-www/"):
             sub = path[len("/memo-www/"):]
             target = WWW_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="POST")
+            return
+
+        if path.startswith("/memo-accounts/"):
+            sub = path[len("/memo-accounts/"):]
+            target = ACCOUNTS_BASE + "/" + sub
             if parsed.query: target += "?" + parsed.query
             self._web_proxy_request(target, method="POST")
             return
