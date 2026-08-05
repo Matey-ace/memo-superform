@@ -1,0 +1,172 @@
+/* ==========================================
+   Memo Superform - 背单词磁贴样式 (网页版嵌入)
+   ========================================== */
+
+.study-web-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 12px;
+    background: #fff;
+}
+
+.study-web-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+}
+
+/* ---- 底部操作按钮栏 ---- */
+.study-web-actions {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    z-index: 100;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    border-radius: 14px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.study-web-btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    color: #fff;
+    transition: all 0.12s ease;
+    white-space: nowrap;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+}
+
+.study-web-btn .key-hint {
+    font-size: 10px;
+    opacity: 0.7;
+    font-weight: 400;
+}
+
+.study-web-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+}
+
+.study-web-btn:active {
+    transform: translateY(0);
+}
+
+.study-web-btn.forget { background: linear-gradient(135deg, #ef5350, #e53935); }
+.study-web-btn.vague  { background: linear-gradient(135deg, #ffa726, #fb8c00); }
+.study-web-btn.know   { background: linear-gradient(135deg, #66bb6a, #43a047); }
+.study-web-btn.well   { background: linear-gradient(135deg, #42a5f5, #1e88e5); }
+
+/* ---- 加载提示 ---- */
+.study-web-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: #666;
+    z-index: 50;
+}
+
+.study-web-loading .spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid #e0e0e0;
+    border-top-color: #4a6cf7;
+    border-radius: 50%;
+    margin: 0 auto 10px;
+    animation: study-web-spin 0.7s linear infinite;
+}
+
+@keyframes study-web-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ---- 登录提示 ---- */
+.study-web-login-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    z-index: 50;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 24px 32px;
+    border-radius: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    max-width: 280px;
+}
+
+.study-web-login-hint .icon {
+    font-size: 40px;
+    margin-bottom: 10px;
+}
+
+.study-web-login-hint p {
+    font-size: 14px;
+    color: #555;
+    line-height: 1.5;
+    margin-bottom: 14px;
+}
+
+.study-web-login-hint button {
+    padding: 8px 24px;
+    border: none;
+    border-radius: 10px;
+    background: #4a6cf7;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.12s;
+}
+
+.study-web-login-hint button:hover {
+    opacity: 0.85;
+}
+
+/* ---- 暗色模式 ---- */
+[data-theme="dark"] .study-web-container {
+    background: #1e1e2e;
+}
+
+[data-theme="dark"] .study-web-actions {
+    background: rgba(30, 30, 46, 0.92);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .study-web-loading {
+    color: #aaa;
+}
+
+[data-theme="dark"] .study-web-loading .spinner {
+    border-color: #333;
+    border-top-color: #6a8cff;
+}
+
+[data-theme="dark"] .study-web-login-hint {
+    background: rgba(30, 30, 46, 0.95);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .study-web-login-hint p {
+    color: #ccc;
+}
+
+/* ---- 隐藏AI工具栏（背单词磁贴不需要） ---- */
+.tile:has(.study-web-container) .chart-toolbar {
+    display: none;
+}
