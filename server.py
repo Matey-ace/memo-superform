@@ -166,7 +166,10 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if not DB_READY:
             return self._send_json(503, {"error": "数据库未就绪"})
         try:
-            body = self._read_json_body()
+            try:
+                body = self._read_json_body()
+            except (json.JSONDecodeError, ValueError):
+                return self._send_json(400, {"error": "Invalid JSON body"})
 
             # 保存当日快照并生成推荐
             if path == "/api/snapshot":

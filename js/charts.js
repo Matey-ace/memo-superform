@@ -1120,7 +1120,7 @@ const ChartManager = (function() {
             const info = chartInstances[tileIndex];
             const tileEl = document.querySelector(`.tile[data-tile="${tileIndex}"]`);
             if (tileEl && tileEl.style.display !== 'none') {
-                info.instance.resize();
+                if (typeof info.instance.resize === 'function') info.instance.resize();
             }
         });
     }
