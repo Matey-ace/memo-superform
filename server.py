@@ -16,6 +16,7 @@ import urllib.request
 import urllib.error
 import json
 import os
+import re
 import sys
 import io
 import webbrowser
@@ -52,6 +53,19 @@ INTERCEPTOR_JS = (
     + '})();</script>'
 )
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Do not follow HTTP redirects; return them to the browser instead.
+
+    The OIDC login flow (auth/login -> oidc/auth -> interaction -> callback)
+    relies on the browser following each 302/303 step through the proxy so
+    that cookies set by accounts.maimemo.com are managed by the browser and
+    sent back on every proxied request. urllib's default redirect following
+    would drop cookies and flatten the flow."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 # ---- 数据库（可选，失败不致命，不影响代理与静态服务） ----
 DB_READY = False
 try:
@@ -69,20 +83,62 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
-    def _rewrite_content(self, body, content_type):
-        """Rewrite maimemo domain URLs in HTML/CSS content to proxy paths.
-        JS/JSON left untouched: SPA config uses new URL(api_host) which
-        throws on relative paths; INTERCEPTOR_JS handles runtime rewriting."""
+    def _rewrite_content(self, body, content_type, proxy_prefix=None):
+        """Rewrite maimemo domain URLs in content to proxy paths.
+
+        - HTML/CSS: rewrite domain URLs to relative proxy paths + rewrite
+          absolute paths (/xxx) to /proxy-prefix/xxx for pages served via
+          cross-domain redirect (e.g. accounts.maimemo.com login page).
+        - JS: rewrite config api_host/memo_host to window.location.origin
+          + proxy path so new URL() works AND window.location.replace()
+          navigates to proxy URL directly (bypasses interceptor limitation).
+        """
         if not body:
             return body
         ct = content_type.lower()
-        if 'text/html' not in ct and 'text/css' not in ct:
+        is_js = 'javascript' in ct or 'json' in ct
+        is_html = 'text/html' in ct
+        is_css = 'text/css' in ct
+        if not is_js and not is_html and not is_css:
             return body
         text = body.decode('utf-8', errors='replace') if isinstance(body, bytes) else body
-        text = text.replace('https://tc-apis.maimemo.com', '/memo-tc')
-        text = text.replace('https://api.maimemo.com', '/memo-api')
-        text = text.replace('https://www.maimemo.com', '/memo-www')
-        text = text.replace('https://accounts.maimemo.com', '/memo-accounts')
+
+        if is_js:
+            # Rewrite config api_host and memo_host to absolute proxy URLs
+            # so new URL(config.api_host) works AND _() returns a proxy URL
+            # for window.location.replace() ? no need for interceptor to
+            # catch the navigation.
+            text = text.replace(
+                'api_host:"https://tc-apis.maimemo.com"',
+                'api_host:window.location.origin+"/memo-tc"'
+            )
+            text = text.replace(
+                'memo_host:"https://api.maimemo.com"',
+                'memo_host:window.location.origin+"/memo-api"'
+            )
+            # NOTE: login_return_url MUST stay as the original
+            # https://tc-apis.maimemo.com/webstudy/app. tc-apis rejects
+            # non-maimemo return_url with login_initiation_failed.
+        else:
+            # HTML/CSS: rewrite domain URLs to relative proxy paths
+            text = text.replace('https://tc-apis.maimemo.com', '/memo-tc')
+            text = text.replace('https://api.maimemo.com', '/memo-api')
+            text = text.replace('https://www.maimemo.com', '/memo-www')
+            text = text.replace('https://accounts.maimemo.com', '/memo-accounts')
+
+            # For HTML pages served via cross-domain redirect (e.g. login
+            # page at accounts.maimemo.com loaded via /memo-tc/ redirect),
+            # rewrite absolute paths to include the proxy prefix.
+            if is_html and proxy_prefix and proxy_prefix != '/memo-tc':
+                # Rewrite href="/xxx", src="/xxx", action="/xxx" to
+                # href="/proxy-prefix/xxx" etc. ? but skip paths that
+                # already start with /memo- (already proxied).
+                text = re.sub(
+                    r'((?:href|src|action)\s*=\s*["\'])(/(?!memo-))',
+                    r'\1' + proxy_prefix + r'\2',
+                    text
+                )
+
         return text.encode('utf-8') if isinstance(body, bytes) else text
 
     def _web_proxy_request(self, target_url, method="GET", inject_interceptor=False):
@@ -103,7 +159,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
 
         try:
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=30)
             resp_body = resp.read()
             status = resp.status
             resp_headers = resp.headers
@@ -119,8 +175,22 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
             return
 
+        # Derive proxy prefix from the current request path so relative
+        # Location headers (e.g. /interaction/xxx) and absolute HTML paths
+        # can be rewritten to the matching proxy prefix.
+        proxy_prefix = None
+        if self.path.startswith('/memo-tc/') or self.path.startswith('/webstudy/'):
+            proxy_prefix = '/memo-tc'
+        elif self.path.startswith('/memo-api/'):
+            proxy_prefix = '/memo-api'
+        elif self.path.startswith('/memo-www/'):
+            proxy_prefix = '/memo-www'
+        elif self.path.startswith('/memo-accounts/'):
+            proxy_prefix = '/memo-accounts'
+
         content_type = resp_headers.get('Content-Type', '')
         if inject_interceptor and 'text/html' in content_type:
+            resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)
             html = resp_body.decode('utf-8', errors='replace')
             if '<head>' in html:
                 html = html.replace('<head>', '<head>' + INTERCEPTOR_JS, 1)
@@ -130,7 +200,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 html = INTERCEPTOR_JS + html
             resp_body = html.encode('utf-8')
         else:
-            resp_body = self._rewrite_content(resp_body, content_type)
+            resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)
 
         self.send_response(status)
         self._send_cors_headers()
@@ -145,12 +215,23 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             if lk == 'set-cookie':
                 val = val.replace('Domain=maimemo.com;', '').replace('Domain=maimemo.com', '')
                 val = val.replace('domain=maimemo.com;', '').replace('domain=maimemo.com', '')
+                # Strip Secure flag so cookies work over HTTP proxy
+                val = val.replace('; Secure', '').replace('; secure', '')
+                val = val.replace(';Secure', '').replace(';secure', '')
+                # Prefix cookie Path with the proxy prefix so cookies set by
+                # e.g. accounts.maimemo.com (Path=/interaction/xxx) are sent
+                # to our proxied paths (/memo-accounts/interaction/xxx).
+                if proxy_prefix:
+                    val = re.sub(r'[Pp]ath=/(?=[^/])', 'path=' + proxy_prefix + '/', val)
                 self.send_header('Set-Cookie', val)
             elif lk == 'location':
                 val = val.replace('https://tc-apis.maimemo.com', '/memo-tc')
                 val = val.replace('https://api.maimemo.com', '/memo-api')
                 val = val.replace('https://www.maimemo.com', '/memo-www')
                 val = val.replace('https://accounts.maimemo.com', '/memo-accounts')
+                # Relative Location (e.g. /interaction/xxx) -> prefix it
+                if proxy_prefix and val.startswith('/') and not val.startswith('/memo-'):
+                    val = proxy_prefix + val
                 self.send_header('Location', val)
             else:
                 self.send_header(key, val)
@@ -216,7 +297,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             sub = path[len("/memo-accounts/"):]
             target = ACCOUNTS_BASE + "/" + sub
             if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="GET", inject_interceptor=True)
+            try:
+                self._web_proxy_request(target, method="GET", inject_interceptor=True)
+            except Exception:
+                self.log_error("proxy error for %s:\n%s", self.path, traceback.format_exc())
+                self.send_error(500)
             return
 
         if path.startswith("/webstudy/"):
@@ -400,7 +485,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             req.add_header("Content-Type", "application/json")
 
         try:
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=30)
             result = resp.read().decode("utf-8")
             self.send_response(resp.status)
             self._send_cors_headers()
