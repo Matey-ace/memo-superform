@@ -205,6 +205,12 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(status)
         self._send_cors_headers()
 
+        # Force no-cache for HTML/JS so browsers never reuse an older
+        # rewritten bundle that would navigate directly to maimemo.com.
+        if 'text/html' in content_type or 'javascript' in content_type:
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+
         for key, val in resp_headers.items():
             lk = key.lower()
             if lk in ('content-length', 'transfer-encoding', 'connection',
