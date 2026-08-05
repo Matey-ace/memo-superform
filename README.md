@@ -1,5 +1,5 @@
 <div align="center">
-  <a href="#memo-superform">
+#memo-superform
     <img src="https://img.shields.io/badge/简体中文-中文-blue?style=for-the-badge" alt="简体中文">
   </a>
   &nbsp;&nbsp;
