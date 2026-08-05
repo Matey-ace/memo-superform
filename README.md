@@ -1,9 +1,14 @@
-<div align="right">
-
-[English](#memo-superform-english) **|** [简体中文](#memo-superform)
-
+<div align="center">
+  <a href="#memo-superform">
+    <img src="https://img.shields.io/badge/简体中文-中文-blue?style=for-the-badge" alt="简体中文">
+  </a>
+  &nbsp;&nbsp;
+  <a href="#memo-superform-english">
+    <img src="https://img.shields.io/badge/English-EN-red?style=for-the-badge" alt="English">
+  </a>
 </div>
 
+<br>
 # Memo Superform
 
 > 把墨墨背单词的学习数据，变成一块块好看的磁贴。
@@ -122,9 +127,13 @@ memo-superform/
 ---
 
 <div align="right">
-
-[⬆ Back to top 回到顶部](#memo-superform) **|** [Switch to English 切换到英文](#memo-superform-english)
-
+  <a href="#memo-superform-english">
+    <img src="https://img.shields.io/badge/Switch_to_English-EN-red?style=flat-square" alt="Switch to English">
+  </a>
+  &nbsp;
+  <a href="#memo-superform">
+    <img src="https://img.shields.io/badge/Back_to_top-⬆-lightgrey?style=flat-square" alt="Back to top">
+  </a>
 </div>
 
 <br>
@@ -251,7 +260,11 @@ This project is open-sourced under [AGPL v3](LICENSE). You are free to use, modi
 ---
 
 <div align="right">
-
-[⬆ Back to top 回到顶部](#memo-superform-english) **|** [切换到中文 Switch to Chinese](#memo-superform)
-
+  <a href="#memo-superform">
+    <img src="https://img.shields.io/badge/切换到中文-中文-blue?style=flat-square" alt="切换到中文">
+  </a>
+  &nbsp;
+  <a href="#memo-superform-english">
+    <img src="https://img.shields.io/badge/Back_to_top-⬆-lightgrey?style=flat-square" alt="Back to top">
+  </a>
 </div>
