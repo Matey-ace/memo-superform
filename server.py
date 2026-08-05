@@ -70,11 +70,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
     def _rewrite_content(self, body, content_type):
-        """Rewrite maimemo domain URLs in JS/HTML/CSS content to proxy paths"""
+        """Rewrite maimemo domain URLs in HTML/CSS content to proxy paths.
+        JS/JSON left untouched: SPA config uses new URL(api_host) which
+        throws on relative paths; INTERCEPTOR_JS handles runtime rewriting."""
         if not body:
             return body
         ct = content_type.lower()
-        if 'javascript' not in ct and 'text/html' not in ct and 'text/css' not in ct and 'json' not in ct:
+        if 'text/html' not in ct and 'text/css' not in ct:
             return body
         text = body.decode('utf-8', errors='replace') if isinstance(body, bytes) else body
         text = text.replace('https://tc-apis.maimemo.com', '/memo-tc')
