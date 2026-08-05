@@ -1,0 +1,451 @@
+
+/* ---- 顶栏入口按钮 ---- */
+.study-btn {
+    display: flex;
+    align-items: center;
+    padding: 7px 14px;
+    border: 1px solid var(--accent-color, #4a6cf7);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--accent-color, #4a6cf7);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+.study-btn:hover {
+    background: var(--accent-color, #4a6cf7);
+    color: #fff;
+}
+
+/* ==========================================
+   Memo Superform - 背单词自测模式样式
+   ========================================== */
+
+.study-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    background: var(--bg-primary, #f0f2f5);
+    display: none;
+    flex-direction: column;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+.study-overlay.active {
+    display: flex;
+    opacity: 1;
+}
+
+/* ---- 顶部栏 ---- */
+.study-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: var(--bg-card, #ffffff);
+    border-bottom: 1px solid var(--border-color, #e0e0e0);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    flex-shrink: 0;
+}
+.study-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.study-topbar-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary, #1a1a2e);
+}
+.study-progress-text {
+    font-size: 14px;
+    color: var(--text-secondary, #666);
+    white-space: nowrap;
+}
+.study-topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.study-filter-select {
+    padding: 6px 12px;
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 8px;
+    background: var(--bg-primary, #f0f2f5);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 13px;
+    cursor: pointer;
+    outline: none;
+}
+.study-filter-select:focus {
+    border-color: var(--accent-color, #4a6cf7);
+}
+.study-shuffle-btn {
+    padding: 6px 14px;
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 8px;
+    background: var(--bg-primary, #f0f2f5);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.study-shuffle-btn:hover {
+    background: var(--accent-color, #4a6cf7);
+    color: #fff;
+    border-color: var(--accent-color, #4a6cf7);
+}
+.study-shuffle-btn.active {
+    background: var(--accent-color, #4a6cf7);
+    color: #fff;
+    border-color: var(--accent-color, #4a6cf7);
+}
+.study-close-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 50%;
+    background: var(--bg-primary, #f0f2f5);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+.study-close-btn:hover {
+    background: #ff4444;
+    color: #fff;
+}
+
+/* ---- 进度条 ---- */
+.study-progress-bar-wrap {
+    height: 4px;
+    background: var(--border-color, #e0e0e0);
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.study-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #4a6cf7, #6a8cff);
+    width: 0%;
+    transition: width 0.3s ease;
+    border-radius: 0 2px 2px 0;
+}
+
+/* ---- 主区域 ---- */
+.study-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    overflow: hidden;
+    position: relative;
+}
+
+/* ---- 加载状态 ---- */
+.study-loading {
+    text-align: center;
+    color: var(--text-secondary, #666);
+}
+.study-loading .spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid var(--border-color, #e0e0e0);
+    border-top-color: var(--accent-color, #4a6cf7);
+    border-radius: 50%;
+    margin: 0 auto 16px;
+    animation: study-spin 0.8s linear infinite;
+}
+@keyframes study-spin {
+    to { transform: rotate(360deg); }
+}
+.study-loading p {
+    font-size: 15px;
+}
+
+/* ---- 空状态 ---- */
+.study-empty {
+    text-align: center;
+    color: var(--text-secondary, #666);
+    max-width: 400px;
+}
+.study-empty .icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+}
+.study-empty h3 {
+    font-size: 20px;
+    color: var(--text-primary, #1a1a2e);
+    margin-bottom: 8px;
+}
+.study-empty p {
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 20px;
+}
+.study-web-link {
+    display: inline-block;
+    padding: 10px 24px;
+    background: var(--accent-color, #4a6cf7);
+    color: #fff;
+    border-radius: 10px;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+    transition: opacity 0.15s;
+}
+.study-web-link:hover {
+    opacity: 0.85;
+}
+
+/* ---- 翻转卡片 ---- */
+.flashcard-wrap {
+    width: 100%;
+    max-width: 560px;
+    perspective: 1200px;
+}
+.flashcard {
+    position: relative;
+    width: 100%;
+    min-height: 360px;
+    cursor: pointer;
+    transform-style: preserve-3d;
+    transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.flashcard.flipped {
+    transform: rotateY(180deg);
+}
+.flashcard-face {
+    position: absolute;
+    inset: 0;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    border-radius: 20px;
+    padding: 40px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+}
+.flashcard-front {
+    background: var(--bg-card, #ffffff);
+}
+.flashcard-back {
+    background: var(--bg-card, #ffffff);
+    transform: rotateY(180deg);
+}
+
+/* 卡片正面内容 */
+.card-word {
+    font-size: 42px;
+    font-weight: 800;
+    color: var(--text-primary, #1a1a2e);
+    margin-bottom: 8px;
+    word-break: break-word;
+    line-height: 1.2;
+}
+.card-phonetic {
+    font-size: 18px;
+    color: var(--text-secondary, #888);
+    font-family: 'Segoe UI', Arial, sans-serif;
+    margin-bottom: 6px;
+}
+.card-tag-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.card-tag {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.card-tag.new {
+    background: #e3f2fd;
+    color: #1976d2;
+}
+.card-tag.unfinished {
+    background: #fff3e0;
+    color: #f57c00;
+}
+.card-tag.finished {
+    background: #e8f5e9;
+    color: #388e3c;
+}
+.card-hint {
+    margin-top: auto;
+    font-size: 13px;
+    color: var(--text-tertiary, #aaa);
+    padding-top: 24px;
+}
+
+/* 卡片背面内容 */
+.card-trans {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary, #1a1a2e);
+    margin-bottom: 12px;
+    line-height: 1.4;
+}
+.card-example {
+    font-size: 15px;
+    color: var(--text-secondary, #666);
+    font-style: italic;
+    line-height: 1.5;
+    max-width: 440px;
+    margin-top: 8px;
+}
+.card-example-label {
+    font-size: 12px;
+    color: var(--text-tertiary, #aaa);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+    font-style: normal;
+}
+
+/* ---- 底部操作栏 ---- */
+.study-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    padding: 20px;
+    flex-shrink: 0;
+}
+.mark-btn {
+    flex: 1;
+    max-width: 180px;
+    padding: 14px 20px;
+    border: none;
+    border-radius: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.mark-btn .mark-key {
+    font-size: 11px;
+    opacity: 0.7;
+    font-weight: 400;
+}
+.mark-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+}
+.mark-btn:active {
+    transform: translateY(0);
+}
+.mark-btn.forget {
+    background: linear-gradient(135deg, #ef5350, #e53935);
+}
+.mark-btn.vague {
+    background: linear-gradient(135deg, #ffa726, #fb8c00);
+}
+.mark-btn.know {
+    background: linear-gradient(135deg, #66bb6a, #43a047);
+}
+.mark-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ---- 结算页 ---- */
+.study-summary {
+    text-align: center;
+    max-width: 480px;
+}
+.study-summary .summary-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+}
+.study-summary h2 {
+    font-size: 26px;
+    color: var(--text-primary, #1a1a2e);
+    margin-bottom: 24px;
+}
+.summary-stats {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-bottom: 28px;
+}
+.summary-stat {
+    flex: 1;
+    max-width: 120px;
+    padding: 20px 12px;
+    border-radius: 16px;
+    background: var(--bg-card, #fff);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+.summary-stat .stat-num {
+    font-size: 32px;
+    font-weight: 800;
+    line-height: 1;
+}
+.summary-stat .stat-label {
+    font-size: 13px;
+    color: var(--text-secondary, #666);
+    margin-top: 6px;
+}
+.summary-stat.know .stat-num { color: #43a047; }
+.summary-stat.vague .stat-num { color: #fb8c00; }
+.summary-stat.forget .stat-num { color: #e53935; }
+.summary-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+.summary-btn {
+    padding: 12px 28px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.summary-btn.primary {
+    background: var(--accent-color, #4a6cf7);
+    color: #fff;
+}
+.summary-btn.primary:hover { opacity: 0.85; }
+.summary-btn.secondary {
+    background: var(--bg-card, #fff);
+    color: var(--text-primary, #1a1a2e);
+    border: 1px solid var(--border-color, #ddd);
+}
+.summary-btn.secondary:hover { background: var(--bg-primary, #f0f2f5); }
+
+/* ---- 暗色模式 ---- */
+[data-theme="dark"] .study-overlay {
+    background: var(--bg-primary, #14141e);
+}
+[data-theme="dark"] .study-topbar {
+    background: var(--bg-card, #1e1e2e);
+    border-bottom-color: var(--border-color, #333);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .flashcard-front,
+[data-theme="dark"] .flashcard-back {
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+[data-theme="dark"] .summary-stat {
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+[data-theme="dark"] .card-tag.new { background: #1565c0; color: #bbdefb; }
+[data-theme="dark"] .card-tag.unfinished { background: #e65100; color: #ffe0b2; }
+[data-theme="dark"] .card-tag.finished { background: #2e7d32; color: #c8e6c9; }

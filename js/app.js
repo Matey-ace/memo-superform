@@ -22,6 +22,7 @@ const App = (function() {
         setupTheme();
         LayoutManager.init();
         setupAutoRefresh();
+        StudyMode.init();
         
         checkProxyServer().then(online => {
             if (online && MaimemoAPI.hasToken()) {

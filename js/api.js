@@ -206,6 +206,15 @@ const MaimemoAPI = (function() {
     
     // ---- 云词本接口 ----
     
+    // 获取今日学习单词（公测接口）
+    async function getTodayItems(params = {}, useCache = true) {
+        const cacheKey = 'today_items_' + token.slice(-8) + '_' + JSON.stringify(params);
+        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
+        const data = await request('/study/get_today_items', { method: 'POST', body: params });
+        if (useCache) setCache(cacheKey, data);
+        return data;
+    }
+
     async function listNotepads(limit = 10, offset = 0, useCache = true) {
         if (limit > 10) limit = 10;
         const cacheKey = 'notepads_' + token.slice(-8) + '_' + limit + '_' + offset;
@@ -297,7 +306,7 @@ const MaimemoAPI = (function() {
     
     return {
         setToken, getToken, hasToken, clearCache,
-        getStudyProgress, queryStudyRecords, getAllStudyRecords,
+        getStudyProgress, getTodayItems, queryStudyRecords, getAllStudyRecords,
         getWordsFromStudyRecords,
         listNotepads, listAllNotepads, getNotepad, getAllNotepadWords,
         queryVocabulary, testToken
@@ -376,7 +385,59 @@ const AIAPI = (function() {
         }
     }
     
-    return { getConfig, setConfig, hasConfig, classifyWords };
+        // 批量获取单词中文释义（AI翻译，带本地缓存）
+    async function getWordDefinitions(words) {
+        const DEF_CACHE = 'memo_wdef_';
+        const result = {};
+        const uncached = [];
+        for (const w of words) {
+            const key = DEF_CACHE + w.toLowerCase();
+            const cached = localStorage.getItem(key);
+            if (cached) {
+                try { result[w] = JSON.parse(cached); continue; } catch(e) {}
+            }
+            uncached.push(w);
+        }
+        if (uncached.length === 0) return result;
+        const config = getConfig();
+        if (!config.apiKey) return result;
+        for (let i = 0; i < uncached.length; i += 30) {
+            const batch = uncached.slice(i, i + 30);
+            const prompt = '请将以下英语单词翻译为中文，并返回JSON格式。\n\n单词列表：' + batch.join(', ') + '\n\n要求：\n1. 只输出JSON\n2. 格式：{"word": {"trans": "中文释义", "phonetic": "音标", "example": "英文例句"}}\n3. trans含词性如"n. 苹果"';
+            try {
+                const response = await fetch('/proxy/ai', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        endpoint: config.endpoint, apiKey: config.apiKey,
+                        body: {
+                            model: config.model,
+                            messages: [
+                                { role: 'system', content: '你是专业英汉词典，只输出JSON。' },
+                                { role: 'user', content: prompt }
+                            ],
+                            temperature: 0.3,
+                            response_format: { type: 'json_object' }
+                        }
+                    })
+                });
+                if (!response.ok) continue;
+                const data = await response.json();
+                if (data.error) continue;
+                const content = data.choices[0].message.content;
+                let parsed;
+                try { parsed = JSON.parse(content); }
+                catch(e) { const m = content.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else continue; }
+                for (const w of batch) {
+                    const def = parsed[w] || parsed[w.toLowerCase()];
+                    if (def) { result[w] = def; localStorage.setItem(DEF_CACHE + w.toLowerCase(), JSON.stringify(def)); }
+                }
+            } catch(e) { console.warn('AI翻译失败:', e); }
+        }
+        return result;
+    }
+
+return { getConfig, setConfig, hasConfig, classifyWords, getWordDefinitions };
 })();
 
 // ==========================================

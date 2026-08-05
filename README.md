@@ -25,6 +25,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 - **热力图自定义配色**：6 套配色预设，亮色与暗色模式各一套，状态栏一键切换
 - **隐私安全**：Token 和 AI Key 只存在本地，代理服务器与数据库仅运行在你自己的电脑上
 - **本地缓存**：API 数据本地缓存，减少请求、打开更快
+- **背单词自测模式**：在电脑上复习今日单词，AI 批量翻译释义，翻卡片自测记忆，支持认识/模糊/忘记三级标记，结果本地保存
 
 ## 技术栈
 
@@ -158,6 +159,7 @@ Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It
 - **Custom heatmap palettes**: 6 preset palettes (one each for light and dark mode), switchable from the status bar.
 - **Privacy-first**: Tokens and AI keys are stored only locally; the proxy server and database run solely on your own machine.
 - **Local caching**: API data is cached locally to reduce requests and open faster.
+- **Word self-test mode**: Review today’s words on PC with AI-translated definitions, flip-card recall, and know / vague / forget grading stored locally.
 
 ## Tech Stack
 

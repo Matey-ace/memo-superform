@@ -1,13 +1,14 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
-    <link rel="stylesheet" href="css/style.css?v=31">
-    <link rel="stylesheet" href="css/ai-toolbar.css?v=31">
-    <link rel="stylesheet" href="css/drag.css?v=31">
-    <script src="vendor/echarts.min.js?v=31"></script>
+    <link rel="stylesheet" href="css/style.css?v=32">
+    <link rel="stylesheet" href="css/ai-toolbar.css?v=32">
+    <link rel="stylesheet" href="css/drag.css?v=32">
+    <link rel="stylesheet" href="css/study.css?v=32">
+    <script src="vendor/echarts.min.js?v=32"></script>
 </head>
 <body>
     <!-- 顶部导航栏 -->
@@ -47,6 +48,10 @@
                 </select>
                 <span id="autoRefreshCountdown" class="auto-refresh-countdown">--:--</span>
             </div>
+            <button id="studyBtn" class="study-btn" title="背单词自测">
+                <svg viewBox="0 0 24 24" width="18" height="18" style="margin-right:4px"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+                <span>背单词</span>
+            </button>
             <button id="themeBtn" class="icon-btn" title="切换明暗主题">
                 <svg id="iconSun" viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                 <svg id="iconMoon" viewBox="0 0 24 24" width="20" height="20" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
@@ -232,6 +237,74 @@
         <div id="fullscreenChart" class="fullscreen-chart"></div>
     </div>
 
+    <!-- 背单词自测模态框 -->
+    <div id="studyOverlay" class="study-overlay">
+        <div class="study-topbar">
+            <div class="study-topbar-left">
+                <span class="study-topbar-title">📚 背单词自测</span>
+                <span class="study-progress-text">0 / 0</span>
+            </div>
+            <div class="study-topbar-right">
+                <select class="study-filter-select" title="筛选单词">
+                    <option value="all">全部单词</option>
+                    <option value="unfinished">仅未完成</option>
+                    <option value="new">仅新学</option>
+                </select>
+                <button class="study-shuffle-btn" title="随机顺序">🎲 随机</button>
+                <button class="study-close-btn" title="关闭 (按ESC)">&times;</button>
+            </div>
+        </div>
+        <div class="study-progress-bar-wrap">
+            <div class="study-progress-bar"></div>
+        </div>
+        <div class="study-main">
+            <div class="study-loading" style="display:none">
+                <div class="spinner"></div>
+                <p>加载中...</p>
+            </div>
+            <div class="study-empty" style="display:none">
+                <div class="icon">📚</div>
+                <h3>今日还没有单词可背</h3>
+                <p>请在手机端墨墨App中开始今日学习，或前往官方网页版背单词</p>
+                <a href="https://www.maimemo.com/home/web_study" target="_blank" class="study-web-link">去网页版背单词 →</a>
+            </div>
+            <div class="flashcard-wrap">
+                <div class="flashcard">
+                    <div class="flashcard-face flashcard-front">
+                        <div class="card-tag-row"></div>
+                        <div class="card-word"></div>
+                        <div class="card-phonetic"></div>
+                        <div class="card-hint">点击或按空格翻面查看释义</div>
+                    </div>
+                    <div class="flashcard-face flashcard-back">
+                        <div class="card-trans"></div>
+                        <div class="card-example-label" style="display:none">例句</div>
+                        <div class="card-example" style="display:none"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="study-summary" style="display:none">
+                <div class="summary-icon">🎉</div>
+                <h2>本次自测完成！</h2>
+                <p style="color:var(--text-secondary,#666);margin-bottom:20px">共测试 <span class="summary-total">0</span> 个单词</p>
+                <div class="summary-stats">
+                    <div class="summary-stat know"><div class="stat-num stat-know">0</div><div class="stat-label">认识</div></div>
+                    <div class="summary-stat vague"><div class="stat-num stat-vague">0</div><div class="stat-label">模糊</div></div>
+                    <div class="summary-stat forget"><div class="stat-num stat-forget">0</div><div class="stat-label">忘记</div></div>
+                </div>
+                <div class="summary-actions">
+                    <button class="summary-btn secondary summary-restart">再测一轮</button>
+                    <button class="summary-btn primary summary-done">完成</button>
+                </div>
+            </div>
+        </div>
+        <div class="study-actions">
+            <button class="mark-btn forget" data-mark="forget" disabled>忘记<span class="mark-key">1 / ←</span></button>
+            <button class="mark-btn vague" data-mark="vague" disabled>模糊<span class="mark-key">2 / ↑</span></button>
+            <button class="mark-btn know" data-mark="know" disabled>认识<span class="mark-key">3 / →</span></button>
+        </div>
+    </div>
+
     <!-- 欢迎/未配置提示 -->
     <div id="welcomeOverlay" class="welcome-overlay">
         <div class="welcome-card">
@@ -247,10 +320,11 @@
         </div>
     </div>
 
-    <script src="js/api.js?v=31"></script>
-    <script src="js/charts.js?v=31"></script>
-    <script src="js/layout.js?v=31"></script>
-    <script src="js/app.js?v=31"></script>
+    <script src="js/api.js?v=32"></script>
+    <script src="js/charts.js?v=32"></script>
+    <script src="js/layout.js?v=32"></script>
+    <script src="js/study.js?v=32"></script>
+    <script src="js/app.js?v=32"></script>
 </body>
 </html>
 
