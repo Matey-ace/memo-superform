@@ -15,3 +15,7 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Server logs
+server_err.log
+server_out.log

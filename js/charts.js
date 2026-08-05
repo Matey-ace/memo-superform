@@ -1072,6 +1072,11 @@ const ChartManager = (function() {
         const container = document.getElementById(containerId);
         if (!container) return null;
         
+        // 背单词磁贴：已加载时不重复渲染（避免自动刷新重载iframe）
+        if (chartType === 'study-web' && container.querySelector('.study-web-iframe')) {
+            return chartInstances[tileIndex] ? chartInstances[tileIndex].instance : null;
+        }
+        
         // 销毁旧图表
         if (chartInstances[tileIndex]) {
             chartInstances[tileIndex].instance.dispose();
@@ -1100,6 +1105,9 @@ const ChartManager = (function() {
                 break;
             case 'recommend':
                 chart = renderRecommendationChart(containerId);
+                break;
+            case 'study-web':
+                chart = StudyWeb.render(containerId);
                 break;
         }
         

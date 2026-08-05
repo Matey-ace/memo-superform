@@ -35,6 +35,18 @@ PORT = 8888
 # 打包为 exe 时静态资源在 PyInstaller 的解压目录 _MEIPASS 中
 WEB_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 MAIMEMO_BASE = "https://open.maimemo.com/open"
+TC_APIS_BASE = "https://tc-apis.maimemo.com"
+API_BASE = "https://api.maimemo.com"
+WWW_BASE = "https://www.maimemo.com"
+
+INTERCEPTOR_JS = (
+    '<script>(function(){'
+    + "var TC='https://tc-apis.maimemo.com',API='https://api.maimemo.com',WWW='https://www.maimemo.com';"
+    + "function rw(u){if(typeof u!=='string')return u;return u.replace(TC,'/memo-tc').replace(API,'/memo-api').replace(WWW,'/memo-www');}"
+    + "var of=window.fetch;window.fetch=function(i,n){if(typeof i==='string'){i=rw(i);}else if(i&&i.url){i=new Request(rw(i.url),i);}return of.call(this,i,n);};"
+    + "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=Array.prototype.slice.call(arguments);a[1]=rw(u);return oo.apply(this,a)};"
+    + '})();</script>'
+)
 
 # ---- 数据库（可选，失败不致命，不影响代理与静态服务） ----
 DB_READY = False
@@ -52,6 +64,74 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
     allow_reuse_address = True
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
+
+    def _web_proxy_request(self, target_url, method="GET", inject_interceptor=False):
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length) if content_length > 0 else None
+
+        req = urllib.request.Request(target_url, data=body, method=method)
+
+        skip_headers = {'host', 'content-length', 'connection', 'accept-encoding',
+                        'transfer-encoding', 'upgrade', 'origin', 'referer'}
+        for key in self.headers:
+            if key.lower() not in skip_headers:
+                req.add_header(key, self.headers[key])
+
+        if not req.has_header('User-Agent'):
+            req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=30)
+            resp_body = resp.read()
+            status = resp.status
+            resp_headers = resp.headers
+        except urllib.error.HTTPError as e:
+            resp_body = e.read() if e.fp else b""
+            status = e.code
+            resp_headers = e.headers
+        except Exception as e:
+            self.send_response(502)
+            self._send_cors_headers()
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            return
+
+        content_type = resp_headers.get('Content-Type', '')
+        if inject_interceptor and 'text/html' in content_type:
+            html = resp_body.decode('utf-8', errors='replace')
+            if '<head>' in html:
+                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS, 1)
+            elif '<head ' in html:
+                html = html.replace('<head ', INTERCEPTOR_JS + '<head ', 1)
+            else:
+                html = INTERCEPTOR_JS + html
+            resp_body = html.encode('utf-8')
+
+        self.send_response(status)
+        self._send_cors_headers()
+
+        for key, val in resp_headers.items():
+            lk = key.lower()
+            if lk in ('content-length', 'transfer-encoding', 'connection',
+                       'content-encoding', 'keep-alive'):
+                continue
+            if lk == 'set-cookie':
+                val = val.replace('Domain=maimemo.com;', '').replace('Domain=maimemo.com', '')
+                val = val.replace('domain=maimemo.com;', '').replace('domain=maimemo.com', '')
+                self.send_header('Set-Cookie', val)
+            elif lk == 'location':
+                val = val.replace('https://tc-apis.maimemo.com', '/memo-tc')
+                val = val.replace('https://api.maimemo.com', '/memo-api')
+                val = val.replace('https://www.maimemo.com', '/memo-www')
+                self.send_header('Location', val)
+            else:
+                self.send_header(key, val)
+
+        self.send_header('Content-Length', str(len(resp_body)))
+        self.end_headers()
+        if method != 'HEAD':
+            self.wfile.write(resp_body)
 
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -82,6 +162,35 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         # 普通静态文件
+        # ---- Maimemo web study reverse proxy ----
+        if path.startswith("/memo-tc/"):
+            sub = path[len("/memo-tc/"):]
+            target = TC_APIS_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            inject = sub.startswith("webstudy/app") and "." not in sub.split("/")[-1]
+            self._web_proxy_request(target, method="GET", inject_interceptor=inject)
+            return
+
+        if path.startswith("/memo-api/"):
+            sub = path[len("/memo-api/"):]
+            target = API_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="GET")
+            return
+
+        if path.startswith("/memo-www/"):
+            sub = path[len("/memo-www/"):]
+            target = WWW_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="GET", inject_interceptor=True)
+            return
+
+        if path.startswith("/webstudy/"):
+            target = TC_APIS_BASE + path
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="GET")
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -131,6 +240,34 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_json(500, {"error": str(e)})
             except json.JSONDecodeError:
                 self._send_json(400, {"error": "Invalid JSON body"})
+            return
+
+        # ---- Maimemo web study reverse proxy (POST) ----
+        if path.startswith("/memo-tc/"):
+            sub = path[len("/memo-tc/"):]
+            target = TC_APIS_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="POST")
+            return
+
+        if path.startswith("/memo-api/"):
+            sub = path[len("/memo-api/"):]
+            target = API_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="POST")
+            return
+
+        if path.startswith("/memo-www/"):
+            sub = path[len("/memo-www/"):]
+            target = WWW_BASE + "/" + sub
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="POST")
+            return
+
+        if path.startswith("/webstudy/"):
+            target = TC_APIS_BASE + path
+            if parsed.query: target += "?" + parsed.query
+            self._web_proxy_request(target, method="POST")
             return
 
         self.send_error(404, "Not Found")
@@ -252,7 +389,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         sys.stderr.write("[%s] %s %s %s\n" % (
-            self.log_date_time_string(), args[0], args[1], args[2]
+            self.log_date_time_string(), args[0] if len(args) > 0 else '', args[1] if len(args) > 1 else '', args[2] if len(args) > 2 else ''
         ))
 
 
