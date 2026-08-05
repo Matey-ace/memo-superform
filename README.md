@@ -9,7 +9,7 @@
 </div>
 
 <br>
-# Memo Superform
+<h1 id="memo-superform">MEMO SUPERFORM</h1>
 
 > 把墨墨背单词的学习数据，变成一块块好看的磁贴。
 
