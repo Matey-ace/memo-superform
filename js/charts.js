@@ -593,13 +593,16 @@ const ChartManager = (function() {
                 bottom: 2,
                 textStyle: { fontSize: 11, color: C.subtext },
                 itemWidth: 12,
-                itemHeight: 8
+                itemHeight: 8,
+                itemGap: 6,
+                type: 'scroll'
             },
             grid: {
-                left: 52,
-                right: 20,
+                left: 8,
+                right: 12,
                 top: 55,
-                bottom: 40
+                bottom: 36,
+                containLabel: true
             },
             xAxis: {
                 type: 'category',
@@ -1095,6 +1098,9 @@ const ChartManager = (function() {
             case 'growth':
                 chart = renderVocabularyGrowth(containerId, cachedRecords || []);
                 break;
+            case 'recommend':
+                chart = renderRecommendationChart(containerId);
+                break;
         }
         
         if (chart) {
@@ -1143,7 +1149,102 @@ const ChartManager = (function() {
     
     // 根据磁贴下拉框的实际值渲染所有可见图表（统一入口，确保标题与内容始终一致）
     // skipAI=true 时跳过 AI 分类（用于自动刷新）
-    function renderVisibleFromSelectors(skipAI) {
+        // ========== 智能复习推荐 ==========
+    function renderRecommendationChart(containerId) {
+        var container = document.getElementById(containerId);
+        if (!container) return null;
+        container.innerHTML = '<div class="rec-loading">加载推荐中...</div>';
+        var disposed = false;
+        (async function() {
+            try {
+                var data = await RecommendAPI.getToday();
+                if (!disposed) renderRecCards(container, data);
+            } catch (e) {
+                if (!disposed) container.innerHTML = '<div class="rec-error">推荐加载失败：' + escapeHtml(e.message || '') + '<br><span class="rec-hint">请确认 SQL Server 服务已启动</span></div>';
+            }
+        })();
+        return { dispose: function() { disposed = true; container.innerHTML = ''; } };
+    }
+
+    function escapeHtml(s) {
+        return String(s || '').replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function renderRecCards(container, data) {
+        var recs = data.recommendations || [];
+        var s = data.summary || {};
+        var pending = recs.filter(function(r) { return r.status !== 'reviewed'; });
+        var reviewed = recs.filter(function(r) { return r.status === 'reviewed'; });
+
+        var html = '<div class="rec-wrap">';
+        html += '<div class="rec-summary">';
+        html += '<div class="rec-sum-item high"><span class="rec-sum-num">' + (s.high || 0) + '</span><span class="rec-sum-lbl">紧急</span></div>';
+        html += '<div class="rec-sum-item mid"><span class="rec-sum-num">' + (s.mid || 0) + '</span><span class="rec-sum-lbl">建议</span></div>';
+        html += '<div class="rec-sum-item low"><span class="rec-sum-num">' + (s.low || 0) + '</span><span class="rec-sum-lbl">稳定</span></div>';
+        html += '<div class="rec-sum-item done"><span class="rec-sum-num">' + (s.reviewed || 0) + '</span><span class="rec-sum-lbl">已复习</span></div>';
+        html += '<button class="rec-refresh" title="刷新推荐">\u21bb</button>';
+        html += '</div>';
+
+        if (recs.length === 0) {
+            html += '<div class="rec-empty">今日暂无推荐<br><span class="rec-hint">每日首次加载会自动生成</span></div>';
+            html += '</div>';
+            container.innerHTML = html;
+            bindRecEvents(container);
+            return;
+        }
+
+        html += '<div class="rec-list">';
+        pending.forEach(function(r) { html += recCardHtml(r, false); });
+        html += '</div>';
+
+        if (reviewed.length) {
+            html += '<div class="rec-reviewed-title">已复习 (' + reviewed.length + ')</div>';
+            html += '<div class="rec-list reviewed">';
+            reviewed.forEach(function(r) { html += recCardHtml(r, true); });
+            html += '</div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+        bindRecEvents(container);
+    }
+
+    function recCardHtml(r, isReviewed) {
+        var cls = 'rec-card level-' + (r.level || 'low') + (isReviewed ? ' reviewed' : '');
+        var meta = [];
+        if (r.overdue_days != null && r.overdue_days > 0) meta.push('逾期 ' + r.overdue_days + ' 天');
+        if (r.gap_days != null) meta.push('间隔 ' + r.gap_days + ' 天');
+        meta.push(r.last_response_label || '');
+        return '<div class="' + cls + '" data-id="' + r.id + '">' +
+            '<div class="rec-card-main"><div class="rec-word">' + escapeHtml(r.word) + '</div>' +
+            '<div class="rec-meta">' + escapeHtml(meta.join(' \u00b7 ')) + '</div></div>' +
+            '<div class="rec-card-side"><div class="rec-score" style="background:' + (r.level_color || '#999') + '">' + (r.risk_score || 0) + '</div>' +
+            '<div class="rec-level-lbl">' + escapeHtml(r.level_label || '') + '</div></div>' +
+            '<button class="rec-review-btn">' + (isReviewed ? '\u2713' : '已复习') + '</button>' +
+            '</div>';
+    }
+
+    function bindRecEvents(container) {
+        container.querySelectorAll('.rec-review-btn').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var card = btn.closest('.rec-card');
+                var id = card.getAttribute('data-id');
+                RecommendAPI.markReviewed(id).then(function(ok) {
+                    if (ok) { card.classList.add('reviewed'); btn.textContent = '\u2713'; }
+                });
+            });
+        });
+        var refresh = container.querySelector('.rec-refresh');
+        if (refresh) refresh.addEventListener('click', function() {
+            container.innerHTML = '<div class="rec-loading">加载推荐中...</div>';
+            RecommendAPI.getToday().then(function(data) { renderRecCards(container, data); })
+                .catch(function() { container.innerHTML = '<div class="rec-error">加载失败</div>'; });
+        });
+    }
+
+function renderVisibleFromSelectors(skipAI) {
         document.querySelectorAll('.tile').forEach(function(tile) {
             if (tile.style.display === 'none') return;
             var tileIndex = parseInt(tile.dataset.tile);
@@ -1153,7 +1254,15 @@ const ChartManager = (function() {
             if (skipAI && chartType === 'aiclass') return;
             var info = chartInstances[tileIndex];
             var opts = info ? Object.assign({}, info.options || {}) : {};
-            if (chartType === 'trend' && !opts.days) opts.days = 30;
+            if (chartType === 'trend') {
+                // 优先从工具栏 active 按钮读取用户最新选择，避免刷新覆盖
+                var activeBtn = tile.querySelector('.range-btn.active');
+                if (activeBtn && activeBtn.dataset.range) {
+                    opts.days = activeBtn.dataset.range === 'all' ? 365 : parseInt(activeBtn.dataset.range);
+                } else if (!opts.days) {
+                    opts.days = 30;
+                }
+            }
             render(tileIndex, chartType, opts);
         });
     }

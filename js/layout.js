@@ -17,7 +17,8 @@ const LayoutManager = (function() {
         'memory':  { icon: '🧠', title: '记忆曲线',   color: '#722ed1', toolbar: null },
         'aiclass': { icon: '🤖', title: 'AI 单词分类', color: '#fa8c16', toolbar: 'ai' },
         'notepad': { icon: '📚', title: '词书进度',   color: '#13c2c2', toolbar: null },
-        'growth':  { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null }
+        'growth':  { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null },
+        'recommend': { icon: '🎯', title: '智能复习推荐', color: '#e74c3c', toolbar: null }
     };
 
     function init() {
@@ -205,9 +206,8 @@ const LayoutManager = (function() {
                     const days = this.dataset.range === 'all' ? 365 : parseInt(this.dataset.range);
                     tile.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
                     this.classList.add('active');
-                    if (ChartManager.getChartType(tileIndex) === 'trend') {
-                        ChartManager.render(tileIndex, 'trend', { days: days });
-                    }
+                    // range-btn 只存在于 trend 工具栏，直接渲染并更新 options
+                    ChartManager.render(tileIndex, 'trend', { days: days });
                 });
             });
         } else if (config.toolbar === 'heatmap') {
@@ -251,7 +251,6 @@ const LayoutManager = (function() {
                     if (ct === 'heatmap') {
                         ChartManager.render(tileIndex, 'heatmap', { month: currentMonth });
                     }
-                    // 彩蛋：连续点击 5 次樱粉配色后跳转
                     if (idx === 1) {
                         easterEggClicks++;
                         clearTimeout(easterEggTimer);
