@@ -298,7 +298,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
         def _wlog(msg):
             try:
-                with open(os.path.join(WEB_DIR, "_wslog.txt"), "a", encoding="utf-8") as _f:
+                _dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+                with open(os.path.join(_dir, "_wslog.txt"), "a", encoding="utf-8") as _f:
                     _f.write(msg + "\n")
             except Exception:
                 pass
