@@ -12,6 +12,9 @@ Memo Superform - 本地代理服务器
 
 import http.server
 import socketserver
+import socket
+import ssl
+import select
 import urllib.request
 import urllib.error
 import json
@@ -115,6 +118,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             text = text.replace(
                 'memo_host:"https://api.maimemo.com"',
                 'memo_host:window.location.origin+"/memo-api"'
+            )
+            # Rewrite ws_host to the local proxy so the study WebSocket goes
+            # through us instead of connecting directly to tc-apis (which
+            # the user's network cannot reach).
+            text = text.replace(
+                'ws_host:"wss://tc-apis.maimemo.com"',
+                'ws_host:(location.protocol==="https:"?"wss://":"ws://")+location.host'
             )
             # NOTE: login_return_url MUST stay as the original
             # https://tc-apis.maimemo.com/webstudy/app. tc-apis rejects
@@ -274,6 +284,82 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if method != 'HEAD':
             self.wfile.write(resp_body)
 
+    def _ws_proxy(self, path, query):
+        """Proxy a WebSocket connection to tc-apis.maimemo.com.
+
+        The web study SPA keeps a WebSocket open to
+        wss://tc-apis.maimemo.com/study/ws/webstudy?token=... . The user's
+        network cannot reach that host directly, so the browser connects to
+        ws://localhost:8888/... instead and we relay the raw bytes.
+        """
+        target_host = "tc-apis.maimemo.com"
+        target_port = 443
+        target_path = path + ("?" + query if query else "")
+
+        upstream = socket.create_connection((target_host, target_port), timeout=15)
+        ctx = ssl.create_default_context()
+        ssock = ctx.wrap_socket(upstream, server_hostname=target_host)
+
+        # Forward the browser's handshake headers upstream
+        lines = ["GET %s HTTP/1.1" % target_path, "Host: %s" % target_host]
+        for h in ('Upgrade', 'Connection', 'Sec-WebSocket-Key', 'Sec-WebSocket-Version',
+                  'Sec-WebSocket-Extensions', 'Sec-WebSocket-Protocol', 'Origin',
+                  'User-Agent', 'Cookie', 'Authorization'):
+            v = self.headers.get(h)
+            if v:
+                lines.append("%s: %s" % (h, v))
+        lines.append("")
+        lines.append("")
+        ssock.sendall("\r\n".join(lines).encode("latin1"))
+
+        # Read upstream handshake response
+        resp = b""
+        while b"\r\n\r\n" not in resp:
+            try:
+                chunk = ssock.recv(4096)
+            except Exception:
+                chunk = b""
+            if not chunk:
+                break
+            resp += chunk
+        header_part, _, rest = resp.partition(b"\r\n\r\n")
+        status_line = header_part.split(b"\r\n", 1)[0].decode("latin1", errors="replace")
+        if "101" not in status_line:
+            try:
+                self.connection.sendall(resp)
+            except Exception:
+                pass
+            ssock.close()
+            return
+
+        # Handshake accepted - send 101 + headers to the browser, then relay
+        try:
+            self.connection.sendall(header_part + b"\r\n\r\n")
+            if rest:
+                self.connection.sendall(rest)
+            self.connection.settimeout(300)
+            ssock.settimeout(300)
+            while True:
+                r, _, _ = select.select([self.connection, ssock], [], [], 60)
+                if not r:
+                    continue
+                for s in r:
+                    try:
+                        data = s.recv(65536)
+                    except Exception:
+                        data = b""
+                    if not data:
+                        return
+                    if s is self.connection:
+                        ssock.sendall(data)
+                    else:
+                        self.connection.sendall(data)
+        finally:
+            try:
+                ssock.close()
+            except Exception:
+                pass
+
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -287,6 +373,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        # WebSocket upgrade (study connection) -> relay to tc-apis
+        if self.headers.get('Upgrade', '').lower() == 'websocket':
+            self._ws_proxy(path, parsed.query)
+            return
 
         # ---- /api/* 业务接口 ----
         if path.startswith("/api/"):
