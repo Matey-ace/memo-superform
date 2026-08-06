@@ -296,6 +296,14 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         target_port = 443
         target_path = path + ("?" + query if query else "")
 
+        def _wlog(msg):
+            try:
+                with open(os.path.join(WEB_DIR, "_wslog.txt"), "a", encoding="utf-8") as _f:
+                    _f.write(msg + "\n")
+            except Exception:
+                pass
+        _wlog("WS req path=%s" % path)
+
         upstream = socket.create_connection((target_host, target_port), timeout=15)
         ctx = ssl.create_default_context()
         ssock = ctx.wrap_socket(upstream, server_hostname=target_host)
@@ -325,12 +333,14 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         header_part, _, rest = resp.partition(b"\r\n\r\n")
         status_line = header_part.split(b"\r\n", 1)[0].decode("latin1", errors="replace")
         if "101" not in status_line:
+            _wlog("WS upstream non-101: %s" % status_line)
             try:
                 self.connection.sendall(resp)
             except Exception:
                 pass
             ssock.close()
             return
+        _wlog("WS handshake OK, relaying")
 
         # Handshake accepted - send 101 + headers to the browser, then relay
         try:
@@ -349,6 +359,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     except Exception:
                         data = b""
                     if not data:
+                        _wlog("WS closed (EOF)")
                         return
                     if s is self.connection:
                         ssock.sendall(data)
