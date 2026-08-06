@@ -131,13 +131,18 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             # rewrite absolute paths to include the proxy prefix.
             if is_html and proxy_prefix and proxy_prefix != '/memo-tc':
                 # Rewrite href="/xxx", src="/xxx", action="/xxx" to
-                # href="/proxy-prefix/xxx" etc. ? but skip paths that
+                # href="/proxy-prefix/xxx" etc. - but skip paths that
                 # already start with /memo- (already proxied).
                 text = re.sub(
                     r'((?:href|src|action)\s*=\s*["\'])(/(?!memo-))',
                     r'\1' + proxy_prefix + r'\2',
                     text
                 )
+                # Rewrite relative URLs in inline JavaScript (e.g. fetch calls)
+                # so /interaction/xxx becomes /memo-accounts/interaction/xxx
+                for pfx in ['/interaction/', '/oidc/', '/static/']:
+                    text = text.replace("'" + pfx + "'", "'" + proxy_prefix + pfx + "'")
+                    text = text.replace('"' + pfx + '"', '"' + proxy_prefix + pfx + '"')
 
         return text.encode('utf-8') if isinstance(body, bytes) else text
 
