@@ -19,3 +19,7 @@ Thumbs.db
 # Server logs
 server_err.log
 server_out.log
+
+_edge_*
+_*.py
+_reqlog.txt
