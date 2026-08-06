@@ -157,8 +157,16 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                         'x-frame-options', 'content-security-policy',
                         'strict-transport-security', 'x-content-type-options'}
         for key in self.headers:
-            if key.lower() not in skip_headers:
-                req.add_header(key, self.headers[key])
+            lk = key.lower()
+            if lk not in skip_headers:
+                val = self.headers[key]
+                # Browsers refuse to store __Host-* cookies over plain HTTP,
+                # so the proxy renames __Host-x-csrf-token -> x-csrf-token in
+                # Set-Cookie. When forwarding the request, rename it back so
+                # accounts.maimemo.com finds the cookie it expects.
+                if lk == 'cookie':
+                    val = re.sub(r'(^|;\s*)x-csrf-token=', r'\1__Host-x-csrf-token=', val)
+                req.add_header(key, val)
 
         if not req.has_header('User-Agent'):
             req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
@@ -239,11 +247,15 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 # Strip Secure flag so cookies work over HTTP proxy
                 val = val.replace('; Secure', '').replace('; secure', '')
                 val = val.replace(';Secure', '').replace(';secure', '')
+                # __Host- prefix forces Secure + Path=/ ; since we strip Secure,
+                # rename the cookie so browsers accept it.
+                val = val.replace('__Host-', '')
                 # Prefix cookie Path with the proxy prefix so cookies set by
                 # e.g. accounts.maimemo.com (Path=/interaction/xxx) are sent
                 # to our proxied paths (/memo-accounts/interaction/xxx).
+                # Keep root Path=/ untouched (matches only /xxx sub-paths).
                 if proxy_prefix:
-                    val = re.sub(r'[Pp]ath=/(?=[^/])', 'path=' + proxy_prefix + '/', val)
+                    val = re.sub(r'[Pp]ath=/(?=[^/;])', 'path=' + proxy_prefix + '/', val)
                 self.send_header('Set-Cookie', val)
             elif lk == 'location':
                 val = val.replace('https://tc-apis.maimemo.com', '/memo-tc')
