@@ -192,6 +192,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if inject_interceptor and 'text/html' in content_type:
             resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)
             html = resp_body.decode('utf-8', errors='replace')
+            # Cache-bust: append ?v=<timestamp> to script/link src/href to
+            # force browsers to load fresh JS/CSS instead of cached old
+            # versions that still point to real maimemo domains.
+            import time as _time
+            _bv = str(int(_time.time()))
+            html = re.sub(r'(<script[^>]*src=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
+            html = re.sub(r'(<link[^>]*href=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             if '<head>' in html:
                 html = html.replace('<head>', '<head>' + INTERCEPTOR_JS, 1)
             elif '<head ' in html:
@@ -491,7 +498,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             req.add_header("Content-Type", "application/json")
 
         try:
-            resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=30)
+            resp = urllib.request.urlopen(req, timeout=30)
             result = resp.read().decode("utf-8")
             self.send_response(resp.status)
             self._send_cors_headers()
