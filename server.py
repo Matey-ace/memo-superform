@@ -50,8 +50,6 @@ INTERCEPTOR_JS = (
     + "var origOpen=window.open;window.open=function(u){if(typeof u==='string')u=rw(u);return origOpen.call(this,u);};"
     + "try{var loc=window.location;var origHref=Object.getOwnPropertyDescriptor(Location.prototype,'href');if(origHref&&origHref.set){var origSet=origHref.set;Object.defineProperty(Location.prototype,'href',{set:function(v){return origSet.call(this,rw(v));},get:origHref.get,configurable:true});}}catch(e){};"
     + "try{var origReplace=Location.prototype.replace;Location.prototype.replace=function(u){return origReplace.call(this,rw(u));};var origAssign=Location.prototype.assign;Location.prototype.assign=function(u){return origAssign.call(this,rw(u));};}catch(e){};"
-    + "try{var origImport=window.__origImport;if(!origImport&&window.import){origImport=window.import;window.import=function(u){if(typeof u==='string')u=rw(u);return origImport.call(this,u);};}}catch(e){};"
-    + "try{var origCreate=document.createElement.bind(document);document.createElement=function(t){var el=origCreate(t);if('script'===t||'link'===t){var origSetAttr=el.setAttribute.bind(el);el.setAttribute=function(n,v){if(('src'===n||'href'===n)&&typeof v==='string'){v=rw(v);}return origSetAttr(n,v);};var origSrc=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,'src');if(origSrc&&origSrc.set){Object.defineProperty(el,'src',{set:function(v){origSrc.set.call(this,typeof v==='string'?rw(v):v);},get:origSrc.get,configurable:true});}}return el;};}catch(e){};"
     + '})();</script>'
 )
 
@@ -219,6 +217,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if 'text/html' in content_type or 'javascript' in content_type:
             self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
             self.send_header('Pragma', 'no-cache')
+        if inject_interceptor and 'text/html' in content_type:
+            self.send_header('Clear-Site-Data', '"cache"')
 
         for key, val in resp_headers.items():
             lk = key.lower()
