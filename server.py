@@ -225,7 +225,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             if lk in ('content-length', 'transfer-encoding', 'connection',
                        'content-encoding', 'keep-alive',
                        'x-frame-options', 'content-security-policy',
-                       'strict-transport-security', 'x-content-type-options'):
+                       'strict-transport-security', 'x-content-type-options',
+                       'etag', 'last-modified'):
                 continue
             if lk == 'set-cookie':
                 val = val.replace('Domain=maimemo.com;', '').replace('Domain=maimemo.com', '')
