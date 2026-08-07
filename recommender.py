@@ -66,7 +66,11 @@ def generate_recommendations(top_n=30):
                   AND (next_study_date IS NULL OR next_study_date <= DATEADD(DAY, 7, CAST(GETDATE() AS DATE)))
             ) AS s
         ) AS t
-        ORDER BY risk_score DESC, overdue_days DESC
+        ORDER BY
+            risk_score DESC,
+            -- 无复习日期(overdue_days=NULL)的词显式排最后，不依赖数据库方言的隐式 NULL 排序
+            CASE WHEN overdue_days IS NULL THEN 1 ELSE 0 END,
+            overdue_days DESC
         """
         cur.execute(sql, top_n)
         cur.execute("SELECT COUNT(1) FROM recommendations WHERE recommend_date = CAST(GETDATE() AS DATE)")
