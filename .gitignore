@@ -23,3 +23,5 @@ server_out.log
 _edge_*
 _*.py
 _reqlog.txt
+_wslog.txt
+_cblog.txt
