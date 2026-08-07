@@ -1,5 +1,5 @@
 /* ============================================================
-   Memo Superform · 墨墨手账（anon 风格）
+   Memo Superform · anon 笔记本
    独立设计系统：可替换 style.css，功能规则完整保留
    ============================================================ */
 
@@ -149,7 +149,7 @@ body {
 .layout-grid4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 .layout-grid4 .tile { display: flex !important; }
 
-/* ================= 磁贴（手账卡片） ================= */
+/* ================= 磁贴（笔记本卡片） ================= */
 .tile {
   background: var(--card);
   border-radius: var(--radius);
@@ -265,7 +265,7 @@ body {
 .swatch-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .swatch-name { font-size: 11px; color: var(--ink-mid); }
 
-/* AI 工具栏（覆盖 ai-toolbar.css 配色以贴合手账风） */
+/* AI 工具栏（覆盖 ai-toolbar.css 配色以贴合笔记本风） */
 .ai-toolbar { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; border-bottom: 1px dashed var(--line); background: rgba(255,255,255,.4); }
 .ai-source-row, .ai-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ai-toolbar select, .ai-toolbar input[type="date"] {
@@ -478,8 +478,8 @@ body.dark .rec-card { background: var(--paper); border-color: var(--line); }
 }
 
 
-/* ---------- ????? GIF ?? ---------- */
-/* ==== GIF ????????????????? ====
+/* ---------- 彩蛋动画 ---------- */
+/* ==== 彩蛋动画样式（已注释停用，待重构） ====
 .egg-overlay {
   position: fixed; inset: 0; z-index: 9999;
   background: rgba(24, 18, 32, .55);

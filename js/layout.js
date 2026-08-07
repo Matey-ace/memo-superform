@@ -288,8 +288,8 @@ const LayoutManager = (function() {
                         easterEggTimer = setTimeout(function() { easterEggClicks = 0; }, 3000);
                         if (easterEggClicks >= 5) {
                             easterEggClicks = 0;
-                            // ????????? 5 ? -> ????????(index-anon.html)
-                            // ??????????????????????????
+                            // 彩蛋：连点樱粉色块 5 次 -> 切换到「笔记本版」(index-anon.html)
+                            // 若已在笔记本版则不做任何事（顶部有「原版」链接可返回）
                             var cur = window.location.pathname.split('/').pop() || 'index.html';
                             if (cur !== 'index-anon.html') {
                                 window.location.href = 'index-anon.html';

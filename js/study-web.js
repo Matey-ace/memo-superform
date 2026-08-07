@@ -56,7 +56,7 @@ const StudyWeb = (function() {
 
         // Listen for iframe load events to detect state changes
         // (login page -> SPA after login)
-        // ???????????????iframe ??????????????????
+        // 根据仪表盘暗色主题同步 iframe 样式
         function syncIframeTheme() {
             try {
                 var idoc = iframe.contentDocument;
