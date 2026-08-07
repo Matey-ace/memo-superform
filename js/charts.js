@@ -40,7 +40,7 @@ const ChartManager = (function() {
     // 获取今天的日期 (北京时区)
     function getTodayBeijing() {
         const now = new Date();
-        const beijingTime = now.getTime() + 8 * 60 * 60 * 1000 + (now.getTimezoneOffset() * 60 * 1000);
+        const beijingTime = now.getTime() + 8 * 60 * 60 * 1000;
         const d = new Date(beijingTime);
         // 用本地方法格式化，因为已经加了偏移
         const year = d.getUTCFullYear();
