@@ -68,8 +68,8 @@ if ($status) {
     git commit -m "$tag`: $Message" 2>&1 | Out-Null
 }
 git pull --rebase origin main 2>&1 | Out-Null
-git push origin main 2>&1 | Out-Null
-Write-Host "  代码已推送到 main" -ForegroundColor Green
+git push 2>&1 | Out-Null
+Write-Host "  代码已推送" -ForegroundColor Green
 
 # ---- 4. 创建并推送 tag ----
 Write-Host "[4/6] 创建 tag $tag..." -ForegroundColor Yellow
