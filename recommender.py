@@ -19,12 +19,12 @@ def generate_recommendations(top_n=30):
     conn = db.get_connection(autocommit=True)
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM recommendations WHERE recommend_date = CAST(GETDATE() AS DATE)")
-        sql = """
+        cur.execute("DECLARE @today DATE = ?; DELETE FROM recommendations WHERE recommend_date = @today", db.beijing_today())
+        sql = "DECLARE @today DATE = ?; " + """
         INSERT INTO recommendations
             (recommend_date, word, definition, risk_score, overdue_days, gap_days, last_response, next_study_date)
         SELECT TOP (?)
-            CAST(GETDATE() AS DATE), word, definition, risk_score, overdue_days, gap_days, last_response, next_study_date
+            @today, word, definition, risk_score, overdue_days, gap_days, last_response, next_study_date
         FROM (
             SELECT
                 word, definition, last_response, next_study_date,
@@ -34,19 +34,19 @@ def generate_recommendations(top_n=30):
                 SELECT
                     word, definition, last_response, next_study_date,
                     CASE
-                        WHEN next_study_date IS NULL THEN NULL
-                        ELSE DATEDIFF(DAY, next_study_date, CAST(GETDATE() AS DATE))
+                        WHEN next_study_date IS NULL THEN 0
+                        ELSE DATEDIFF(DAY, next_study_date, @today)
                     END AS overdue_days,
                     CASE
-                        WHEN last_study_date IS NULL THEN NULL
-                        ELSE DATEDIFF(DAY, last_study_date, CAST(GETDATE() AS DATE))
+                        WHEN last_study_date IS NULL THEN 0
+                        ELSE DATEDIFF(DAY, last_study_date, @today)
                     END AS gap_days,
                     CASE
                         WHEN next_study_date IS NULL THEN 0
-                        WHEN next_study_date < CAST(GETDATE() AS DATE) THEN
-                            CASE WHEN DATEDIFF(DAY, next_study_date, CAST(GETDATE() AS DATE)) * 5 > 50 THEN 50
-                                 ELSE DATEDIFF(DAY, next_study_date, CAST(GETDATE() AS DATE)) * 5 END
-                        WHEN next_study_date = CAST(GETDATE() AS DATE) THEN 25
+                        WHEN next_study_date < @today THEN
+                            CASE WHEN DATEDIFF(DAY, next_study_date, @today) * 5 > 50 THEN 50
+                                 ELSE DATEDIFF(DAY, next_study_date, @today) * 5 END
+                        WHEN next_study_date = @today THEN 25
                         ELSE 0
                     END AS overdue_score,
                     CASE
@@ -58,12 +58,12 @@ def generate_recommendations(top_n=30):
                     END AS response_score,
                     CASE
                         WHEN last_study_date IS NULL THEN 10
-                        WHEN DATEDIFF(DAY, last_study_date, CAST(GETDATE() AS DATE)) > 20 THEN 20
-                        ELSE DATEDIFF(DAY, last_study_date, CAST(GETDATE() AS DATE))
+                        WHEN DATEDIFF(DAY, last_study_date, @today) > 20 THEN 20
+                        ELSE DATEDIFF(DAY, last_study_date, @today)
                     END AS gap_score
                 FROM study_records
-                WHERE snapshot_date = CAST(GETDATE() AS DATE)
-                  AND (next_study_date IS NULL OR next_study_date <= DATEADD(DAY, 7, CAST(GETDATE() AS DATE)))
+                WHERE snapshot_date = @today
+                  AND (next_study_date IS NULL OR next_study_date <= DATEADD(DAY, 7, @today))
             ) AS s
         ) AS t
         ORDER BY
@@ -72,8 +72,8 @@ def generate_recommendations(top_n=30):
             CASE WHEN overdue_days IS NULL THEN 1 ELSE 0 END,
             overdue_days DESC
         """
-        cur.execute(sql, top_n)
-        cur.execute("SELECT COUNT(1) FROM recommendations WHERE recommend_date = CAST(GETDATE() AS DATE)")
+        cur.execute(sql, (db.beijing_today(), top_n))
+        cur.execute("DECLARE @today DATE = ?; SELECT COUNT(1) FROM recommendations WHERE recommend_date = @today", db.beijing_today())
         return cur.fetchone()[0]
     finally:
         conn.close()
@@ -84,13 +84,13 @@ def get_today_recommendations():
     conn = db.get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute("DECLARE @today DATE = ?; " + """
             SELECT id, word, definition, risk_score, overdue_days, gap_days,
                    last_response, next_study_date, status
             FROM recommendations
-            WHERE recommend_date = CAST(GETDATE() AS DATE)
+            WHERE recommend_date = @today
             ORDER BY risk_score DESC
-        """)
+        """, db.beijing_today())
         rows = db.rows_to_dicts(cur)
         for r in rows:
             score = r.get("risk_score") or 0
@@ -117,7 +117,7 @@ def get_recommendation_summary():
     conn = db.get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute("DECLARE @today DATE = ?; " + """
             SELECT
                 COUNT(1) AS total,
                 SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high,
@@ -125,8 +125,8 @@ def get_recommendation_summary():
                 SUM(CASE WHEN risk_score < 30 THEN 1 ELSE 0 END) AS low,
                 SUM(CASE WHEN status = 'reviewed' THEN 1 ELSE 0 END) AS reviewed
             FROM recommendations
-            WHERE recommend_date = CAST(GETDATE() AS DATE)
-        """)
+            WHERE recommend_date = @today
+        """, db.beijing_today())
         row = cur.fetchone()
         return {
             "total": int(row[0] or 0),

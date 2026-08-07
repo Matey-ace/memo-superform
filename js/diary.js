@@ -12,6 +12,13 @@ var DiaryChart = (function () {
     const b = new Date(d.getTime() + 8 * 3600 * 1000);
     return b.toISOString().slice(0, 10);
   }
+  // 安全解析：缺失/非法日期返回 null，不会抛 RangeError
+  function safeDay(value) {
+    if (value == null || value === '') return null;
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return null;
+    return toDay(d);
+  }
   function fmtCN(dateStr) {
     const p = dateStr.split('-');
     if (p.length !== 3) return dateStr;
@@ -35,14 +42,14 @@ var DiaryChart = (function () {
     const map = {};
     dates.forEach(d => { map[d] = { total: 0, fresh: 0, review: 0, correct: 0 }; });
     (records || []).forEach(r => {
-      const last = toDay(new Date(r.last_study_date));
-      const add = toDay(new Date(r.add_date));
-      if (map[last]) {
+      const last = safeDay(r.last_study_date);
+      const add = safeDay(r.add_date);
+      if (last && map[last]) {
         map[last].total++;
         if (r.last_response === 'FAMILIAR' || r.last_response === 'WELL_FAMILIAR') map[last].correct++;
       }
-      if (map[add]) map[add].fresh++;
-      if (map[last] && add !== last && r.study_count > 1) map[last].review++;
+      if (add && map[add]) map[add].fresh++;
+      if (last && add && map[last] && add !== last && r.study_count > 1) map[last].review++;
     });
     return dates.map(d => ({ date: d, ...map[d] }));
   }
@@ -98,7 +105,7 @@ var DiaryChart = (function () {
         + '<span class="md-arrow">›</span>'
         + '</div>';
     }).join('');
-    return '<div class="mydiary-head"><span class="md-title">📖 记忆手账 · MEMORY DIARY</span><span class="md-tape"></span></div>'
+    return '<div class="mydiary-head"><span class="md-title"><img class="md-title-gif" src="img/gifs/rana-sleep.gif" alt=""> 记忆手账 · MEMORY DIARY</span><span class="md-tape"></span></div>'
       + '<div class="mydiary-ticker"><div class="mydiary-ticker-scroll">'
       +   '<span class="mydiary-ticker-item">— tap a day to open — 点击日期查看详情 —</span>'
       +   '<span class="mydiary-ticker-item">— tap a day to open — 点击日期查看详情 —</span>'

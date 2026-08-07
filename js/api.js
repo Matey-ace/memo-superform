@@ -142,7 +142,7 @@ const MaimemoAPI = (function() {
             const end = new Date(endStr);
             // 护栏2：区间细分到不足1天（next_study_date 为天粒度，再分无意义），转 offset 分页
             if (end.getTime() - start.getTime() < 86400000) {
-                return await fetchByOffset(startStr, endStr);
+                return await fetchByOffset([startStr, endStr]);
             }
             const mid = new Date((start.getTime() + end.getTime()) / 2);
             const left = await fetchSegment(start.toISOString(), mid.toISOString(), depth + 1);
@@ -151,18 +151,16 @@ const MaimemoAPI = (function() {
         }
 
         // offset 分页兜底：当某个时间点/极小区间内单词 >=1000，二分已失效时逐页拉取
-        async function fetchByOffset(startStr, endStr) {
+        async function fetchByOffset(dateRange) {
             const all = [];
             let offset = 0;
             let lastSig = null;
             // 防御：最多拉 200 页（20万词），避免异常时无限循环
             while (offset < 200000) {
                 await new Promise(resolve => setTimeout(resolve, 300));
-                const result = await queryStudyRecords({
-                    next_study_date: { start: startStr, end: endStr },
-                    limit: 1000,
-                    offset: offset
-                }, false);
+                const params = { limit: 1000, offset: offset };
+                if (dateRange) params.next_study_date = { start: dateRange[0], end: dateRange[1] };
+                const result = await queryStudyRecords(params, false);
                 const recs = result.records || [];
                 if (recs.length === 0) break;
                 // 护栏3：进展检测。若 offset 不被支持，返回的会与上一页相同 -> 停止
@@ -198,13 +196,16 @@ const MaimemoAPI = (function() {
         }
 
         // 兜底：若还是没拉全，直接拉一次全量
-        if (allRecords.length === 0) {
-            const result = await queryStudyRecords({ limit: 1000 }, false);
-            allRecords.push(...(result.records || []));
-        }
+        // 补拉：无日期过滤，覆盖 next_study_date 为空/超范围的记录
+        const catchAll = await fetchByOffset(null);
+        for (const r of catchAll) allRecords.push(r);
+        if (onProgress) onProgress(allRecords.length, total);
 
         // 去重后返回
         const uniqueRecords = dedupe(allRecords);
+        if (uniqueRecords.length < total) {
+            console.warn('[getAllStudyRecords] 拉取数量不足 total:', uniqueRecords.length, '/', total);
+        }
         if (useCache) setCache(cacheKey, uniqueRecords);
         return uniqueRecords;
     }
@@ -246,15 +247,7 @@ const MaimemoAPI = (function() {
     // ---- 云词本接口 ----
     
     // 获取今日学习单词（公测接口）
-    async function getTodayItems(params = {}, useCache = true) {
-        const cacheKey = 'today_items_' + token.slice(-8) + '_' + JSON.stringify(params);
-        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
-        const data = await request('/study/get_today_items', { method: 'POST', body: params });
-        if (useCache) setCache(cacheKey, data);
-        return data;
-    }
-
-    async function listNotepads(limit = 10, offset = 0, useCache = true) {
+      async function listNotepads(limit = 10, offset = 0, useCache = true) {
         if (limit > 10) limit = 10;
         const cacheKey = 'notepads_' + token.slice(-8) + '_' + limit + '_' + offset;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
@@ -322,14 +315,7 @@ const MaimemoAPI = (function() {
         return allWords;
     }
     
-    async function queryVocabulary(params = {}, useCache = true) {
-        const cacheKey = 'vocab_' + token.slice(-8) + '_' + JSON.stringify(params);
-        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
-        const data = await request('/vocabulary/query', { method: 'POST', body: params });
-        if (useCache) setCache(cacheKey, data);
-        return data;
-    }
-    
+      
     async function testToken(testToken) {
         const originalToken = token;
         token = testToken;
@@ -345,10 +331,10 @@ const MaimemoAPI = (function() {
     
     return {
         setToken, getToken, hasToken, clearCache,
-        getStudyProgress, getTodayItems, queryStudyRecords, getAllStudyRecords,
+        getStudyProgress, queryStudyRecords, getAllStudyRecords,
         getWordsFromStudyRecords,
         listNotepads, listAllNotepads, getNotepad, getAllNotepadWords,
-        queryVocabulary, testToken
+        testToken
     };
 })();
 
@@ -500,9 +486,5 @@ const RecommendAPI = (function() {
         });
         return resp.json();
     }
-    async function getHistoryStats(days) {
-        const resp = await fetch('/api/stats/history?days=' + (days || 30));
-        return resp.json();
-    }
-    return { getToday: getToday, markReviewed: markReviewed, saveSnapshot: saveSnapshot, getHistoryStats: getHistoryStats };
+      return { getToday: getToday, markReviewed: markReviewed, saveSnapshot: saveSnapshot,  };
 })();

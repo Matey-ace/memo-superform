@@ -1144,20 +1144,7 @@ const ChartManager = (function() {
         });
     }
     // 重新渲染所有可见图表（跳过 AI 分类，用于自动刷新）
-    // 从磁贴的下拉选择器读取当前图表类型，确保标题与内容始终一致
-    function rerenderExceptAI() {
-        Object.keys(chartInstances).forEach(tileIndex => {
-            const tileEl = document.querySelector(`.tile[data-tile="${tileIndex}"]`);
-            if (!tileEl || tileEl.style.display === 'none') return;
-            // 以磁贴下拉框的实际值为准，而非 chartInstances 中可能过期的记录
-            const selector = tileEl.querySelector('.chart-selector');
-            const chartType = selector ? selector.value : chartInstances[tileIndex].chartType;
-            if (chartType === 'aiclass') return;
-            const savedOptions = chartInstances[tileIndex] ? (chartInstances[tileIndex].options || {}) : {};
-            render(parseInt(tileIndex), chartType, savedOptions);
-        });
-    }
-    
+    // 从磁贴的下拉选择器读取当前图表类型，确保标题与内容始    
     // 根据磁贴下拉框的实际值渲染所有可见图表（统一入口，确保标题与内容始终一致）
     // skipAI=true 时跳过 AI 分类（用于自动刷新）
         // ========== 智能复习推荐 ==========
@@ -1313,7 +1300,6 @@ function renderVisibleFromSelectors(skipAI) {
         render,
         rerenderAll,
         renderAll,
-        rerenderExceptAI,
         renderVisibleFromSelectors,
         getInstance,
         getChartType,

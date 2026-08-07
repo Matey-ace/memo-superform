@@ -52,6 +52,9 @@ $pyArgs = @("--noconfirm","--onefile","--name","MemoSuperform",
     "--add-data","css;css",
     "--add-data","js;js",
     "--add-data","vendor;vendor",
+    "--add-data","index-anon.html;.",
+    "--add-data","img;img",
+    "--add-data","fonts;fonts",
     "server.py")
 & python -m PyInstaller @pyArgs 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { Write-Host "  打包失败!" -ForegroundColor Red; exit 1 }

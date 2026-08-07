@@ -10,6 +10,11 @@ import os
 import pyodbc
 from datetime import datetime, date, timezone, timedelta
 
+def beijing_today():
+    """\u8fd4\u56de\u5317\u4eac\u65f6\u95f4(UTC+8)\u7684\u5f53\u5929\u65e5\u671f\uff0c\u4f5c\u4e3a\u5168\u9879\u76ee\u7edf\u4e00\u7684\u201c\u4eca\u5929\u201d\u6765\u6e90\u3002"""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+
+
 DB_NAME = "MemoSuperform"
 SERVER = r".\SQLEXPRESS"
 DRIVER = "ODBC Driver 17 for SQL Server"
@@ -77,7 +82,7 @@ def rows_to_dicts(cursor):
 def save_snapshot(records):
     """保存当日快照：先删当日记录再批量插入。返回写入条数。
     records 为墨墨 API 原始记录(dict 列表)，字段 voc_spelling/next_study_date 等。"""
-    today = date.today()
+    today = beijing_today()
     rows = []
     for r in records:
         word = (r.get("voc_spelling") or r.get("word") or "").strip()
@@ -118,7 +123,7 @@ def has_today_snapshot():
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(1) FROM study_records WHERE snapshot_date = CAST(GETDATE() AS DATE)")
+        cur.execute("SELECT COUNT(1) FROM study_records WHERE snapshot_date = ?", beijing_today())
         return cur.fetchone()[0] > 0
     finally:
         conn.close()
@@ -128,7 +133,7 @@ def has_today_recommendations():
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(1) FROM recommendations WHERE recommend_date = CAST(GETDATE() AS DATE)")
+        cur.execute("SELECT COUNT(1) FROM recommendations WHERE recommend_date = ?", beijing_today())
         return cur.fetchone()[0] > 0
     finally:
         conn.close()
@@ -139,7 +144,7 @@ def has_today_recommendations():
 def compute_and_save_daily_stats(stat_date=None):
     """从当日快照聚合统计并 upsert(MERGE)。"""
     if stat_date is None:
-        stat_date = date.today()
+        stat_date = beijing_today()
     conn = get_connection(autocommit=True)
     try:
         cur = conn.cursor()
@@ -188,15 +193,16 @@ def get_history_stats(days=30):
     conn = get_connection()
     try:
         cur = conn.cursor()
+        start = beijing_today() - timedelta(days=days)
         cur.execute(
             """
             SELECT stat_date, total_words, new_words, reviewed_words,
                    familiar_count, vague_count, forget_count, overdue_count
             FROM daily_stats
-            WHERE stat_date >= DATEADD(DAY, ?, CAST(GETDATE() AS DATE))
+            WHERE stat_date >= ?
             ORDER BY stat_date
             """,
-            (-days,),
+            (start,),
         )
         return rows_to_dicts(cur)
     finally:

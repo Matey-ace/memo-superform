@@ -102,6 +102,21 @@ const LayoutManager = (function() {
                 fullscreenChartBackup = { tileIndex, instance: null };
                 return;
             }
+            if (typeof inst.getOption !== 'function') {
+                // non-ECharts instance (recommend / memory-diary): clone chart DOM into fullscreen
+                const fsEl = document.getElementById('fullscreenChart');
+                fsEl.innerHTML = '';
+                const tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
+                const src = tile ? tile.querySelector('.chart-container') : null;
+                if (src) {
+                    const clone = src.cloneNode(true);
+                    clone.id = '';
+                    clone.classList.remove('loading');
+                    fsEl.appendChild(clone);
+                }
+                fullscreenChartBackup = { tileIndex, instance: null };
+                return;
+            }
             const fs = echarts.init(document.getElementById('fullscreenChart'));
             fs.setOption(inst.getOption());
             fullscreenChartBackup = { tileIndex, instance: fs };
@@ -273,7 +288,12 @@ const LayoutManager = (function() {
                         easterEggTimer = setTimeout(function() { easterEggClicks = 0; }, 3000);
                         if (easterEggClicks >= 5) {
                             easterEggClicks = 0;
-                            window.open('https://www.bilibili.com/video/BV1FD421j7EQ/', '_blank');
+                            // ????????? 5 ? -> ????????(index-anon.html)
+                            // ??????????????????????????
+                            var cur = window.location.pathname.split('/').pop() || 'index.html';
+                            if (cur !== 'index-anon.html') {
+                                window.location.href = 'index-anon.html';
+                            }
                         }
                     } else {
                         easterEggClicks = 0;

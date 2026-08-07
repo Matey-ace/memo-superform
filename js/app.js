@@ -394,13 +394,14 @@ const App = (function() {
             }
             ChartManager.setRecords(records);
             ChartManager.renderVisibleFromSelectors(true);
-            nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
-            updateCountdown();
         } catch (e) {
             console.warn('自动刷新失败:', e);
         } finally {
             isLoading = false;
             if (toggle) toggle.classList.remove('refreshing');
+            // 成功或失败都重新计时，避免倒计时停在 0:00
+            nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
+            updateCountdown();
         }
     }
 

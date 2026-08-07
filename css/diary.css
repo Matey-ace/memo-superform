@@ -49,6 +49,7 @@
   background: rgba(255,255,255,.4);
 }
 .mydiary-head .md-title { font-family: 'Noto Serif SC', serif; font-weight: 700; font-size: 14px; color: #8b7355; letter-spacing: 2px; }
+.mydiary-head .md-title .md-title-gif { width: 18px; height: 18px; object-fit: cover; border-radius: 5px; vertical-align: -3px; margin-right: 2px; }
 .mydiary-head .md-tape {
   margin-left: auto; width: 44px; height: 14px;
   background: rgba(255,183,197,.35);

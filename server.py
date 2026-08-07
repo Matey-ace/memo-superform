@@ -345,7 +345,10 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if target_path.startswith("/memo-tc/"):
             target_path = target_path[len("/memo-tc"):]
 
+        _WS_DEBUG = os.environ.get("MEMO_WS_DEBUG") == "1"
         def _wlog(msg):
+            if not _WS_DEBUG:
+                return
             try:
                 _dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
                 with open(os.path.join(_dir, "_wslog.txt"), "a", encoding="utf-8") as _f:
@@ -354,8 +357,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 pass
         import urllib.parse as _up
         _tok = _up.parse_qs(query).get("token", [""])[0] if query else ""
-        _wlog("WS req path=%s token_len=%d token_head=%s" % (path, len(_tok), _tok[:8]))
-        _wlog("WS cookies: %s" % (self.headers.get('Cookie', '')[:150]))
+        _wlog("WS req path=%s token_len=%d" % (path, len(_tok)))
 
         upstream = socket.create_connection((target_host, target_port), timeout=15)
         ctx = ssl.create_default_context()
@@ -431,27 +433,59 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                         return
                     if s is self.connection:
                         last_down = data
-                        ssock.sendall(data)
+                        try:
+                            ssock.sendall(data)
+                        except Exception:
+                            return
                     else:
                         last_up = data
-                        self.connection.sendall(data)
+                        try:
+                            self.connection.sendall(data)
+                        except Exception:
+                            return
         finally:
             try:
                 ssock.close()
             except Exception:
                 pass
 
+    def _is_allowed_host(self):
+        host = (self.headers.get('Host') or '').strip().lower()
+        if not host:
+            return False
+        if host.startswith('['):
+            host = host.split(']')[0] + ']'
+        elif ':' in host:
+            h, _, port = host.rpartition(':')
+            if port.isdigit():
+                host = h
+        return host in ('localhost', '127.0.0.1', '[::1]')
+
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+        origin = (self.headers.get('Origin') or '').strip()
+        if origin:
+            try:
+                o = urlparse(origin)
+                host = (o.hostname or '').lower()
+                if host in ('localhost', '127.0.0.1', '::1'):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+                    self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+            except Exception:
+                pass
 
     def do_OPTIONS(self):
+        if not self._is_allowed_host():
+            self.send_error(403, "Forbidden")
+            return
         self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
 
     def do_GET(self):
+        if not self._is_allowed_host():
+            self.send_error(403, "Forbidden")
+            return
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -518,6 +552,9 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        if not self._is_allowed_host():
+            self.send_error(403, "Forbidden")
+            return
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -547,7 +584,9 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_json(400, {"error": "Missing endpoint or apiKey"})
                     return
 
-                target_url = ai_endpoint + "/chat/completions"
+                if not ai_endpoint.endswith("/chat/completions"):
+                    ai_endpoint += "/chat/completions"
+                target_url = ai_endpoint
                 ai_req_body = json.dumps(ai_body).encode("utf-8")
                 ai_req = urllib.request.Request(target_url, data=ai_req_body, method="POST")
                 ai_req.add_header("Content-Type", "application/json")
@@ -555,7 +594,15 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
                 try:
                     ai_resp = urllib.request.urlopen(ai_req, timeout=60)
-                    ai_result = ai_resp.read().decode("utf-8")
+                    _AI_MAX = 8 * 1024 * 1024
+                    _len = ai_resp.headers.get("Content-Length")
+                    if _len and _len.isdigit() and int(_len) > _AI_MAX:
+                        self._send_json(413, {"error": "AI response too large"})
+                        return
+                    ai_result = ai_resp.read(_AI_MAX + 1).decode("utf-8", errors="replace")
+                    if len(ai_result) > _AI_MAX:
+                        self._send_json(413, {"error": "AI response too large"})
+                        return
                     self._send_json(200, json.loads(ai_result))
                 except urllib.error.HTTPError as e:
                     err_body = e.read().decode("utf-8") if e.fp else ""
@@ -614,7 +661,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, {"recommendations": recs, "summary": summary})
 
             if path == "/api/stats/history":
-                days = int(parse_qs(parsed.query).get("days", ["30"])[0])
+                raw = parse_qs(parsed.query).get("days", ["30"])[0]
+                try:
+                    days = int(raw)
+                except (ValueError, TypeError):
+                    return self._send_json(400, {"error": "days must be an integer"})
+                if not (1 <= days <= 3650):
+                    return self._send_json(400, {"error": "days out of range (1-3650)"})
                 return self._send_json(200, {"stats": db.get_history_stats(days)})
 
             if path == "/api/db/status":
@@ -740,7 +793,7 @@ def start_server(open_browser=True, block=True):
         try:
             httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), MemoProxyHandler)
             httpd.allow_reuse_address = True
-            url = "http://localhost:%d" % port
+            url = "http://localhost:%d/index.html" % port
             print("")
             print("  ========================================")
             print("  Memo Superform proxy server started")
