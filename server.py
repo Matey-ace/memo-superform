@@ -56,6 +56,39 @@ INTERCEPTOR_JS = (
     + '})();</script>'
 )
 
+# Dark theme injection for the embedded maimemo webstudy SPA.
+# The dashboard stores its theme in localStorage('theme') and the iframe is
+# same-origin, so we read that and toggle html.memo-dark, then override the
+# SPA's own CSS variables (which natively support dark mode) plus a few
+# hard-coded colors so the study UI follows the dashboard's dark theme.
+MEMO_DARK_CSS = (
+    '<style id="memo-dark-theme">'
+    'html.memo-dark,html.memo-dark body{--text-color-primary:#DBDBDB;--text-color-secondary:#A1A1A1;'
+    '--text-color-title:#FFF;--bg-color-primary:#222324;--bg-color-secondary:#1D1E1E;--bg-color-review:#18191A;'
+    '--bg-color-group-line:#101010;--divider-color:#303030;--border-color:#303030;--popup-background-color:#1D1E1E;'
+    '--white:#222324;background-color:#222324;color:#DBDBDB}'
+    'html.memo-dark .taro-navigation-bar,html.memo-dark .taro-navigation-bar-no-icon{background-color:#1D1E1E!important}'
+    'html.memo-dark .rev-top{background:linear-gradient(180deg,rgb(20 45 60/100%) 0%,rgb(24 58 68/100%) 51%,rgb(30 70 75/100%) 100%)!important}'
+    'html.memo-dark .rev-content-header{color:#8A94A6!important;border-bottom-color:#303030!important}'
+    'html.memo-dark .spelling-hint,html.memo-dark .phrase-play-btn{color:#A1A1A1!important}'
+    'html.memo-dark .phrase-play-btn{border-color:#A1A1A1!important}'
+    'html.memo-dark .phrase-hl{color:#4FD6BC!important}'
+    'html.memo-dark .verify-input{color:#DBDBDB!important;caret-color:#DBDBDB!important}'
+    'html.memo-dark .taro-modal__mask{background-color:rgba(0,0,0,.75)!important}'
+    'html.memo-dark .taro-modal__content,html.memo-dark .taro-modal__inner,html.memo-dark .taro-model__bd{background-color:#1D1E1E!important;color:#DBDBDB!important}'
+    '</style>'
+)
+
+MEMO_DARK_JS = (
+    '<script>(function(){'
+    'function applyMemoTheme(){var dark=false;try{dark=localStorage.getItem("theme")==="dark"}catch(e){}'
+    'document.documentElement.classList.toggle("memo-dark",!!dark)}'
+    'applyMemoTheme();'
+    'window.addEventListener("storage",function(e){if(e.key==="theme"||e.key===null)applyMemoTheme()});'
+    'setInterval(applyMemoTheme,800);'
+    '})();</script>'
+)
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Do not follow HTTP redirects; return them to the browser instead.
 
@@ -226,11 +259,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             html = re.sub(r'(<script[^>]*src=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             html = re.sub(r'(<link[^>]*href=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             if '<head>' in html:
-                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS, 1)
+                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS, 1)
             elif '<head ' in html:
-                html = html.replace('<head ', INTERCEPTOR_JS + '<head ', 1)
+                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + '<head ', 1)
             else:
-                html = INTERCEPTOR_JS + html
+                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + html
             resp_body = html.encode('utf-8')
         else:
             resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)
