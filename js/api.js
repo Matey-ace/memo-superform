@@ -122,7 +122,13 @@ const MaimemoAPI = (function() {
         }
 
         // 拉取一段区间；若单次返回满 1000 条（可能被截断），二分递归
-        async function fetchSegment(startStr, endStr) {
+        async function fetchSegment(startStr, endStr, depth) {
+            depth = depth || 0;
+            // 护栏1：递归深度上限，防止极端情况下栈溢出
+            if (depth > 60) {
+                console.warn('[fetchSegment] 达到深度上限 60，停止二分');
+                return [];
+            }
             // 控制请求频率，避免触发 API 限流（10秒20次）
             await new Promise(resolve => setTimeout(resolve, 300));
             const result = await queryStudyRecords({
@@ -134,10 +140,43 @@ const MaimemoAPI = (function() {
 
             const start = new Date(startStr);
             const end = new Date(endStr);
+            // 护栏2：区间细分到不足1天（next_study_date 为天粒度，再分无意义），转 offset 分页
+            if (end.getTime() - start.getTime() < 86400000) {
+                return await fetchByOffset(startStr, endStr);
+            }
             const mid = new Date((start.getTime() + end.getTime()) / 2);
-            const left = await fetchSegment(start.toISOString(), mid.toISOString());
-            const right = await fetchSegment(mid.toISOString(), end.toISOString());
+            const left = await fetchSegment(start.toISOString(), mid.toISOString(), depth + 1);
+            const right = await fetchSegment(mid.toISOString(), end.toISOString(), depth + 1);
             return left.concat(right);
+        }
+
+        // offset 分页兜底：当某个时间点/极小区间内单词 >=1000，二分已失效时逐页拉取
+        async function fetchByOffset(startStr, endStr) {
+            const all = [];
+            let offset = 0;
+            let lastSig = null;
+            // 防御：最多拉 200 页（20万词），避免异常时无限循环
+            while (offset < 200000) {
+                await new Promise(resolve => setTimeout(resolve, 300));
+                const result = await queryStudyRecords({
+                    next_study_date: { start: startStr, end: endStr },
+                    limit: 1000,
+                    offset: offset
+                }, false);
+                const recs = result.records || [];
+                if (recs.length === 0) break;
+                // 护栏3：进展检测。若 offset 不被支持，返回的会与上一页相同 -> 停止
+                const sig = recs.map(function (r) { return r.voc_id + '|' + r.next_study_date; }).sort().join(',');
+                if (sig === lastSig) {
+                    console.warn('[fetchByOffset] offset 未生效（返回相同数据），停止分页，该区间已截断');
+                    break;
+                }
+                for (const r of recs) all.push(r);
+                lastSig = sig;
+                if (recs.length < 1000) break;
+                offset += 1000;
+            }
+            return all;
         }
 
         // next_study_date 可能从很早到 2100+：

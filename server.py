@@ -160,7 +160,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         return text.encode('utf-8') if isinstance(body, bytes) else text
 
     def _web_proxy_request(self, target_url, method="GET", inject_interceptor=False):
-        content_length = int(self.headers.get('Content-Length', 0))
+        content_length = self._safe_content_length()
         body = self.rfile.read(content_length) if content_length > 0 else None
 
         req = urllib.request.Request(target_url, data=body, method=method)
@@ -370,12 +370,22 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             if rest:
                 self.connection.sendall(rest)
                 last_up = rest
+            import time as _wtime
+            _WS_IDLE_TIMEOUT = 300
+            _last_activity = _wtime.monotonic()
             self.connection.settimeout(300)
             ssock.settimeout(300)
             while True:
                 r, _, _ = select.select([self.connection, ssock], [], [], 60)
                 if not r:
+                    # select 超时返回空：两端均无数据。settimeout(300) 只对
+                    # recv/send 生效，对 select 无效，因此必须在此主动检查
+                    # 累计空闲时间，否则纯空闲连接会永久泄漏线程与两端 socket。
+                    if _wtime.monotonic() - _last_activity > _WS_IDLE_TIMEOUT:
+                        _wlog("WS idle timeout (%ds), closing both sockets" % _WS_IDLE_TIMEOUT)
+                        return
                     continue
+                _last_activity = _wtime.monotonic()
                 for s in r:
                     try:
                         data = s.recv(65536)
@@ -487,13 +497,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/proxy/memo/"):
             api_path = path[len("/proxy/memo/"):]
             target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             self._proxy_request(target_url, method="POST", body=body)
             return
 
         # 代理 AI API: /proxy/ai
         if path == "/proxy/ai":
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = self.rfile.read(self._safe_content_length())
             try:
                 req_data = json.loads(body)
                 ai_endpoint = req_data.get("endpoint", "").rstrip("/")
@@ -628,8 +638,18 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             return self._send_json(500, {"error": str(e)})
 
     # ===================== helpers =====================
+    def _safe_content_length(self):
+        """安全读取 Content-Length 头。畸形值(非数字/空串等)返回 0，避免
+        int() 抛出未捕获的 ValueError/TypeError 导致请求被丢弃。"""
+        raw = self.headers.get('Content-Length', 0)
+        try:
+            n = int(raw)
+            return n if n > 0 else 0
+        except (ValueError, TypeError):
+            return 0
+
     def _read_json_body(self):
-        length = int(self.headers.get("Content-Length", 0))
+        length = self._safe_content_length()
         raw = self.rfile.read(length) if length > 0 else b""
         if not raw:
             return {}
