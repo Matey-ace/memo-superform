@@ -121,10 +121,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             )
             # Rewrite ws_host to the local proxy so the study WebSocket goes
             # through us instead of connecting directly to tc-apis (which
-            # the user's network cannot reach).
+            # the user's network cannot reach). The +"/memo-tc" prefix makes
+            # the browser send the tc-apis session cookie (sid, Path=/memo-tc/study)
+            # on the WebSocket handshake; without it the WS gets close code
+            # 3401 (Unauthorized) even with a valid login session.
             text = text.replace(
                 'ws_host:"wss://tc-apis.maimemo.com"',
-                'ws_host:(location.protocol==="https:"?"wss://":"ws://")+location.host'
+                'ws_host:(location.protocol==="https:"?"wss://":"ws://")+location.host+"/memo-tc"'
             )
             # NOTE: login_return_url MUST stay as the original
             # https://tc-apis.maimemo.com/webstudy/app. tc-apis rejects
@@ -268,6 +271,14 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     val = re.sub(r'[Pp]ath=/(?=[^/;])', 'path=' + proxy_prefix + '/', val)
                 self.send_header('Set-Cookie', val)
             elif lk == 'location':
+                _is_cb = 'auth/callback' in self.path
+                if _is_cb:
+                    try:
+                        _dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+                        with open(os.path.join(_dir, "_cblog.txt"), "a", encoding="utf-8") as _lf:
+                            _lf.write("CB path=%s -> Location=%s\n" % (self.path[:100], val[:300]))
+                    except Exception:
+                        pass
                 val = val.replace('https://tc-apis.maimemo.com', '/memo-tc')
                 val = val.replace('https://api.maimemo.com', '/memo-api')
                 val = val.replace('https://www.maimemo.com', '/memo-www')
@@ -295,6 +306,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         target_host = "tc-apis.maimemo.com"
         target_port = 443
         target_path = path + ("?" + query if query else "")
+        # The browser now connects to /memo-tc/study/ws/webstudy so the sid
+        # session cookie (Path=/memo-tc/study) is sent. Strip the proxy prefix
+        # before forwarding upstream, where the path is /study/ws/webstudy.
+        if target_path.startswith("/memo-tc/"):
+            target_path = target_path[len("/memo-tc"):]
 
         def _wlog(msg):
             try:
@@ -303,7 +319,10 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     _f.write(msg + "\n")
             except Exception:
                 pass
-        _wlog("WS req path=%s" % path)
+        import urllib.parse as _up
+        _tok = _up.parse_qs(query).get("token", [""])[0] if query else ""
+        _wlog("WS req path=%s token_len=%d token_head=%s" % (path, len(_tok), _tok[:8]))
+        _wlog("WS cookies: %s" % (self.headers.get('Cookie', '')[:150]))
 
         upstream = socket.create_connection((target_host, target_port), timeout=15)
         ctx = ssl.create_default_context()
@@ -344,10 +363,13 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         _wlog("WS handshake OK, relaying")
 
         # Handshake accepted - send 101 + headers to the browser, then relay
+        last_up = b""
+        last_down = b""
         try:
             self.connection.sendall(header_part + b"\r\n\r\n")
             if rest:
                 self.connection.sendall(rest)
+                last_up = rest
             self.connection.settimeout(300)
             ssock.settimeout(300)
             while True:
@@ -360,11 +382,15 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     except Exception:
                         data = b""
                     if not data:
-                        _wlog("WS closed (EOF)")
+                        _dir2 = "browser" if s is self.connection else "upstream"
+                        _wlog("WS closed (EOF) dir=%s last_up=%s last_down=%s" % (
+                            _dir2, last_up[:60].hex(), last_down[:60].hex()))
                         return
                     if s is self.connection:
+                        last_down = data
                         ssock.sendall(data)
                     else:
+                        last_up = data
                         self.connection.sendall(data)
         finally:
             try:
