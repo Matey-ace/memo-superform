@@ -56,9 +56,20 @@ const StudyWeb = (function() {
 
         // Listen for iframe load events to detect state changes
         // (login page -> SPA after login)
+        // ???????????????iframe ??????????????????
+        function syncIframeTheme() {
+            try {
+                var idoc = iframe.contentDocument;
+                if (idoc && idoc.documentElement) {
+                    idoc.documentElement.classList.toggle('memo-dark', document.body.classList.contains('dark'));
+                }
+            } catch(e) {}
+        }
+
         iframe.addEventListener('load', function() {
             var url = '';
             try { url = iframe.contentWindow.location.href; } catch(e) {}
+            syncIframeTheme();
 
             if (url.indexOf('/webstudy/app') >= 0 || url.indexOf('/memo-tc/webstudy/app') >= 0) {
                 // SPA loaded (either directly or after login callback)
