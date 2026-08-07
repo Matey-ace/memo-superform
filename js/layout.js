@@ -18,7 +18,8 @@ const LayoutManager = (function() {
         'aiclass': { icon: '🤖', title: 'AI 单词分类', color: '#fa8c16', toolbar: 'ai' },
         'notepad': { icon: '📚', title: '词书进度',   color: '#13c2c2', toolbar: null },
         'growth':  { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null },
-        'recommend': { icon: '🎯', title: '智能复习推荐', color: '#e74c3c', toolbar: null }
+        'recommend': { icon: '🎯', title: '智能复习推荐', color: '#e74c3c', toolbar: null },
+        'study-web': { icon: '📖', title: '背单词',     color: '#1677ff', toolbar: null }
     };
 
     function init() {
@@ -86,6 +87,20 @@ const LayoutManager = (function() {
         setTimeout(() => {
             const inst = ChartManager.getInstance(tileIndex);
             if (!inst) return;
+            if (chartType === 'study-web') {
+                // study-web tile is not an ECharts chart; show the iframe fullscreen
+                const fsEl = document.getElementById('fullscreenChart');
+                fsEl.innerHTML = '';
+                const tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
+                const iframe = tile ? tile.querySelector('.study-web-iframe') : null;
+                if (iframe) {
+                    const clone = iframe.cloneNode(true);
+                    clone.className = 'study-web-iframe fullscreen';
+                    fsEl.appendChild(clone);
+                }
+                fullscreenChartBackup = { tileIndex, instance: null };
+                return;
+            }
             const fs = echarts.init(document.getElementById('fullscreenChart'));
             fs.setOption(inst.getOption());
             fullscreenChartBackup = { tileIndex, instance: fs };
@@ -95,7 +110,7 @@ const LayoutManager = (function() {
     function closeFullscreen() {
         document.getElementById('fullscreenModal').classList.remove('show');
         if (fullscreenChartBackup) {
-            fullscreenChartBackup.instance.dispose();
+            if (fullscreenChartBackup.instance) fullscreenChartBackup.instance.dispose();
             fullscreenChartBackup = null;
         }
         document.getElementById('fullscreenChart').innerHTML = '';
