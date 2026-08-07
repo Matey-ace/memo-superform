@@ -39,12 +39,12 @@ const StudyWeb = (function() {
                     '<p>' + (token ? '正在加载墨墨背单词...' : '正在跳转登录页...') + '</p>' +
                 '</div>' +
                 '<div class="study-web-actions" style="display:none">' +
-                    '<button class="study-web-btn forget" data-key="3">' +
-                        '\u5fd8\u8bb0<span class="key-hint">3</span></button>' +
-                    '<button class="study-web-btn vague" data-key="2">' +
-                        '\u6a21\u7cca<span class="key-hint">2</span></button>' +
                     '<button class="study-web-btn know" data-key="1">' +
                         '\u8ba4\u8bc6<span class="key-hint">1</span></button>' +
+                    '<button class="study-web-btn vague" data-key="2">' +
+                        '\u6a21\u7cca<span class="key-hint">2</span></button>' +
+                    '<button class="study-web-btn forget" data-key="3">' +
+                        '\u5fd8\u8bb0<span class="key-hint">3</span></button>' +
                     '<button class="study-web-btn well" data-key="4">' +
                         '\u7194\u77e5<span class="key-hint">4</span></button>' +
                 '</div>' +
