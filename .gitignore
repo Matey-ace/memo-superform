@@ -25,6 +25,7 @@ _*.py
 _reqlog.txt
 _wslog.txt
 _cblog.txt
+_build_*
 
 # 临时测试/备份文件
 _*.js
