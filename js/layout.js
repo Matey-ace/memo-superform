@@ -19,7 +19,8 @@ const LayoutManager = (function() {
         'notepad': { icon: '📚', title: '词书进度',   color: '#13c2c2', toolbar: null },
         'growth':  { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null },
         'recommend': { icon: '🎯', title: '智能复习推荐', color: '#e74c3c', toolbar: null },
-        'study-web': { icon: '📖', title: '背单词',     color: '#1677ff', toolbar: null }
+        'study-web': { icon: '📖', title: '背单词',     color: '#1677ff', toolbar: null },
+        'diary':     { icon: '📔', title: '记忆手账', color: '#d4576b', toolbar: null }
     };
 
     function init() {

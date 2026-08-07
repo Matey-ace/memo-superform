@@ -1109,6 +1109,9 @@ const ChartManager = (function() {
             case 'study-web':
                 chart = StudyWeb.render(containerId);
                 break;
+            case 'diary':
+                chart = (window.DiaryChart ? DiaryChart.render(containerId, options) : null);
+                break;
         }
         
         if (chart) {
