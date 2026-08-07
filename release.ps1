@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Memo Superform 自动打包发布脚本
@@ -18,7 +18,7 @@ param(
     [string]$Message = ""
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"  # avoid PS5.1 treating native stderr as a fatal error
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
@@ -98,21 +98,30 @@ try {
 
 $releaseBody = if ($Message) { $Message } else { "$tag release" }
 $payload = @{ tag_name = $tag; name = $tag; body = $releaseBody; draft = $false; prerelease = $false } | ConvertTo-Json -Depth 5
-$resp = Invoke-WebRequest -Uri "https://api.github.com/repos/$repo/releases" -Method Post -Headers $headers -Body $payload -ContentType "application/json; charset=utf-8" -TimeoutSec 30 -UseBasicParsing
-$rel = $resp.Content | ConvertFrom-Json
-$relId = $rel.id
-$uploadUrl = $rel.upload_url
-Write-Host "  Release 创建成功: $($rel.html_url)" -ForegroundColor Green
+try {
+    $resp = Invoke-WebRequest -Uri "https://api.github.com/repos/$repo/releases" -Method Post -Headers $headers -Body $payload -ContentType "application/json; charset=utf-8" -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop
+    $rel = $resp.Content | ConvertFrom-Json
+    $relId = $rel.id
+    $uploadUrl = $rel.upload_url
+    Write-Host "  Release 创建成功: $($rel.html_url)" -ForegroundColor Green
+} catch {
+    Write-Host "  Release 创建失败: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
 
 # ---- 6. 上传 exe ----
 Write-Host "[6/6] 上传 $exeName..." -ForegroundColor Yellow
 $assetEndpoint = $uploadUrl -replace '\{\?name,label\}', "?name=$exeName"
 $bytes = [System.IO.File]::ReadAllBytes($exePath)
 $upHeaders = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.github+json" }
-$upResp = Invoke-WebRequest -Uri $assetEndpoint -Method Post -Headers $upHeaders -Body $bytes -ContentType "application/octet-stream" -TimeoutSec 120 -UseBasicParsing
-$asset = $upResp.Content | ConvertFrom-Json
-Write-Host "  上传成功: $($asset.browser_download_url)" -ForegroundColor Green
-
+try {
+    $upResp = Invoke-WebRequest -Uri $assetEndpoint -Method Post -Headers $upHeaders -Body $bytes -ContentType "application/octet-stream" -TimeoutSec 120 -UseBasicParsing -ErrorAction Stop
+    $asset = $upResp.Content | ConvertFrom-Json
+    Write-Host "  上传成功: $($asset.browser_download_url)" -ForegroundColor Green
+} catch {
+    Write-Host "  上传失败: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  $tag 发布完成!" -ForegroundColor Green

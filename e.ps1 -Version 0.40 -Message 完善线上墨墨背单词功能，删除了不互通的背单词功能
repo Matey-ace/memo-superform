@@ -1,0 +1,40 @@
+[33m1f0ece5[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m 移除右上角背单词自测功能（不与墨墨数据互通）
+[33mea158e1[m chore: 调整背单词答题按钮顺序(认识/模糊/忘记/熟知)
+[33m0312218[m[33m ([m[1;33mtag: [m[1;33mv0.35[m[33m)[m fix: 背单词磁贴显示打卡热力图 - 补全study-web图表配置并修复全屏关闭崩溃
+[33mca7828d[m[33m ([m[1;33mtag: [m[1;33mv0.34[m[33m)[m fix: 修复学习页WebSocket连接中断 - WS路径带/memo-tc前缀以携带sid会话cookie
+[33m78db6fd[m fix: WebSocket日志写到exe所在目录而非临时解压目录
+[33mc5af372[m feat: WebSocket代理加调试日志(记录请求路径/握手/关闭状态)
+[33m0f82714[m feat: WebSocket 代理，修复学习页"连接中断"
+[33m6759af2[m fix: 修复登录"需要鉴权"问题 - CSRF cookie 双向重写
+[33m26f5631[m fix: 重写登录页JS中的相对URL(/interaction/等)为代理路径，修复JSON解析错误
+[33m95f5d4c[m feat: 背单词磁贴直接加载登录页，绕过SPA不可靠的location.replace跳转
+[33m1a74e57[m fix: 剥离ETag/Last-Modified头，防止浏览器用304缓存旧版JS绕过重写
+[33md0cf7e9[m fix: 移除有问题的createElement拦截，加Clear-Site-Data强制清缓存
+[33mbc97b26[m fix: 强化拦截器拦截动态创建的script/link元素，防止缓存旧JS直连maimemo域名
+[33mcac75c1[m fix: 强制刷新SPA脚本缓存 + 修复API代理重定向
+[33mcd4470a[m fix: 代理返回的 HTML/JS 强制 no-cache，避免浏览器缓存旧的重写脚本直连 maimemo 域名
+[33mca500f5[m fix: 背单词磁贴登录链路完整代理修复
+[33m78927fe[m fix: 修复背单词磁贴"检查失败"问题
+[33m70e2892[m fix: 重写JS文件中的墨墨域名为代理路径 + 导航拦截
+[33mcb7b55c[m fix: 代理 accounts.maimemo.com 并去除 X-Frame-Options 限制
+[33mdc5c6a9[m[33m ([m[1;33mtag: [m[1;33mv0.33[m[33m)[m v0.33: 背单词磁贴 - 嵌入墨墨网页版SPA实现真实同步背单词
+[33m1c0ef6d[m docs: uppercase title and drop visible hash in README
+[33m5bdbc38[m fix: restore language button link tag in README
+[33m83839a6[m Update README.md
+[33m23df70f[m[33m ([m[1;33mtag: [m[1;33mv0.32[m[33m)[m v0.32: 新增背单词自测模式 - PC端翻卡片复习今日单词
+[33m5a2b965[m docs: add English README (README.en.md) (#1)
+[33m7960dd7[m 更换开源协议：MIT -> AGPL v3
+[33md50e377[m[33m ([m[1;33mtag: [m[1;33mv0.31[m[33m)[m v0.31: 修复推荐磁贴 resize 崩溃 + 非法 JSON 500 + MIT 开源协议
+[33m19847ce[m[33m ([m[1;33mtag: [m[1;33mv0.30-preview[m[33m)[m v0.30-preview: 智能复习推荐引擎 + pywebview 桌面应用 + SQL Server 持久化
+[33m92b705d[m[33m ([m[1;33mtag: [m[1;33mv0.26[m[33m)[m v0.26: 樱粉配色替换青蓝
+[33m2da8d4b[m Update README.md
+[33md1c08db[m Update README.md
+[33m4a35c5e[m 新增 release.ps1 自动打包发布脚本
+[33ma6db42b[m[33m ([m[1;33mtag: [m[1;33mv0.25[m[33m)[m v0.25: 自动刷新 + FLIP拖拽动画 + 记忆曲线重写 + 标题内容错位修复
+[33md394eaf[m[33m ([m[1;33mtag: [m[1;33mv0.20[m[33m)[m v0.20: 热力图6套配色预设 + 修复中文编码损坏 + 修复多磁贴交换中间磁贴移位
+[33ma94df28[m Update README.md
+[33mb8e9855[m[33m ([m[1;33mtag: [m[1;33mv0.18[m[33m)[m 新增词书进度与词汇量增长图表，重写磁贴拖拽为平滑吸附交换
+[33ma10426b[m[33m ([m[1;33mtag: [m[1;33mv0.16[m[33m)[m Remove Windows packaging instructions from README
+[33mc36a6a7[m 本地化 ECharts 并支持打包为 exe：server.py 自动开浏览器、新增打包说明
+[33m1a4d9e8[m 更新 README：补充项目简介并修正图表说明
+[33me9bf354[m 首次提交：Memo Superform 墨墨数据仪表盘
