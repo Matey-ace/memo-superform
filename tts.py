@@ -37,7 +37,7 @@ class TTSException(Exception):
 
 def _read_json(path):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else None
     except (OSError, ValueError):
@@ -63,7 +63,7 @@ def _load_state(data_dir):
     return {
         "enabled": bool(state.get("enabled")),
         "voice": state.get("voice") or "sakiko",
-        "language": state.get("language") or "中文",
+        "language": state.get("language") or "中英混合",
         "speed": float(state.get("speed") or 1.0),
     }
 
@@ -114,7 +114,7 @@ def _first_file(directory, patterns):
 
 def _read_text_file(path):
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             return f.read().strip()
     except OSError:
         return ""
@@ -230,6 +230,9 @@ class TTSManager:
             raise TTSException("资源包缺少 tts_engine/worker_main.py")
 
         env = os.environ.copy()
+        # 子进程 stdin/stdout 统一使用 UTF-8，避免中文 Windows(GBK) 环境下 JSON 乱码
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         install = _install_meta(self.pack_dir) or {}
         ffmpeg_dir = install.get("ffmpeg_dir") or ""
         if ffmpeg_dir and os.path.isdir(ffmpeg_dir):
