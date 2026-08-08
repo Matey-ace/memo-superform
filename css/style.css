@@ -528,6 +528,8 @@ body {
     color: white;
 }
 
+.setting-item .test-btn + .test-btn { margin-left: 8px; }
+
 .test-btn:hover {
     background: #096dd9;
 }

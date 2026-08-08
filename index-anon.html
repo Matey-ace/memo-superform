@@ -184,6 +184,7 @@
             <div class="tile-body">
                 <div class="chart-toolbar">
                     <button id="aiClassifyBtn" class="ai-btn">✨ 使用 AI 分类单词</button>
+                    <button id="aiSpeakBtn" class="ai-btn" style="display:none">🔊 朗读结果</button>
                     <span id="aiStatus" class="ai-status"></span>
                 </div>
                 <div class="chart-container" id="chart-3"></div>
@@ -238,6 +239,52 @@
                         </label>
                     </div>
                     <button id="clearCacheBtn" class="danger-btn">清除缓存数据</button>
+                </div>
+
+                <div class="setting-group">
+                    <h3>运行模式</h3>
+                    <div class="setting-item">
+                        <label>当前模式</label>
+                        <span id="currentModeText" class="hint">加载中...</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>下次启动模式</label>
+                        <select id="defaultModeSelect">
+                            <option value="desktop">桌面模式</option>
+                            <option value="web">网页模式</option>
+                        </select>
+                        <p class="hint">保存后，下次启动将直接进入所选模式</p>
+                    </div>
+                    <button id="setDefaultModeBtn" class="test-btn">保存为默认模式</button>
+                    <button id="relaunchModeBtn" class="test-btn">立即重启到所选模式</button>
+                    <span id="modeStatus" class="status-text"></span>
+                </div>
+
+                <div class="setting-group">
+                    <h3>语音功能（GPT-SoVITS 资源包）</h3>
+                    <div class="setting-item">
+                        <label>状态</label>
+                        <span id="ttsStatusText" class="hint">检测中...</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>音色</label>
+                        <select id="ttsVoiceSelect">
+                            <option value="sakiko">祥子</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label>语速：<span id="ttsSpeedValue">1.0</span></label>
+                        <input type="range" id="ttsSpeedRange" min="0.5" max="1.5" step="0.1" value="1.0">
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="ttsAutoRead">
+                            <span>自动朗读 AI 结果（推荐/分类摘要）</span>
+                        </label>
+                    </div>
+                    <button id="ttsEnableBtn" class="test-btn">开启语音</button>
+                    <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载模型</button>
+                    <span id="ttsActionStatus" class="status-text"></span>
                 </div>
             </div>
             <div class="settings-footer">

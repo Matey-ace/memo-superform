@@ -337,7 +337,8 @@ body {
 .setting-group h3 { font-family: var(--serif); font-size: 14px; margin-bottom: 10px; letter-spacing: 1px; }
 .setting-item { margin-bottom: 12px; }
 .setting-item label { display: block; font-size: 12px; color: var(--ink-mid); margin-bottom: 5px; }
-.setting-item input[type="text"], .setting-item input[type="password"] {
+.setting-item input[type="text"], .setting-item input[type="password"],
+.setting-item select {
   width: 100%; padding: 9px 12px; font-size: 13px; font-family: var(--sans);
   border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; color: var(--ink); outline: none; transition: all .2s;
 }
@@ -345,10 +346,12 @@ body {
 .setting-item .hint { font-size: 11px; color: var(--ink-light); margin-top: 5px; line-height: 1.6; }
 .checkbox-label { display: flex !important; align-items: center; gap: 8px; cursor: pointer; }
 .checkbox-label input { accent-color: var(--rose); }
+.setting-item input[type="range"] { accent-color: var(--rose); width: 100%; }
 .test-btn, .danger-btn, .save-btn {
   border: 0; cursor: pointer; font-family: var(--round); font-size: 13px; font-weight: 800;
   padding: 9px 18px; border-radius: 999px; transition: all .2s;
 }
+.setting-item .test-btn + .test-btn { margin-left: 8px; }
 .test-btn { color: var(--sky-deep); background: var(--sky-pale); border: 1px solid #cfe6f5; }
 .test-btn:hover { background: #dff0fb; }
 .danger-btn { color: var(--rose-deep); background: var(--rose-pale); border: 1px solid #ffdbe0; margin-top: 4px; }
@@ -456,7 +459,8 @@ body.dark .palette-swatch, body.dark .rec-review-btn, body.dark .rec-refresh, bo
 body.dark .auto-refresh-group, body.dark .server-status, body.dark .layout-switcher { background: var(--paper); border-color: var(--line-strong); color: var(--ink-mid); }
 body.dark .heatmap-toolbar, body.dark .ai-toolbar, body.dark .chart-toolbar { background: rgba(255,255,255,.02); }
 body.dark .settings-content, body.dark .welcome-card, body.dark .fullscreen-chart { background: var(--paper); border-color: var(--line-strong); }
-body.dark .setting-item input[type="text"], body.dark .setting-item input[type="password"] { background: #1a1b22; border-color: var(--line-strong); color: var(--ink); }
+body.dark .setting-item input[type="text"], body.dark .setting-item input[type="password"],
+body.dark .setting-item select { background: #1a1b22; border-color: var(--line-strong); color: var(--ink); }
 body.dark .welcome-steps { background: rgba(51,37,43,.6); }
 body.dark .rec-card { background: var(--paper); border-color: var(--line); }
 
@@ -511,4 +515,3 @@ body.dark .rec-card { background: var(--paper); border-color: var(--line); }
 @keyframes eggFadeIn { from { opacity: 0; } to { opacity: 1; } }
 .egg-overlay.out { opacity: 0; transition: opacity .8s ease; }
 */
-
