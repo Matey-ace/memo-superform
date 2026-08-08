@@ -381,9 +381,23 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         _tok = _up.parse_qs(query).get("token", [""])[0] if query else ""
         _wlog("WS req path=%s token_len=%d" % (path, len(_tok)))
 
-        upstream = socket.create_connection((target_host, target_port), timeout=15)
-        ctx = ssl.create_default_context()
-        ssock = ctx.wrap_socket(upstream, server_hostname=target_host)
+        try:
+            upstream = socket.create_connection((target_host, target_port), timeout=15)
+        except Exception as exc:
+            _wlog("WS upstream connect failed: %s" % exc)
+            self.send_error(502, "Bad Gateway: %s" % exc)
+            return
+        try:
+            ctx = ssl.create_default_context()
+            ssock = ctx.wrap_socket(upstream, server_hostname=target_host)
+        except Exception as exc:
+            _wlog("WS upstream TLS handshake failed: %s" % exc)
+            try:
+                upstream.close()
+            except Exception:
+                pass
+            self.send_error(502, "Bad Gateway: %s" % exc)
+            return
 
         # Forward the browser's handshake headers upstream
         lines = ["GET %s HTTP/1.1" % target_path, "Host: %s" % target_host]
@@ -395,7 +409,16 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 lines.append("%s: %s" % (h, v))
         lines.append("")
         lines.append("")
-        ssock.sendall("\r\n".join(lines).encode("latin1"))
+        try:
+            ssock.sendall("\r\n".join(lines).encode("latin1"))
+        except Exception as exc:
+            _wlog("WS upstream handshake send failed: %s" % exc)
+            try:
+                ssock.close()
+            except Exception:
+                pass
+            self.send_error(502, "Bad Gateway: %s" % exc)
+            return
 
         # Read upstream handshake response
         resp = b""
@@ -412,7 +435,10 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         if "101" not in status_line:
             _wlog("WS upstream non-101: %s" % status_line)
             try:
-                self.connection.sendall(resp)
+                if resp:
+                    self.connection.sendall(resp)
+                else:
+                    self.send_error(502, "Bad Gateway: upstream closed during handshake")
             except Exception:
                 pass
             ssock.close()
