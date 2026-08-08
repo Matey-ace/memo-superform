@@ -910,6 +910,19 @@ def _current_mode():
     return os.environ.get("MEMO_MODE", "web")
 
 
+_relaunch_handler = None
+
+
+def set_relaunch_handler(handler):
+    """由 launcher 在启动时注册“重启到另一模式”的处理函数。
+
+    launcher.py 以 __main__ 运行时，server 内 `import launcher` 会得到
+    另一个模块实例，无法共享其中的单实例锁状态，因此改为显式注册回调。
+    """
+    global _relaunch_handler
+    _relaunch_handler = handler
+
+
 def _write_launcher_config(mode, remember):
     try:
         with open(LAUNCHER_CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -923,18 +936,12 @@ def _relaunch_app(mode):
     """仅打包（exe）模式支持自动重启到另一模式；源码模式给出提示。"""
     if not getattr(sys, "frozen", False):
         return False, "源码模式不支持自动重启，请手动运行：python launcher.py --mode " + mode
-    if not _write_launcher_config(mode, True):
-        return False, "无法写入启动配置文件"
+    if _relaunch_handler is None:
+        return False, "重启处理函数未注册（请通过 launcher.py 启动）"
     try:
-        if os.name == "nt":
-            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-            subprocess.Popen([sys.executable, "--mode", mode], creationflags=flags, close_fds=True)
-        else:
-            subprocess.Popen([sys.executable, "--mode", mode], start_new_session=True, close_fds=True)
+        _relaunch_handler(mode)
     except Exception as e:
         return False, "重启失败：" + str(e)
-    # 延迟退出当前进程，确保响应先发送完毕
-    threading.Timer(1.5, lambda: os._exit(0)).start()
     return True, "正在重启..."
 
 

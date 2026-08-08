@@ -14,8 +14,44 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import sys
+import threading
 import time
+
+
+_ACTIVE_GUARD = None
+
+
+def _log(msg):
+    """记录 launcher 生命周期事件（exe 同级 data/launcher.log）。"""
+    try:
+        path = os.path.join(get_data_dir(), "launcher.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
+def _set_guard(guard):
+    """记录当前进程持有的单实例锁，供 request_relaunch 先释放。"""
+    global _ACTIVE_GUARD
+    _ACTIVE_GUARD = guard
+    _log("guard set: %s" % id(guard))
+
+
+def _release_guard():
+    """释放单实例锁（幂等）。"""
+    global _ACTIVE_GUARD
+    if _ACTIVE_GUARD is not None:
+        try:
+            _ACTIVE_GUARD.close()
+            _log("guard released: %s" % id(_ACTIVE_GUARD))
+        except Exception:
+            pass
+        _ACTIVE_GUARD = None
+    else:
+        _log("guard release skipped (none)")
 
 
 def get_runtime_root():
@@ -69,8 +105,10 @@ def acquire_single_instance(port=8891):
     try:
         s.bind(("127.0.0.1", port))
         s.listen(1)
+        _log("single instance lock acquired (port %d)" % port)
         return s
     except OSError:
+        _log("single instance lock DENIED (port %d)" % port)
         return None
 
 
@@ -145,6 +183,7 @@ def run_web():
     """网页模式：启动本地服务器并自动打开浏览器。"""
     os.environ["MEMO_MODE"] = "web"
     import server
+    server.set_relaunch_handler(request_relaunch)
     try:
         server.start_server(open_browser=True, block=True)
     except KeyboardInterrupt:
@@ -159,12 +198,15 @@ def run_desktop(guard=None):
         if guard is None:
             show_message("Memo Superform", "Memo Superform 已经在运行中。")
             sys.exit(0)
+    _set_guard(guard)
 
     import server
+    server.set_relaunch_handler(request_relaunch)
     result = server.start_server(open_browser=False, block=False)
     if not result:
         show_message("Memo Superform", "无法启动本地服务器，请检查端口是否被占用。")
         sys.exit(1)
+    _log("server started: %s" % result[1])
     httpd, url = result
     time.sleep(0.5)
 
@@ -184,11 +226,44 @@ def run_desktop(guard=None):
             httpd.shutdown()
         except Exception:
             pass
-        try:
-            guard.close()
-        except Exception:
-            pass
+        _release_guard()
 
+
+def request_relaunch(mode):
+    """先释放单实例锁，再拉起新进程并延迟退出当前进程。
+
+    时序：释放锁 -> 写记住配置 -> 拉起 --mode <target> -> 1.5s 后退出。
+    先释放锁是为了避免新进程抢不到 8891 锁而弹出“已在运行中”后退出。
+    """
+    _log("request_relaunch begin: mode=%s" % mode)
+    _release_guard()
+    write_launcher_config(mode, remember=True)
+    try:
+        if os.name == "nt":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            proc = subprocess.Popen(
+                [sys.executable, "--mode", mode],
+                creationflags=flags,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            proc = subprocess.Popen(
+                [sys.executable, "--mode", mode],
+                start_new_session=True,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        _log("relaunch spawned pid=%s" % proc.pid)
+    except Exception as exc:
+        raise RuntimeError("重启失败：" + str(exc))
+    threading.Timer(1.5, lambda: os._exit(0)).start()
+    _log("relaunch exit scheduled")
+    return True
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Memo Superform 统一启动入口")
@@ -211,15 +286,15 @@ def main(argv=None):
     if guard is None:
         show_message("Memo Superform", "Memo Superform 已经在运行中。")
         return 0
+    _set_guard(guard)
+    _log("launcher main: mode=%s" % mode)
 
     if mode == "desktop":
         run_desktop(guard=guard)
     else:
         run_web()
-        try:
-            guard.close()
-        except Exception:
-            pass
+        _release_guard()
+    _log("launcher main: exit")
     return 0
 
 

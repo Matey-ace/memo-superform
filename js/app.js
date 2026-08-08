@@ -386,6 +386,8 @@ const App = (function() {
     // ---- 语音功能设置 ----
 
     function setupTTSSettings() {
+        // tts.js 未加载时跳过语音功能，避免阻断 App.init()
+        if (!window.TTS) return;
         const statusEl = document.getElementById('ttsStatusText');
         const actionEl = document.getElementById('ttsActionStatus');
         const enableBtn = document.getElementById('ttsEnableBtn');
