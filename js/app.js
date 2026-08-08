@@ -433,7 +433,7 @@ const App = (function() {
             }
             const dev = st.device ? ' · ' + st.device : '';
             statusEl.textContent = (st.enabled ? '✓ 已开启' : '未开启') + ' · 引擎就绪' + dev +
-                (st.loaded ? ' · 模型已加载' : '');
+                (st.loaded ? ' · 模型已加载' : '') + (st.busy ? ' · 合成中' : '');
             if (enableBtn) enableBtn.textContent = st.enabled ? '关闭语音' : '开启语音';
             if (preloadBtn) preloadBtn.style.display = st.enabled ? '' : 'none';
             if (voiceSelect && st.voices && st.voices.length) {

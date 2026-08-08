@@ -214,6 +214,11 @@ class TTSManager:
         self._cmd_lock = threading.RLock()
         self._reader = None
         self._busy = False
+        self._last_status = {}
+
+    @property
+    def is_busy(self):
+        return self._busy
 
     # ---------- 进程生命周期 ----------
 
@@ -364,17 +369,22 @@ class TTSManager:
             "use_cuda_graph": False,
             "parallel_infer": False,
         }
-        result = self._call({
-            "type": "synthesize",
-            "character_name": voice_name,
-            "voice": voice,
-            "payload": payload,
-        })
+        self._busy = True
+        try:
+            result = self._call({
+                "type": "synthesize",
+                "character_name": voice_name,
+                "voice": voice,
+                "payload": payload,
+            })
+        finally:
+            self._busy = False
         if result.get("type") == "error":
             raise TTSException(result.get("message") or "语音合成失败")
         wav_path = result.get("output_wav_path")
         if not wav_path or not os.path.exists(wav_path):
             raise TTSException("语音合成没有输出音频")
+        self._last_status["is_loaded"] = True
         return wav_path
 
     def preload(self, voice_name="sakiko"):
@@ -382,26 +392,62 @@ class TTSManager:
             voice = self._resolve_voice_config(voice_name)
         except TTSException:
             raise
-        result = self._call({
-            "type": "load_model",
-            "character_name": voice_name,
-            "voice": voice,
-            "payload": {},
-        })
+        self._busy = True
+        try:
+            result = self._call({
+                "type": "load_model",
+                "character_name": voice_name,
+                "voice": voice,
+                "payload": {},
+            })
+        finally:
+            self._busy = False
         if result.get("type") == "error":
             raise TTSException(result.get("message") or "模型加载失败")
+        self._last_status["is_loaded"] = True
         return True
+
+    def _busy_status(self, voice):
+        """合成/加载期间的状态：只读缓存，不发命令、不抢锁。"""
+        return {
+            "is_loaded": bool(self._last_status.get("is_loaded")),
+            "device_policy": self._last_status.get("device_policy"),
+            "loaded_device": self._last_status.get("loaded_device"),
+            "busy": True,
+            "gpt_model_path": voice.get("gpt_model_path"),
+            "sovits_model_path": voice.get("sovits_model_path"),
+        }
 
     def worker_status(self, voice_name="sakiko"):
         try:
             voice = self._resolve_voice_config(voice_name)
         except TTSException:
             voice = {"name": voice_name, "gpt_model_path": "", "sovits_model_path": ""}
-        if self._is_dead():
-            return {"is_loaded": False, "device_policy": None, "loaded_device": None,
-                    "gpt_model_path": voice.get("gpt_model_path"), "sovits_model_path": voice.get("sovits_model_path")}
-        result = self._call({"type": "get_status", "character_name": voice_name, "voice": voice}, timeout=15)
-        return result if isinstance(result, dict) else {"is_loaded": False}
+        # 合成/预加载进行中：直接返回缓存，避免阻塞在 _cmd_lock 上
+        if self._busy:
+            return self._busy_status(voice)
+        # 空闲但锁被占用（命令刚提交、busy 标记尚未置位）：同样走缓存
+        if not self._cmd_lock.acquire(blocking=False):
+            return self._busy_status(voice)
+        try:
+            if self._is_dead():
+                self._last_status = {}
+                return {"is_loaded": False, "device_policy": None, "loaded_device": None,
+                        "gpt_model_path": voice.get("gpt_model_path"),
+                        "sovits_model_path": voice.get("sovits_model_path")}
+            try:
+                result = self._call(
+                    {"type": "get_status", "character_name": voice_name, "voice": voice},
+                    timeout=5,
+                )
+            except TTSException:
+                # 超时/进程异常：返回上一次已知状态
+                return {**self._last_status, "busy": False}
+            if isinstance(result, dict):
+                self._last_status = dict(result)
+            return result if isinstance(result, dict) else {"is_loaded": False}
+        finally:
+            self._cmd_lock.release()
 
     def shutdown(self):
         with self._cmd_lock:
@@ -468,7 +514,7 @@ def get_status(pack_dir, data_dir):
         "voices": voices,
         "device": worker.get("loaded_device") or worker.get("device_policy"),
         "loaded": bool(worker.get("is_loaded")),
-        "busy": False,
+        "busy": bool(worker.get("busy") or manager.is_busy),
     }
 
 
@@ -503,14 +549,9 @@ def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None):
     language = language or state.get("language") or "中文"
     speed = speed if speed is not None else state.get("speed") or 1.0
     manager = _get_manager(pack_dir, data_dir)
-    with manager._cmd_lock:
-        if manager._busy:
-            raise TTSException("正在合成中，请稍候")
-        manager._busy = True
-        try:
-            wav_path = manager.synthesize(cleaned, voice_name, language, speed)
-        finally:
-            manager._busy = False
+    if manager.is_busy:
+        raise TTSException("正在合成中，请稍候")
+    wav_path = manager.synthesize(cleaned, voice_name, language, speed)
     return wav_path
 
 

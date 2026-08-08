@@ -16,10 +16,13 @@ const TTS = (function() {
     let audio = new Audio();
 
     async function refresh() {
+        const controller = new AbortController();
+        const timer = setTimeout(function() { controller.abort(); }, 10000);
         try {
-            const resp = await fetch('/api/tts/status');
+            const resp = await fetch('/api/tts/status', { signal: controller.signal });
             if (resp.ok) status = await resp.json();
-        } catch (e) { /* 代理未启动时保持上次状态 */ }
+        } catch (e) { /* 超时或代理未启动时保持上次状态 */ }
+        finally { clearTimeout(timer); }
         return status;
     }
 
