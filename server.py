@@ -111,6 +111,31 @@ MEMO_DARK_JS = (
     '})();</script>'
 )
 
+# 墨墨网页版自带快捷键系统（localStorage: shortcut_settings）。
+# 给 START_SPELLING（开始拼写，聚焦输入框）绑定空格键，并把“显示答案”让位到 S 键，
+# 这样背单词时按一下空格即可直接开始输入，无需再用鼠标点击输入框。
+MEMO_STUDY_KEYS_JS = (
+    '<script>(function(){'
+    'if(location.pathname.indexOf("/webstudy/app")<0)return;'
+    'try{'
+    'var KEY="shortcut_settings";'
+    'var cur=null;'
+    'try{cur=JSON.parse(localStorage.getItem(KEY)||"null");}catch(e){}'
+    'var base=(cur&&cur.version===1&&cur.shortcuts)?cur.shortcuts:{};'
+    'var show=base.SHOW_ANSWER;'
+    'var patch={START_SPELLING:{action:"START_SPELLING",key:"Space",modifiers:[],enabled:true}};'
+    'if(!show||show.key===""||show.key==="Space"){'
+    'patch.SHOW_ANSWER={action:"SHOW_ANSWER",key:"s",modifiers:[],enabled:true};'
+    '}'
+    'var merged={};'
+    'for(var k in base){merged[k]=base[k];}'
+    'for(var k2 in patch){merged[k2]=patch[k2];}'
+    'localStorage.setItem(KEY,JSON.stringify({version:1,shortcuts:merged}));'
+    '}catch(e){}'
+    '})();</script>'
+)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Do not follow HTTP redirects; return them to the browser instead.
 
@@ -281,11 +306,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             html = re.sub(r'(<script[^>]*src=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             html = re.sub(r'(<link[^>]*href=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             if '<head>' in html:
-                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS, 1)
+                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_KEYS_JS, 1)
             elif '<head ' in html:
-                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + '<head ', 1)
+                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_KEYS_JS + '<head ', 1)
             else:
-                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + html
+                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_KEYS_JS + html
             resp_body = html.encode('utf-8')
         else:
             resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)
