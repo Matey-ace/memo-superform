@@ -43,10 +43,13 @@ const TTS = (function() {
 
     async function speak(text) {
         if (!text || !isReady()) return false;
+        const controller = new AbortController();
+        const timer = setTimeout(function() { controller.abort(); }, 45000);
         try {
             const resp = await fetch('/api/tts/speak', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
                 body: JSON.stringify({
                     text: text,
                     voice: localStorage.getItem('tts_voice') || undefined,
@@ -61,6 +64,8 @@ const TTS = (function() {
             return false;
         } catch (e) {
             return false;
+        } finally {
+            clearTimeout(timer);
         }
     }
 

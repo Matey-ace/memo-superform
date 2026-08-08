@@ -30,6 +30,9 @@ LANGUAGE_NUMBER_MAP = {
     "10": "多语种混合", "11": "多语种混合(粤语)",
 }
 
+# 单次合成超时（秒）。worker 卡死时强杀并重置引擎；可用环境变量调大。
+_SYNTH_TIMEOUT = float(os.environ.get("MEMO_TTS_SYNTH_TIMEOUT", "30") or 30)
+
 
 class TTSException(Exception):
     """语音引擎相关的可读错误。"""
@@ -343,14 +346,29 @@ class TTSManager:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
 
+    def _kill_process(self):
+        """强杀 worker 进程并清空引用（下一次调用会重新拉起）。"""
+        if self._proc is not None and self._proc.poll() is None:
+            try:
+                self._proc.kill()
+            except Exception:
+                pass
+            try:
+                self._proc.wait(timeout=5)
+            except Exception:
+                pass
+        self._proc = None
+
     def _call(self, command, timeout=None):
         """带一次自动重启的调用。"""
         with self._cmd_lock:
             self._ensure_started()
             try:
                 return self._send(command, timeout=timeout)
-            except TTSException:
-                raise
+            except TTSException as exc:
+                # 命令超时：worker 可能卡死，强杀并重置，避免后续命令继续排队挂起
+                self._kill_process()
+                raise TTSException("%s（已重置语音引擎，请重试）" % exc)
             except Exception as exc:
                 # 进程崩溃等情况：重启一次再试
                 try:
@@ -399,7 +417,7 @@ class TTSManager:
                 "character_name": voice_name,
                 "voice": voice,
                 "payload": payload,
-            })
+            }, timeout=_SYNTH_TIMEOUT)
         finally:
             self._busy = False
         if result.get("type") == "error":
