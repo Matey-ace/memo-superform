@@ -84,11 +84,34 @@ def _venv_python(pack_dir):
     return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
 
 
+def _write_install_meta(pack_dir, source="ModelScope"):
+    """重建 install.json（与 setup.ps1 写入的内容保持一致）。"""
+    pack = _pack_meta(pack_dir) or {}
+    ffmpeg_exe = os.path.join(pack_dir, "ffmpeg", "bin", "ffmpeg.exe")
+    data = {
+        "installed": True,
+        "version": pack.get("version") or "1.0.0",
+        "source": source,
+        "installed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "ffmpeg_dir": os.path.join(pack_dir, "ffmpeg", "bin") if os.path.exists(ffmpeg_exe) else "",
+    }
+    return _write_json(os.path.join(pack_dir, "install.json"), data)
+
+
 def _engine_ready(pack_dir):
-    """install.json 存在且 venv 解释器存在即认为引擎就绪。"""
+    """install.json 存在且 venv 解释器存在即认为引擎就绪。
+
+    install.json 只是安装完成标记；若它丢失但环境实际完整
+    （venv 解释器与 worker 均存在），自动重建标记，避免用户误以为功能损坏。
+    """
     meta = _install_meta(pack_dir)
     if not meta or not meta.get("installed"):
-        return False, "资源包尚未安装，请先运行 setup.bat 完成安装"
+        if (os.path.exists(_venv_python(pack_dir))
+                and os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py"))):
+            _write_install_meta(pack_dir)
+            meta = _install_meta(pack_dir)
+        else:
+            return False, "资源包尚未安装，请先运行 setup.bat 完成安装"
     if not os.path.exists(_venv_python(pack_dir)):
         return False, "未找到 .venv311 解释器，请重新运行 setup.bat"
     if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
