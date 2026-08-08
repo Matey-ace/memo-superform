@@ -169,6 +169,7 @@
             <div class="tile-body">
                 <div class="chart-toolbar">
                     <button id="aiClassifyBtn" class="ai-btn">✨ 使用 AI 分类单词</button>
+                    <button id="aiSpeakBtn" class="ai-btn" style="display:none">🔊 朗读结果</button>
                     <span id="aiStatus" class="ai-status"></span>
                 </div>
                 <div class="chart-container" id="chart-3"></div>
@@ -243,6 +244,33 @@
                     <button id="relaunchModeBtn" class="test-btn">立即重启到所选模式</button>
                     <span id="modeStatus" class="status-text"></span>
                 </div>
+
+                <div class="setting-group">
+                    <h3>语音功能（GPT-SoVITS 资源包）</h3>
+                    <div class="setting-item">
+                        <label>状态</label>
+                        <span id="ttsStatusText" class="hint">检测中...</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>音色</label>
+                        <select id="ttsVoiceSelect">
+                            <option value="sakiko">祥子</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label>语速：<span id="ttsSpeedValue">1.0</span></label>
+                        <input type="range" id="ttsSpeedRange" min="0.5" max="1.5" step="0.1" value="1.0">
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="ttsAutoRead">
+                            <span>自动朗读 AI 结果（推荐/分类摘要）</span>
+                        </label>
+                    </div>
+                    <button id="ttsEnableBtn" class="test-btn">开启语音</button>
+                    <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载模型</button>
+                    <span id="ttsActionStatus" class="status-text"></span>
+                </div>
             </div>
             <div class="settings-footer">
                 <button id="saveSettingsBtn" class="save-btn">保存设置</button>
@@ -272,10 +300,11 @@
     </div>
 
     <script src="js/api.js?v=38"></script>
-    <script src="js/charts.js?v=38"></script>
+    <script src="js/tts.js?v=39"></script>
+    <script src="js/charts.js?v=39"></script>
     <script src="js/layout.js?v=38"></script>
     <script src="js/study-web.js?v=38"></script>
-        <script src="js/app.js?v=38"></script>
+        <script src="js/app.js?v=39"></script>
 </body>
 </html>
 

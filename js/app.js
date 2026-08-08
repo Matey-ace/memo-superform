@@ -17,6 +17,7 @@ const App = (function() {
     function init() {
         setupSettingsPanel();
         setupModeSettings();
+        setupTTSSettings();
         setupRefreshButton();
         setupServerStatusCheck();
         setupAIClassifyButton();
@@ -359,6 +360,19 @@ const App = (function() {
                     statusEl.textContent = `✓ 分类完成，${words.length} 个单词${sourceLabel}`;
                     setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 5000);
                 }
+
+                // 朗读 AI 分类结果
+                const speakBtn = document.getElementById('aiSpeakBtn');
+                const summaryText = `AI 单词分类完成，共 ${words.length} 个单词${dataSource === 'study' ? '' : '（云词本）'}`;
+                if (window.TTS && TTS.isReady()) {
+                    if (speakBtn) {
+                        speakBtn.style.display = '';
+                        speakBtn.onclick = function() { TTS.speak(summaryText); };
+                    }
+                    if (localStorage.getItem('tts_auto_read') === 'true') TTS.speak(summaryText);
+                } else if (speakBtn) {
+                    speakBtn.style.display = 'none';
+                }
                 
             } catch (e) {
                 if (statusEl) statusEl.textContent = '✗ ' + e.message;
@@ -368,7 +382,117 @@ const App = (function() {
             btn.disabled = false;
         });
     }
-    
+
+    // ---- 语音功能设置 ----
+
+    function setupTTSSettings() {
+        const statusEl = document.getElementById('ttsStatusText');
+        const actionEl = document.getElementById('ttsActionStatus');
+        const enableBtn = document.getElementById('ttsEnableBtn');
+        const preloadBtn = document.getElementById('ttsPreloadBtn');
+        const voiceSelect = document.getElementById('ttsVoiceSelect');
+        const speedRange = document.getElementById('ttsSpeedRange');
+        const speedValue = document.getElementById('ttsSpeedValue');
+        const autoRead = document.getElementById('ttsAutoRead');
+
+        const savedVoice = localStorage.getItem('tts_voice');
+        if (savedVoice && voiceSelect) voiceSelect.value = savedVoice;
+        const savedSpeed = parseFloat(localStorage.getItem('tts_speed') || '1.0');
+        if (speedRange) speedRange.value = savedSpeed;
+        if (speedValue) speedValue.textContent = savedSpeed.toFixed(1);
+        if (autoRead) autoRead.checked = localStorage.getItem('tts_auto_read') === 'true';
+
+        if (speedRange) speedRange.addEventListener('input', function() {
+            const v = parseFloat(speedRange.value).toFixed(1);
+            localStorage.setItem('tts_speed', v);
+            if (speedValue) speedValue.textContent = v;
+        });
+        if (autoRead) autoRead.addEventListener('change', function() {
+            localStorage.setItem('tts_auto_read', autoRead.checked ? 'true' : 'false');
+        });
+        if (voiceSelect) voiceSelect.addEventListener('change', function() {
+            localStorage.setItem('tts_voice', voiceSelect.value);
+        });
+
+        function renderStatus() {
+            if (!statusEl) return;
+            const st = TTS.getStatus();
+            if (!st.pack_ready) {
+                statusEl.textContent = '未检测到语音资源包（data/tts_pack/）';
+                if (enableBtn) enableBtn.textContent = '开启语音';
+                if (preloadBtn) preloadBtn.style.display = 'none';
+                return;
+            }
+            if (!st.engine_ready) {
+                statusEl.textContent = '资源包已检测到，引擎未安装：' + (st.install_error || '请运行 setup.bat');
+                if (enableBtn) enableBtn.textContent = '开启语音';
+                if (preloadBtn) preloadBtn.style.display = 'none';
+                return;
+            }
+            const dev = st.device ? ' · ' + st.device : '';
+            statusEl.textContent = (st.enabled ? '✓ 已开启' : '未开启') + ' · 引擎就绪' + dev +
+                (st.loaded ? ' · 模型已加载' : '');
+            if (enableBtn) enableBtn.textContent = st.enabled ? '关闭语音' : '开启语音';
+            if (preloadBtn) preloadBtn.style.display = st.enabled ? '' : 'none';
+            if (voiceSelect && st.voices && st.voices.length) {
+                const current = voiceSelect.value;
+                voiceSelect.innerHTML = '';
+                st.voices.forEach(function(v) {
+                    const opt = document.createElement('option');
+                    opt.value = v.name;
+                    opt.textContent = v.label || v.name;
+                    voiceSelect.appendChild(opt);
+                });
+                voiceSelect.value = st.voices.some(function(v) { return v.name === current; }) ? current : st.voices[0].name;
+                localStorage.setItem('tts_voice', voiceSelect.value);
+            }
+        }
+
+        if (enableBtn) enableBtn.addEventListener('click', async function() {
+            const target = !TTS.getStatus().enabled;
+            if (actionEl) { actionEl.textContent = target ? '正在开启...' : '正在关闭...'; actionEl.className = 'status-text'; }
+            const result = await TTS.setEnabled(target);
+            if (actionEl) {
+                if (result.ok) {
+                    actionEl.textContent = target ? '✓ 语音已开启' : '已关闭语音';
+                    actionEl.className = 'status-text success';
+                } else {
+                    actionEl.textContent = '✗ ' + (result.error || '操作失败');
+                    actionEl.className = 'status-text error';
+                }
+            }
+            await TTS.refresh();
+            renderStatus();
+        });
+
+        if (preloadBtn) preloadBtn.addEventListener('click', async function() {
+            if (actionEl) { actionEl.textContent = '正在预加载模型（首次较慢）...'; actionEl.className = 'status-text'; }
+            try {
+                const resp = await fetch('/api/tts/preload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voice: voiceSelect ? voiceSelect.value : 'sakiko' })
+                });
+                const data = await resp.json();
+                if (actionEl) {
+                    if (resp.ok) {
+                        actionEl.textContent = '✓ 模型已加载';
+                        actionEl.className = 'status-text success';
+                    } else {
+                        actionEl.textContent = '✗ ' + (data.error || '加载失败');
+                        actionEl.className = 'status-text error';
+                    }
+                }
+                await TTS.refresh();
+                renderStatus();
+            } catch (e) {
+                if (actionEl) { actionEl.textContent = '✗ ' + e.message; actionEl.className = 'status-text error'; }
+            }
+        });
+
+        TTS.refresh().then(renderStatus);
+    }
+
     // ---- 刷新按钮 ----
     
     function setupRefreshButton() {

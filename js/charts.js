@@ -1183,6 +1183,7 @@ const ChartManager = (function() {
         html += '<div class="rec-sum-item low"><span class="rec-sum-num">' + (s.low || 0) + '</span><span class="rec-sum-lbl">稳定</span></div>';
         html += '<div class="rec-sum-item done"><span class="rec-sum-num">' + (s.reviewed || 0) + '</span><span class="rec-sum-lbl">已复习</span></div>';
         html += '<button class="rec-refresh" title="刷新推荐">\u21bb</button>';
+        html += '<button class="rec-speak" title="朗读推荐摘要">\ud83d\udd0a</button>';
         html += '</div>';
 
         if (recs.length === 0) {
@@ -1192,6 +1193,8 @@ const ChartManager = (function() {
             bindRecEvents(container);
             return;
         }
+
+        var pending = recs.filter(function(r) { return r.status !== 'reviewed'; });
 
         html += '<div class="rec-list">';
         pending.forEach(function(r) { html += recCardHtml(r, false); });
@@ -1206,6 +1209,9 @@ const ChartManager = (function() {
         html += '</div>';
         container.innerHTML = html;
         bindRecEvents(container);
+        if (window.TTS && TTS.isReady() && localStorage.getItem('tts_auto_read') === 'true' && pending.length) {
+            TTS.speak(buildRecSummary(s, pending));
+        }
     }
 
     function recCardHtml(r, isReviewed) {
@@ -1218,9 +1224,18 @@ const ChartManager = (function() {
             '<div class="rec-card-main"><div class="rec-word">' + escapeHtml(r.word) + '</div>' +
             '<div class="rec-meta">' + escapeHtml(meta.join(' \u00b7 ')) + '</div></div>' +
             '<div class="rec-card-side"><div class="rec-score" style="background:' + (r.level_color || '#999') + '">' + (r.risk_score || 0) + '</div>' +
-            '<div class="rec-level-lbl">' + escapeHtml(r.level_label || '') + '</div></div>' +
+            '<div class="rec-level-lbl">' + escapeHtml(r.level_label || '') + '</div>' +
+            '<button class="rec-speak-card" title="朗读该单词">\ud83d\udd0a</button></div>' +
             '<button class="rec-review-btn">' + (isReviewed ? '\u2713' : '已复习') + '</button>' +
             '</div>';
+    }
+
+    function buildRecSummary(s, pending) {
+        var words = pending.slice(0, 10).map(function(r) { return r.word; }).join('，');
+        var text = '今日智能复习推荐：紧急 ' + (s.high || 0) + ' 个，建议 ' + (s.mid || 0) +
+            ' 个，稳定 ' + (s.low || 0) + ' 个，共 ' + (pending.length || 0) + ' 个单词待复习。';
+        if (words) text += '包括：' + words + '。';
+        return text;
     }
 
     function bindRecEvents(container) {
@@ -1232,6 +1247,37 @@ const ChartManager = (function() {
                 RecommendAPI.markReviewed(id).then(function(ok) {
                     if (ok) { card.classList.add('reviewed'); btn.textContent = '\u2713'; }
                 });
+            });
+        });
+        container.querySelectorAll('.rec-speak').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (!window.TTS || !TTS.isReady()) return;
+                var summary = container.querySelector('.rec-summary');
+                var nums = summary ? summary.querySelectorAll('.rec-sum-num') : [];
+                var s = { high: 0, mid: 0, low: 0 };
+                var labels = summary ? summary.querySelectorAll('.rec-sum-lbl') : [];
+                labels.forEach(function(lbl, i) {
+                    if (nums[i] && lbl.textContent === '紧急') s.high = parseInt(nums[i].textContent) || 0;
+                    if (nums[i] && lbl.textContent === '建议') s.mid = parseInt(nums[i].textContent) || 0;
+                    if (nums[i] && lbl.textContent === '稳定') s.low = parseInt(nums[i].textContent) || 0;
+                });
+                var pending = [];
+                container.querySelectorAll('.rec-card:not(.reviewed) .rec-word').forEach(function(el) {
+                    pending.push(el.textContent);
+                });
+                TTS.speak(buildRecSummary(s, pending.map(function(w) { return { word: w }; })));
+            });
+        });
+        container.querySelectorAll('.rec-speak-card').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (!window.TTS || !TTS.isReady()) return;
+                var card = btn.closest('.rec-card');
+                var wordEl = card ? card.querySelector('.rec-word') : null;
+                var levelEl = card ? card.querySelector('.rec-level-lbl') : null;
+                var text = (wordEl ? wordEl.textContent : '') + '，' + (levelEl ? levelEl.textContent : '');
+                TTS.speak(text);
             });
         });
         var refresh = container.querySelector('.rec-refresh');

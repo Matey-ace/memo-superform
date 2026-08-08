@@ -571,6 +571,26 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._web_proxy_request(target, method="GET")
             return
 
+        # 生成的语音文件（data/generated_audios/）
+        if path.startswith("/generated/"):
+            name = os.path.basename(path)
+            full = os.path.join(GENERATED_AUDIO_DIR, name)
+            if name and os.path.isfile(full):
+                try:
+                    with open(full, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self._send_cors_headers()
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception:
+                    self.send_error(500)
+                return
+            self.send_error(404, "Not Found")
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -684,7 +704,7 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
         if path == "/api/tts/status":
             import tts
-            return self._send_json(200, tts.get_status(TTS_PACK_DIR))
+            return self._send_json(200, tts.get_status(TTS_PACK_DIR, DATA_DIR))
 
         if not DB_READY:
             return self._send_json(503, {"error": "数据库未就绪"})
@@ -741,6 +761,51 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 if not ok:
                     return self._send_json(400, {"error": msg})
                 return self._send_json(200, {"ok": True, "mode": mode, "relaunching": True})
+
+            # 语音资源包接口（与数据库无关）
+            if path == "/api/tts/speak":
+                import tts
+                try:
+                    wav_path = tts.speak(
+                        TTS_PACK_DIR,
+                        DATA_DIR,
+                        body.get("text", ""),
+                        voice=body.get("voice"),
+                        language=body.get("language"),
+                        speed=body.get("speed"),
+                    )
+                    return self._send_json(200, {
+                        "ok": True,
+                        "audio_url": "/generated/" + os.path.basename(wav_path),
+                    })
+                except tts.TTSException as e:
+                    return self._send_json(404, {"error": str(e)})
+
+            if path == "/api/tts/enable":
+                import tts
+                try:
+                    state = tts.set_enabled(TTS_PACK_DIR, DATA_DIR, True)
+                    return self._send_json(200, {"ok": True, "enabled": True, "voice": state.get("voice")})
+                except tts.TTSException as e:
+                    return self._send_json(400, {"error": str(e)})
+
+            if path == "/api/tts/disable":
+                import tts
+                tts.set_enabled(TTS_PACK_DIR, DATA_DIR, False)
+                return self._send_json(200, {"ok": True, "enabled": False})
+
+            if path == "/api/tts/preload":
+                import tts
+                try:
+                    tts.preload(TTS_PACK_DIR, DATA_DIR, voice=body.get("voice"))
+                    return self._send_json(200, {"ok": True})
+                except tts.TTSException as e:
+                    return self._send_json(400, {"error": str(e)})
+
+            if path == "/api/tts/shutdown":
+                import tts
+                tts.shutdown(TTS_PACK_DIR, DATA_DIR)
+                return self._send_json(200, {"ok": True})
 
             if not DB_READY:
                 return self._send_json(503, {"error": "数据库未就绪"})

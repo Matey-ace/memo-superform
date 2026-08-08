@@ -1168,6 +1168,11 @@ body.dark .auto-refresh-select option {
     width: 30px; height: 30px; cursor: pointer; font-size: 16px; color: var(--text-primary);
 }
 .rec-refresh:hover { background: var(--border-color); }
+.rec-speak {
+    border: none; background: var(--bg-color); border-radius: 8px;
+    width: 30px; height: 30px; cursor: pointer; font-size: 14px; color: var(--text-primary);
+}
+.rec-speak:hover { background: var(--border-color); }
 .rec-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 0 6px 6px; }
 .rec-list.reviewed { opacity: .55; }
 .rec-card {
@@ -1188,6 +1193,11 @@ body.dark .auto-refresh-select option {
     display: flex; align-items: center; justify-content: center;
 }
 .rec-level-lbl { font-size: 10px; color: var(--text-secondary); margin-top: 3px; }
+.rec-speak-card {
+    border: none; background: transparent; cursor: pointer; font-size: 12px;
+    color: var(--text-secondary); margin-top: 2px; padding: 0;
+}
+.rec-speak-card:hover { color: var(--accent-blue); }
 .rec-review-btn {
     border: 1px solid var(--border-color); background: transparent; border-radius: 6px;
     padding: 4px 8px; font-size: 11px; cursor: pointer; color: var(--text-secondary); white-space: nowrap;
