@@ -2,7 +2,7 @@
 // Memo Superform - 语音资源包前端（TTS）
 // ==========================================
 
-const TTS = (function() {
+var TTS = (function() {
     let status = {
         enabled: false,
         pack_ready: false,
@@ -16,13 +16,17 @@ const TTS = (function() {
     let audio = new Audio();
 
     async function refresh() {
-        const controller = new AbortController();
-        const timer = setTimeout(function() { controller.abort(); }, 10000);
+        let controller = null;
+        let timer = null;
         try {
-            const resp = await fetch('/api/tts/status', { signal: controller.signal });
+            controller = new AbortController();
+            timer = setTimeout(function() { try { controller.abort(); } catch (e) {} }, 10000);
+        } catch (e) { /* AbortController 不可用时退化为无超时请求 */ }
+        try {
+            const resp = await fetch('/api/tts/status', { signal: controller ? controller.signal : undefined });
             if (resp.ok) status = await resp.json();
         } catch (e) { /* 超时或代理未启动时保持上次状态 */ }
-        finally { clearTimeout(timer); }
+        finally { if (timer) clearTimeout(timer); }
         return status;
     }
 

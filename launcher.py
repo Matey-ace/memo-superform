@@ -211,6 +211,8 @@ def run_desktop(guard=None):
         sys.exit(1)
     _log("server started: %s" % result[1])
     httpd, url = result
+    # 给桌面窗口 URL 加版本参数，强制 WebView 拉取最新页面，避免陈旧缓存
+    url = url + "?v=40"
     time.sleep(0.5)
 
     import webview
