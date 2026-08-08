@@ -188,6 +188,9 @@ def run_web():
         server.start_server(open_browser=True, block=True)
     except KeyboardInterrupt:
         pass
+    except RuntimeError as exc:
+        print(exc)
+        show_message("Memo Superform", str(exc))
 
 
 def run_desktop(guard=None):
@@ -238,11 +241,17 @@ def request_relaunch(mode):
     _log("request_relaunch begin: mode=%s" % mode)
     _release_guard()
     write_launcher_config(mode, remember=True)
+    # 源码模式需要补 launcher.py 路径；frozen(exe) 模式下 sys.executable 就是程序本体。
+    # 注意不能无条件追加 __file__：打包后 __file__ 指向临时解压目录，会被 exe 当成多余参数。
+    cmd = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        cmd.append(os.path.abspath(__file__))
+    cmd += ["--mode", mode]
     try:
         if os.name == "nt":
             flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
             proc = subprocess.Popen(
-                [sys.executable, "--mode", mode],
+                cmd,
                 creationflags=flags,
                 close_fds=True,
                 stdin=subprocess.DEVNULL,
@@ -251,7 +260,7 @@ def request_relaunch(mode):
             )
         else:
             proc = subprocess.Popen(
-                [sys.executable, "--mode", mode],
+                cmd,
                 start_new_session=True,
                 close_fds=True,
                 stdin=subprocess.DEVNULL,

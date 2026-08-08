@@ -15,6 +15,7 @@ tts.py - MeMo 语音资源包（GPT-SoVITS）接入层
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -61,13 +62,43 @@ def _state_path(data_dir):
     return os.path.join(data_dir, "tts_state.json")
 
 
+def _coerce_speed(value):
+    """speed 仅接受正有限数字（或可转换的数字字符串），否则回退 1.0。"""
+    if isinstance(value, bool):
+        return 1.0
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except (TypeError, ValueError):
+            return 1.0
+    else:
+        return 1.0
+    if not math.isfinite(number) or number <= 0:
+        return 1.0
+    return number
+
+
+def _coerce_enabled(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
+def _coerce_str(value, default):
+    return value if isinstance(value, str) and value.strip() else default
+
+
 def _load_state(data_dir):
     state = _read_json(_state_path(data_dir)) or {}
     return {
-        "enabled": bool(state.get("enabled")),
-        "voice": state.get("voice") or "sakiko",
-        "language": state.get("language") or "中英混合",
-        "speed": float(state.get("speed") or 1.0),
+        "enabled": _coerce_enabled(state.get("enabled")),
+        "voice": _coerce_str(state.get("voice"), "sakiko"),
+        "language": _coerce_str(state.get("language"), "中英混合"),
+        "speed": _coerce_speed(state.get("speed")),
     }
 
 
@@ -517,6 +548,25 @@ def _get_manager(pack_dir, data_dir):
 # ---------- 供 server.py 调用的模块级接口 ----------
 
 def get_status(pack_dir, data_dir):
+    """状态接口的稳定出口：任何异常都不允许返回 500。"""
+    try:
+        return _get_status_inner(pack_dir, data_dir)
+    except Exception as exc:
+        pack = _pack_meta(pack_dir)
+        return {
+            "enabled": False,
+            "pack_ready": pack is not None,
+            "engine_ready": False,
+            "install_error": "状态读取异常：%s" % exc,
+            "version": (pack or {}).get("version"),
+            "voices": [],
+            "device": None,
+            "loaded": False,
+            "busy": False,
+        }
+
+
+def _get_status_inner(pack_dir, data_dir):
     pack = _pack_meta(pack_dir)
     if pack is None:
         return {

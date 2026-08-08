@@ -1002,11 +1002,17 @@ def start_server(open_browser=True, block=True):
             return httpd, url
         except OSError:
             continue
+    if block:
+        raise RuntimeError("无法启动本地服务器：端口 8888-8890、3000、5000 均被占用")
     return None
 
 
 def main():
-    result = start_server(open_browser=True, block=True)
+    try:
+        result = start_server(open_browser=True, block=True)
+    except RuntimeError as exc:
+        print(exc)
+        sys.exit(1)
     if not result:
         print("Error: Cannot find available port (8888-8890, 3000, 5000 all in use)")
         sys.exit(1)
