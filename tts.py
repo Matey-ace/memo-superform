@@ -120,6 +120,29 @@ def _read_text_file(path):
         return ""
 
 
+def _find_matching_ref_text(folder, ref_audio, voice):
+    """参考文本文件名不固定时（如 reference_text_black_sakiko.txt），
+    按参考音频文件名自动匹配。"""
+    if not ref_audio:
+        return ""
+    stem = os.path.splitext(os.path.basename(ref_audio))[0].lower()
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return ""
+    # 1) 文件名包含参考音频主干（如 black_sakiko）
+    for name in names:
+        low = name.lower()
+        if low.endswith(".txt") and "language" not in low and stem in low:
+            return _read_text_file(os.path.join(folder, name))
+    # 2) 任意 reference_text*.txt
+    for name in names:
+        low = name.lower()
+        if low.startswith("reference_text") and low.endswith(".txt"):
+            return _read_text_file(os.path.join(folder, name))
+    return ""
+
+
 def _resolve_voice(pack_dir, pack, voice_name):
     """解析音色配置：返回 worker voice 字典；缺失文件时抛出 TTSException。"""
     voices = pack.get("voices") or []
@@ -134,6 +157,8 @@ def _resolve_voice(pack_dir, pack, voice_name):
     ref_audio = _first_file(folder, (".wav", ".mp3", ".flac", ".ogg"))
     ref_text_path = os.path.join(folder, voice.get("ref_text", "reference_text.txt"))
     ref_text = _read_text_file(ref_text_path)
+    if not ref_text:
+        ref_text = _find_matching_ref_text(folder, ref_audio, voice)
     ref_lan = voice.get("ref_language") or "中文"
     lan_file = os.path.join(folder, voice.get("ref_language_file", "reference_audio_language.txt"))
     raw_lan = _read_text_file(lan_file)
