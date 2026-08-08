@@ -16,6 +16,7 @@ const App = (function() {
     
     function init() {
         setupSettingsPanel();
+        setupModeSettings();
         setupRefreshButton();
         setupServerStatusCheck();
         setupAIClassifyButton();
@@ -29,6 +30,73 @@ const App = (function() {
                 loadAllData();
             } else {
                 showWelcome();
+            }
+        });
+    }
+
+    // ---- 运行模式设置 ----
+
+    function setupModeSettings() {
+        const modeText = document.getElementById('currentModeText');
+        const modeSelect = document.getElementById('defaultModeSelect');
+        const modeStatus = document.getElementById('modeStatus');
+
+        fetch('/api/app/current-mode').then(r => r.json()).then(info => {
+            const label = info.mode === 'desktop' ? '桌面模式' : '网页模式';
+            if (modeText) {
+                modeText.textContent = label + (info.is_frozen ? '（打包版）' : '（源码模式）');
+            }
+            if (modeSelect) modeSelect.value = info.mode;
+        }).catch(() => {
+            if (modeText) modeText.textContent = '无法获取当前模式';
+        });
+
+        const saveBtn = document.getElementById('setDefaultModeBtn');
+        if (saveBtn) saveBtn.addEventListener('click', async function() {
+            const mode = modeSelect.value;
+            if (!modeStatus) return;
+            modeStatus.textContent = '保存中...';
+            modeStatus.className = 'status-text';
+            try {
+                const resp = await fetch('/api/app/set-default-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: mode })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    modeStatus.textContent = '✓ 已保存，下次启动生效';
+                    modeStatus.className = 'status-text success';
+                } else {
+                    modeStatus.textContent = '✗ ' + (data.error || '保存失败');
+                    modeStatus.className = 'status-text error';
+                }
+            } catch (e) {
+                modeStatus.textContent = '✗ ' + e.message;
+                modeStatus.className = 'status-text error';
+            }
+        });
+
+        const relaunchBtn = document.getElementById('relaunchModeBtn');
+        if (relaunchBtn) relaunchBtn.addEventListener('click', async function() {
+            const mode = modeSelect.value;
+            if (!modeStatus) return;
+            modeStatus.textContent = '正在重启到' + (mode === 'desktop' ? '桌面' : '网页') + '模式...';
+            modeStatus.className = 'status-text';
+            try {
+                const resp = await fetch('/api/app/relaunch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: mode })
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    modeStatus.textContent = '✗ ' + (data.error || '切换失败');
+                    modeStatus.className = 'status-text error';
+                }
+            } catch (e) {
+                modeStatus.textContent = '✗ ' + e.message;
+                modeStatus.className = 'status-text error';
             }
         });
     }

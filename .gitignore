@@ -5,6 +5,9 @@ __pycache__/
 # 本地运行文件（进程号，重启后自动变）
 server.pid
 
+# 可写数据目录（启动模式记忆、语音资源包、生成音频）
+data/
+
 # 打包产物（体积大，不入库，需要时重新打包）
 build/
 dist/
@@ -30,3 +33,6 @@ _build_*
 # 临时测试/备份文件
 _*.js
 *.bak
+
+# 本地重写前的 git 备份包（52MB，不入库）
+_backup_pre-rewrite.bundle

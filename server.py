@@ -15,6 +15,7 @@ import socketserver
 import socket
 import ssl
 import select
+import subprocess
 import urllib.request
 import urllib.error
 import json
@@ -38,6 +39,27 @@ if sys.platform == "win32":
 PORT = 8888
 # 打包为 exe 时静态资源在 PyInstaller 的解压目录 _MEIPASS 中
 WEB_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+
+
+def _runtime_root():
+    """exe 模式下返回 exe 所在目录；源码模式返回项目根目录。"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+# 可写数据目录：资源包、生成音频、启动模式记忆等一律落在 exe 同级 data/ 下，
+# 避免写入 PyInstaller 的临时解压目录。
+DATA_DIR = os.path.join(_runtime_root(), "data")
+TTS_PACK_DIR = os.path.join(DATA_DIR, "tts_pack")
+GENERATED_AUDIO_DIR = os.path.join(DATA_DIR, "generated_audios")
+LAUNCHER_CONFIG_PATH = os.path.join(DATA_DIR, "launcher.json")
+for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
+    try:
+        os.makedirs(_data_dir, exist_ok=True)
+    except OSError:
+        pass
+
 MAIMEMO_BASE = "https://open.maimemo.com/open"
 TC_APIS_BASE = "https://tc-apis.maimemo.com"
 API_BASE = "https://api.maimemo.com"
@@ -652,6 +674,18 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     # ===================== /api/* GET =====================
     def _handle_api_get(self, path, parsed):
+        # 与数据库无关的本地接口（运行模式 / 语音资源包状态）
+        if path == "/api/app/current-mode":
+            return self._send_json(200, {
+                "mode": _current_mode(),
+                "is_frozen": bool(getattr(sys, "frozen", False)),
+                "data_dir": DATA_DIR,
+            })
+
+        if path == "/api/tts/status":
+            import tts
+            return self._send_json(200, tts.get_status(TTS_PACK_DIR))
+
         if not DB_READY:
             return self._send_json(503, {"error": "数据库未就绪"})
         try:
@@ -684,13 +718,32 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     # ===================== /api/* POST =====================
     def _handle_api_post(self, path, parsed):
-        if not DB_READY:
-            return self._send_json(503, {"error": "数据库未就绪"})
         try:
             try:
                 body = self._read_json_body()
             except (json.JSONDecodeError, ValueError):
                 return self._send_json(400, {"error": "Invalid JSON body"})
+
+            # 运行模式设置（与数据库无关）
+            if path == "/api/app/set-default-mode":
+                mode = body.get("mode")
+                if mode not in ("desktop", "web"):
+                    return self._send_json(400, {"error": "mode 必须是 desktop 或 web"})
+                if not _write_launcher_config(mode, True):
+                    return self._send_json(500, {"error": "无法写入启动配置文件"})
+                return self._send_json(200, {"ok": True, "mode": mode, "remember": True})
+
+            if path == "/api/app/relaunch":
+                mode = body.get("mode")
+                if mode not in ("desktop", "web"):
+                    return self._send_json(400, {"error": "mode 必须是 desktop 或 web"})
+                ok, msg = _relaunch_app(mode)
+                if not ok:
+                    return self._send_json(400, {"error": msg})
+                return self._send_json(200, {"ok": True, "mode": mode, "relaunching": True})
+
+            if not DB_READY:
+                return self._send_json(503, {"error": "数据库未就绪"})
 
             # 保存当日快照并生成推荐
             if path == "/api/snapshot":
@@ -785,6 +838,39 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.write("[%s] %s %s %s\n" % (
             self.log_date_time_string(), args[0] if len(args) > 0 else '', args[1] if len(args) > 1 else '', args[2] if len(args) > 2 else ''
         ))
+
+
+def _current_mode():
+    """当前运行模式；未设置时默认视为网页模式。"""
+    return os.environ.get("MEMO_MODE", "web")
+
+
+def _write_launcher_config(mode, remember):
+    try:
+        with open(LAUNCHER_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"mode": mode, "remember": bool(remember)}, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
+def _relaunch_app(mode):
+    """仅打包（exe）模式支持自动重启到另一模式；源码模式给出提示。"""
+    if not getattr(sys, "frozen", False):
+        return False, "源码模式不支持自动重启，请手动运行：python launcher.py --mode " + mode
+    if not _write_launcher_config(mode, True):
+        return False, "无法写入启动配置文件"
+    try:
+        if os.name == "nt":
+            flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            subprocess.Popen([sys.executable, "--mode", mode], creationflags=flags, close_fds=True)
+        else:
+            subprocess.Popen([sys.executable, "--mode", mode], start_new_session=True, close_fds=True)
+    except Exception as e:
+        return False, "重启失败：" + str(e)
+    # 延迟退出当前进程，确保响应先发送完毕
+    threading.Timer(1.5, lambda: os._exit(0)).start()
+    return True, "正在重启..."
 
 
 def start_server(open_browser=True, block=True):

@@ -480,6 +480,18 @@ body {
     box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
 }
 
+.setting-item select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 13px;
+    outline: none;
+    background: var(--bg-color);
+    color: var(--text-primary);
+    font-family: inherit;
+}
+
 .setting-item .hint {
     font-size: 11px;
     color: var(--text-secondary);
@@ -926,7 +938,8 @@ body.dark .ai-range-btn.active {
 }
 
 body.dark .setting-item input[type="text"],
-body.dark .setting-item input[type="password"] {
+body.dark .setting-item input[type="password"],
+body.dark .setting-item select {
     background: var(--bg-color);
     color: var(--text-primary);
     border-color: var(--border-color);

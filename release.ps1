@@ -55,7 +55,9 @@ $pyArgs = @("--noconfirm","--onefile","--name","MemoSuperform",
     "--add-data","index-anon.html;.",
     "--add-data","img;img",
     "--add-data","fonts;fonts",
-    "server.py")
+    "--add-data","LICENSE;.",
+    "--add-data","README.md;.",
+    "launcher.py")
 & python -m PyInstaller @pyArgs 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { Write-Host "  打包失败!" -ForegroundColor Red; exit 1 }
 if (-not (Test-Path $exePath)) { Write-Host "  exe 未生成!" -ForegroundColor Red; exit 1 }
