@@ -235,13 +235,6 @@ def run_desktop(guard=None):
     time.sleep(0.5)
 
     import webview
-    _win_icon = None
-    _ico = _res_path(os.path.join("img", "icon.ico"))
-    _png = _res_path(os.path.join("img", "icon.png"))
-    if os.name == "nt" and os.path.exists(_ico):
-        _win_icon = _ico
-    elif os.path.exists(_png):
-        _win_icon = _png
     try:
         webview.create_window(
             "Memo Superform - 墨墨数据仪表盘",
@@ -250,7 +243,6 @@ def run_desktop(guard=None):
             height=820,
             min_size=(960, 640),
             text_select=False,
-            icon=_win_icon,
         )
         webview.start()
     finally:
