@@ -41,8 +41,15 @@ def _acquire_pack_lock(pack_dir):
     f = None
     try:
         os.makedirs(pack_dir, exist_ok=True)
-        f = open(lock_path, "a+")
+        f = open(lock_path, "a+b")
         if os.name == "nt":
+            # Windows 的 msvcrt.locking 不能锁 EOF 之后的区域：
+            # 先保证文件至少有 1 字节，再回到文件头锁定
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                f.write(b"\x00")
+                f.flush()
+            f.seek(0)
             import msvcrt
             msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
         else:
@@ -55,6 +62,7 @@ def _acquire_pack_lock(pack_dir):
                 f.close()
             except Exception:
                 pass
+        print("[tts] 语音资源包正被另一实例占用，未能获取 .tts.lock 锁", flush=True)
         return None, False
     except Exception:
         if f is not None:
@@ -62,6 +70,7 @@ def _acquire_pack_lock(pack_dir):
                 f.close()
             except Exception:
                 pass
+        print("[tts] 获取 .tts.lock 锁失败", flush=True)
         return None, False
 
 
@@ -332,7 +341,8 @@ class TTSManager:
         self._last_status = {}
 
     def _check_pack_lock(self):
-        if self._pack_locked:
+        # _pack_locked=True 表示本实例已持有锁，只有未持锁（被其它实例占用）才报错
+        if not self._pack_locked:
             raise TTSException("语音资源包正被另一个实例使用，请先关闭其它 Memo Superform 实例")
 
     @property
@@ -475,27 +485,27 @@ class TTSManager:
     def _shutdown_process(self):
         proc = self._proc
         self._proc = None
-        if proc is None:
-            return
         try:
-            # poll() 在进程句柄失效时（如解释器退出期间）可能抛 OSError[Errno 22]，整体兜底
-            if proc.poll() is not None:
-                return
-            try:
-                proc.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
-                proc.stdin.flush()
-                proc.wait(timeout=15)
-            except Exception:
+            if proc is not None:
+                # poll() 在进程句柄失效时（如解释器退出期间）可能抛 OSError[Errno 22]，整体兜底
+                if proc.poll() is None:
+                    try:
+                        proc.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
+                        proc.stdin.flush()
+                        proc.wait(timeout=15)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+        except Exception:
+            if proc is not None:
                 try:
                     proc.kill()
                 except Exception:
                     pass
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
         finally:
+            # 无论 proc 是否为 None 都必须释放资源包锁，避免句柄泄漏
             _release_pack_lock(self._lock_file)
             self._lock_file = None
 
@@ -600,8 +610,7 @@ class TTSManager:
 
     def shutdown(self):
         with self._cmd_lock:
-            if self._proc is not None and self._proc.poll() is None:
-                self._shutdown_process()
+            self._shutdown_process()
 
     def _resolve_voice_config(self, voice_name):
         pack = _pack_meta(self.pack_dir)
