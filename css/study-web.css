@@ -9,6 +9,10 @@
     overflow: hidden;
     border-radius: 12px;
     background: #fff;
+    /* 墨墨网页版是手机端设计(~375px)：限制宽度并居中，
+       避免在全宽磁贴里浮在中间留下大片空白 */
+    max-width: 480px;
+    margin: 0 auto;
 }
 
 .study-web-iframe {
