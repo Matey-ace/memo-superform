@@ -25,22 +25,10 @@ const StudyWeb = (function() {
             return createMockInstance(container);
         }
 
-        // Check if user already has a token (logged in)
-        var token = null;
-        try { token = localStorage.getItem('token'); } catch(e) {}
-
-        var iframeSrc;
-        if (token) {
-            // Already logged in - load SPA directly
-            iframeSrc = '/memo-tc/webstudy/app';
-        } else {
-            // Not logged in - load login page directly through proxy.
-            // This bypasses the SPA's own window.location.replace() redirect
-            // which is unreliable inside an iframe.
-            // After login, the callback redirects to the SPA with a token.
-            iframeSrc = '/memo-tc/study/api/v1/users/auth/login?return_url=' +
-                encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
-        }
+        // 一律先进入登录页，登录成功回调后再跳转到背单词 SPA：
+        // 直接带（可能已过期的）token 进 SPA 会跳过登录握手，导致登录状态检查失败。
+        var iframeSrc = '/memo-tc/study/api/v1/users/auth/login?return_url=' +
+            encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
 
         container.innerHTML =
             '<div class="study-web-container">' +
@@ -48,7 +36,7 @@ const StudyWeb = (function() {
                     'sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>' +
                 '<div class="study-web-loading">' +
                     '<div class="spinner"></div>' +
-                    '<p>' + (token ? '正在加载墨墨背单词...' : '正在跳转登录页...') + '</p>' +
+                    '<p>正在跳转登录页...</p>' +
                 '</div>' +
                 '<div class="study-web-actions" style="display:none">' +
                     '<button class="study-web-btn know" data-key="1">' +
