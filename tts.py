@@ -115,13 +115,18 @@ def _install_meta(pack_dir):
 
 
 def _venv_python(pack_dir):
-    return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
+    # Windows venv 解释器在 Scripts/python.exe，Linux/macOS 在 bin/python
+    if os.name == "nt":
+        return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
+    return os.path.join(pack_dir, ".venv311", "bin", "python")
 
 
 def _write_install_meta(pack_dir, source="ModelScope"):
     """重建 install.json（与 setup.ps1 写入的内容保持一致）。"""
     pack = _pack_meta(pack_dir) or {}
-    ffmpeg_exe = os.path.join(pack_dir, "ffmpeg", "bin", "ffmpeg.exe")
+    # Windows 下是 ffmpeg.exe，Linux/macOS 下是 ffmpeg
+    ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    ffmpeg_exe = os.path.join(pack_dir, "ffmpeg", "bin", ffmpeg_name)
     data = {
         "installed": True,
         "version": pack.get("version") or "1.0.0",
@@ -145,9 +150,9 @@ def _engine_ready(pack_dir):
             _write_install_meta(pack_dir)
             meta = _install_meta(pack_dir)
         else:
-            return False, "资源包尚未安装，请先运行 setup.bat 完成安装"
+            return False, "资源包尚未安装，请先运行安装脚本（Windows: setup.bat / Linux: setup.sh）完成安装"
     if not os.path.exists(_venv_python(pack_dir)):
-        return False, "未找到 .venv311 解释器，请重新运行 setup.bat"
+        return False, "未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat / Linux: setup.sh）"
     if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
         return False, "资源包缺少 tts_engine/worker_main.py，资源包不完整"
     return True, ""
@@ -287,7 +292,7 @@ class TTSManager:
     def _spawn(self):
         venv_py, worker_main = self._worker_paths()
         if not os.path.exists(venv_py):
-            raise TTSException("未找到 .venv311 解释器，请重新运行 setup.bat")
+            raise TTSException("未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat / Linux: setup.sh）")
         if not os.path.exists(worker_main):
             raise TTSException("资源包缺少 tts_engine/worker_main.py")
 

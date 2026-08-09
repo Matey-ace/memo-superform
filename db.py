@@ -16,20 +16,60 @@ def beijing_today():
 
 
 DB_NAME = "MemoSuperform"
-SERVER = r".\SQLEXPRESS"
-DRIVER = "ODBC Driver 17 for SQL Server"
+
+
+def _env(name, default):
+    return os.environ.get(name) or default
+
+
+def _default_server():
+    # Windows 默认命名实例 .\SQLEXPRESS；Linux 默认 localhost
+    return r".\SQLEXPRESS" if os.name == "nt" else "localhost"
+
+
+def _default_driver():
+    # 与 README / requirements-linux.txt 一致：Linux 默认 Driver 18，Windows 维持 17
+    return "ODBC Driver 17 for SQL Server" if os.name == "nt" else "ODBC Driver 18 for SQL Server"
+
+
+def _resolve_driver():
+    """优先用环境变量 MEMO_DB_DRIVER；其次平台默认；若未安装则回退到已装的 SQL Server 驱动。"""
+    drv = _env("MEMO_DB_DRIVER", _default_driver())
+    try:
+        installed = [d.lower() for d in pyodbc.drivers()]
+    except Exception:
+        return drv
+    if drv.lower() in installed:
+        return drv
+    for name in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server",
+                 "ODBC Driver 13 for SQL Server", "SQL Server Native Client 11.0"):
+        if name.lower() in installed:
+            return name
+    return drv
+
+
+SERVER = _env("MEMO_DB_SERVER", _default_server())
+DRIVER = _resolve_driver()
 BJ_TZ = timezone(timedelta(hours=8))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_PATH = os.path.join(BASE_DIR, "schema.sql")
 
 
+def _auth_part():
+    """认证参数：设置 MEMO_DB_USER 时用 SQL 账号认证（Linux 常用），否则用集成认证。"""
+    user = os.environ.get("MEMO_DB_USER")
+    if user:
+        return "UID={};PWD={};".format(user, os.environ.get("MEMO_DB_PASSWORD", ""))
+    return "Trusted_Connection=yes;"
+
+
 def _master_conn_str():
-    return f"Driver={{{DRIVER}}};Server={SERVER};Database=master;Trusted_Connection=yes;"
+    return f"Driver={{{DRIVER}}};Server={SERVER};Database=master;{_auth_part()}"
 
 
 def _db_conn_str():
-    return f"Driver={{{DRIVER}}};Server={SERVER};Database={DB_NAME};Trusted_Connection=yes;"
+    return f"Driver={{{DRIVER}}};Server={SERVER};Database={DB_NAME};{_auth_part()}"
 
 
 def get_connection(autocommit=True):

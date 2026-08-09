@@ -121,7 +121,7 @@ def show_message(title, msg):
 
 
 def choose_mode_interactive():
-    """弹出模式选择窗口；tkinter 不可用时回退控制台选择；再回退网页模式。"""
+    """弹出模式选择窗口；tkinter 不可用时回退控制台选择；再回退网页模式并给出提示。"""
     try:
         import tkinter as tk
 
@@ -174,8 +174,14 @@ def choose_mode_interactive():
         choice = input("请选择启动模式 [1=桌面, 2=网页, 回车=网页]: ").strip()
         if choice == "1":
             return "desktop"
+        return "web"
     except Exception:
         pass
+
+    # 既无窗口也无终端：明确提示后默认网页模式，避免静默降级
+    print("未检测到模式选择窗口/终端，默认以网页模式启动。")
+    print("如需桌面模式请运行: python launcher.py --mode desktop")
+    print("（安装 python3-tk 可恢复启动时的模式选择窗口）")
     return "web"
 
 

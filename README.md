@@ -59,6 +59,30 @@ python app.py
 
 > 智能复习推荐需要本地 SQL Server（Express 即可）。首次加载当日数据时会自动建库、保存快照并生成推荐；若数据库不可用，其余图表照常工作。
 
+## Linux 支持
+
+项目核心为纯 Python，**Web 模式在 Linux 上开箱即用**；桌面模式需要安装图形后端。
+
+### 方式三：Linux
+
+```bash
+# 1) 依赖（桌面模式需要；仅用 Web 模式可跳过）
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-linux.txt
+
+# 2) 启动（推荐用脚本）
+chmod +x launcher-linux.sh
+./launcher-linux.sh web        # 网页模式：自动打开浏览器
+./launcher-linux.sh desktop    # 桌面模式：pywebview 原生窗口
+```
+
+- 桌面模式（pywebview + Qt 后端）需要系统库：`libnss3 libxkbcommon libxcomposite libxdamage libasound2` 等（Ubuntu/Debian 通常 `sudo apt install libnss3 libxkbcommon0 libxcomposite1 libxdamage1 libasound2`）；`python3-tk` 仅无参数启动时的模式选择窗口需要（不装也能用 `./launcher-linux.sh web|desktop` 直接指定模式）。
+- 若在无桌面环境的服务器上运行，请用 Web 模式。
+- 智能复习推荐需 SQL Server：Linux 上安装 [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) 后即可连接。
+- 数据库连接可用环境变量覆盖：`MEMO_DB_SERVER`（默认 `localhost`）、`MEMO_DB_DRIVER`（默认 `ODBC Driver 18 for SQL Server`，未安装时自动回退到已装驱动）、`MEMO_DB_USER` / `MEMO_DB_PASSWORD`（Linux 用 SQL 账号认证时设置）。
+- 语音（GPT-SoVITS 资源包）在 Linux 上要求资源包使用 `.venv311/bin/python` 结构（已在 tts.py 中按平台自动适配）。
+- 打包：`bash build_linux.sh` 生成 `dist/MemoSuperform-Web` 与 `dist/MemoSuperform-Desktop` 两个可执行文件。
+
 ## 图表
 
 | 图表 | 说明 |
@@ -208,6 +232,30 @@ Runs as a native window (no browser needed); closing the window exits the app.
 - Click "Test connection" to verify; after saving, the data loads automatically.
 
 > Smart review recommendations require a local SQL Server (Express is fine). On the first load of the day it automatically creates the database, saves a snapshot, and generates recommendations; if the database is unavailable, the other charts still work normally.
+
+## Linux Support
+
+The core is pure Python, so **web mode works out of the box on Linux**; desktop mode needs a GUI backend.
+
+### Option 3: Linux
+
+```bash
+# 1) Dependencies (desktop mode only; skip if you only use web mode)
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-linux.txt
+
+# 2) Launch (prefer the script)
+chmod +x launcher-linux.sh
+./launcher-linux.sh web        # Web mode: opens the browser automatically
+./launcher-linux.sh desktop    # Desktop mode: native pywebview window
+```
+
+- Desktop mode (pywebview + Qt backend) needs system libraries such as `libnss3`, `libxkbcommon`, `libxcomposite`, `libxdamage`, and `libasound2` (Ubuntu/Debian: `sudo apt install libnss3 libxkbcommon0 libxcomposite1 libxdamage1 libasound2`); `python3-tk` is only needed for the mode-selection window when launching without arguments (you can still use `./launcher-linux.sh web|desktop` without it).
+- On a headless server, use web mode.
+- Smart review recommendations need SQL Server: on Linux, install the [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) to connect.
+- Database connection can be overridden with env vars: `MEMO_DB_SERVER` (default `localhost`), `MEMO_DB_DRIVER` (default `ODBC Driver 18 for SQL Server`, falls back to an installed driver if missing), and `MEMO_DB_USER` / `MEMO_DB_PASSWORD` (set them to use SQL authentication on Linux).
+- Voice (GPT-SoVITS pack) on Linux requires the pack's `.venv311/bin/python` layout (tts.py already adapts to the platform).
+- Packaging: run `bash build_linux.sh` to produce `dist/MemoSuperform-Web` and `dist/MemoSuperform-Desktop`.
 
 ## Charts
 
