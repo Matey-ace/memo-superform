@@ -61,7 +61,7 @@ const App = (function() {
             try {
                 const resp = await fetch('/api/app/set-default-mode', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                     body: JSON.stringify({ mode: mode })
                 });
                 const data = await resp.json();
@@ -87,7 +87,7 @@ const App = (function() {
             try {
                 const resp = await fetch('/api/app/relaunch', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                     body: JSON.stringify({ mode: mode })
                 });
                 const data = await resp.json();
@@ -476,7 +476,7 @@ const App = (function() {
             try {
                 const resp = await fetch('/api/tts/preload', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                     body: JSON.stringify({ voice: voiceSelect ? voiceSelect.value : 'sakiko' })
                 });
                 const data = await resp.json();

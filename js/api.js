@@ -475,13 +475,13 @@ const RecommendAPI = (function() {
         return resp.json();
     }
     async function markReviewed(id) {
-        const resp = await fetch('/api/recommendations/' + id + '/review', { method: 'POST' });
+        const resp = await fetch('/api/recommendations/' + id + '/review', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
         return resp.ok;
     }
     async function saveSnapshot(records, force) {
         const resp = await fetch('/api/snapshot', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
             body: JSON.stringify({ records: records, force: !!force })
         });
         return resp.json();

@@ -34,6 +34,58 @@ LANGUAGE_NUMBER_MAP = {
 # 单次合成超时（秒）。worker 卡死时强杀并重置引擎；可用环境变量调大。
 _SYNTH_TIMEOUT = float(os.environ.get("MEMO_TTS_SYNTH_TIMEOUT", "30") or 30)
 
+# 跨进程互斥锁：防止两个 Memo Superform 实例同时使用同一语音资源包
+def _acquire_pack_lock(pack_dir):
+    """占用资源包级文件锁。返回 (lock_file, acquired)。"""
+    lock_path = os.path.join(pack_dir, ".tts.lock")
+    f = None
+    try:
+        os.makedirs(pack_dir, exist_ok=True)
+        f = open(lock_path, "a+")
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f, True
+    except OSError:
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
+        return None, False
+    except Exception:
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
+        return None, False
+
+
+def _release_pack_lock(lock_file):
+    if lock_file is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+            try:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        lock_file.close()
+    except Exception:
+        pass
+
 
 class TTSException(Exception):
     """语音引擎相关的可读错误。"""
@@ -270,6 +322,7 @@ class TTSManager:
     def __init__(self, pack_dir, data_dir):
         self.pack_dir = pack_dir
         self.data_dir = data_dir
+        self._lock_file, self._pack_locked = _acquire_pack_lock(pack_dir)
         self._proc = None
         self._pending = {}
         self._pending_lock = threading.Lock()
@@ -277,6 +330,10 @@ class TTSManager:
         self._reader = None
         self._busy = False
         self._last_status = {}
+
+    def _check_pack_lock(self):
+        if self._pack_locked:
+            raise TTSException("语音资源包正被另一个实例使用，请先关闭其它 Memo Superform 实例")
 
     @property
     def is_busy(self):
@@ -358,6 +415,7 @@ class TTSManager:
                 })
 
     def _ensure_started(self):
+        self._check_pack_lock()
         if self._proc is None or self._proc.poll() is not None:
             self._spawn()
 
@@ -415,17 +473,31 @@ class TTSManager:
                 return self._send(command, timeout=timeout)
 
     def _shutdown_process(self):
-        if self._proc is not None and self._proc.poll() is None:
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        try:
+            # poll() 在进程句柄失效时（如解释器退出期间）可能抛 OSError[Errno 22]，整体兜底
+            if proc.poll() is not None:
+                return
             try:
-                self._proc.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
-                self._proc.stdin.flush()
-                self._proc.wait(timeout=15)
+                proc.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
+                proc.stdin.flush()
+                proc.wait(timeout=15)
             except Exception:
                 try:
-                    self._proc.kill()
+                    proc.kill()
                 except Exception:
                     pass
-        self._proc = None
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        finally:
+            _release_pack_lock(self._lock_file)
+            self._lock_file = None
 
     # ---------- 对外操作 ----------
 

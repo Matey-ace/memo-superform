@@ -10,7 +10,7 @@ recommender.py - 智能复习推荐引擎
   间隔天数 (最高 20): 距上次复习天数越久分越高，超过 20 天封顶
 """
 
-from datetime import date
+from datetime import date, datetime
 import db
 
 
@@ -144,9 +144,11 @@ def mark_reviewed(rec_id):
     conn = db.get_connection(autocommit=True)
     try:
         cur = conn.cursor()
+        # 北京时区时间戳（UTC+8，与全项目日期体系一致；替代 SQL GETDATE() 的服务器本地时间）
+        reviewed_at = datetime.now(db.BJ_TZ).replace(tzinfo=None)
         cur.execute(
-            "UPDATE recommendations SET status='reviewed', reviewed_at=GETDATE() WHERE id=?",
-            rec_id,
+            "UPDATE recommendations SET status='reviewed', reviewed_at=? WHERE id=?",
+            reviewed_at, rec_id,
         )
         return cur.rowcount
     finally:

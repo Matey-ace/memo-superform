@@ -52,7 +52,7 @@ var TTS = (function() {
         try {
             const resp = await fetch('/api/tts/speak', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 signal: controller.signal,
                 body: JSON.stringify({
                     text: text,
@@ -77,7 +77,7 @@ var TTS = (function() {
         try {
             const resp = await fetch(enabled ? '/api/tts/enable' : '/api/tts/disable', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 body: JSON.stringify({})
             });
             const data = await resp.json();

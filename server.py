@@ -534,6 +534,28 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 host = h
         return host in ('localhost', '127.0.0.1', '[::1]')
 
+    _FORBIDDEN_STATIC_FILES = {
+        'server.py', 'db.py', 'tts.py', 'recommender.py', 'launcher.py', 'app.py',
+        'schema.sql', 'release.ps1', 'build_linux.sh', 'launcher-linux.sh',
+        'requirements-linux.txt', 'requirements.txt',
+        'MemoSuperform.spec', 'MemoSuperform-Web.spec', 'MemoSuperform-Desktop.spec',
+        '_backup_pre-rewrite.bundle',
+    }
+
+    def _is_forbidden_static_path(self, path):
+        """静态服务安全：拒绝点文件(.git/.env)、_ 前缀私有文件、源码/配置与运行数据，
+        避免把项目根目录暴露给浏览器。"""
+        segs = [s for s in path.split('/') if s]
+        if not segs:
+            return False
+        if any(seg.startswith('.') or seg.startswith('_') for seg in segs):
+            return True
+        if segs[0] in self._FORBIDDEN_STATIC_FILES:
+            return True
+        if segs[0] == 'data':
+            return True
+        return False
+
     def _send_cors_headers(self):
         origin = (self.headers.get('Origin') or '').strip()
         if origin:
@@ -642,7 +664,23 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404, "Not Found")
             return
 
+        # 静态资源安全：不暴露项目根目录下的点文件/私有文件/源码
+        if self._is_forbidden_static_path(path):
+            self.send_error(404, "Not Found")
+            return
+
         super().do_GET()
+
+    def do_HEAD(self):
+        """HEAD 与 GET 同等做 Host 校验与静态安全过滤，避免绕过白名单。"""
+        if not self._is_allowed_host():
+            self.send_error(403, "Forbidden")
+            return
+        path = urlparse(self.path).path
+        if self._is_forbidden_static_path(path):
+            self.send_error(404, "Not Found")
+            return
+        super().do_HEAD()
 
     def do_POST(self):
         if not self._is_allowed_host():
@@ -700,6 +738,9 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 except urllib.error.HTTPError as e:
                     err_body = e.read().decode("utf-8") if e.fp else ""
                     self._send_json(e.code, {"error": err_body})
+                except urllib.error.URLError as e:
+                    # 上游不可达（DNS/连接/超时）应返回 502，而不是 500
+                    self._send_json(502, {"error": "AI 上游不可达: %s" % getattr(e, "reason", e)})
                 except Exception as e:
                     self._send_json(500, {"error": str(e)})
             except json.JSONDecodeError:
@@ -790,6 +831,10 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
     # ===================== /api/* POST =====================
     def _handle_api_post(self, path, parsed):
         try:
+            # 写接口 CSRF 防护：要求自定义头（跨域简单请求无法携带，
+            # 会触发 CORS 预检并被同源策略拦截）
+            if self.headers.get("X-Requested-With") != "XMLHttpRequest":
+                return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
             try:
                 body = self._read_json_body()
             except (json.JSONDecodeError, ValueError):
@@ -870,6 +915,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                         "summary": recommender.get_recommendation_summary(),
                     })
                 records = body.get("records", []) or []
+                if not isinstance(records, list):
+                    return self._send_json(400, {"error": "records 必须是数组"})
                 n = db.save_snapshot(records)
                 stats = db.compute_and_save_daily_stats()
                 cnt = recommender.generate_recommendations(30)
