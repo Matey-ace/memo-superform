@@ -22,6 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
+    icon='img/icon.ico',
     name='MemoSuperform-Web',
     debug=False,
     bootloader_ignore_signals=False,

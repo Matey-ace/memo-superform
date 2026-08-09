@@ -48,6 +48,7 @@ if ($conn) {
 # ---- 2. PyInstaller 打包 ----
 Write-Host "[2/6] PyInstaller 打包 exe..." -ForegroundColor Yellow
 $pyArgs = @("--noconfirm","--onefile","--name","MemoSuperform",
+    "--icon","img/icon.ico",
     "--add-data","index.html;.",
     "--add-data","css;css",
     "--add-data","js;js",

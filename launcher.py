@@ -71,6 +71,12 @@ def get_data_dir():
     return path
 
 
+def _res_path(name):
+    """打包为 exe 时资源在 _MEIPASS 解压目录，源码模式在项目根目录。"""
+    base = getattr(sys, "_MEIPASS", None) or get_runtime_root()
+    return os.path.join(base, name)
+
+
 def get_launcher_config_path():
     return os.path.join(get_data_dir(), "launcher.json")
 
@@ -128,6 +134,13 @@ def choose_mode_interactive():
         root = tk.Tk()
         root.title("Memo Superform")
         root.resizable(False, False)
+        # 窗口图标（可用则设置，不可用不影响）
+        try:
+            _ico = _res_path(os.path.join("img", "icon.ico"))
+            if os.path.exists(_ico):
+                root.iconbitmap(_ico)
+        except Exception:
+            pass
 
         var = tk.BooleanVar(value=True)
         result = {"mode": None}
@@ -222,6 +235,13 @@ def run_desktop(guard=None):
     time.sleep(0.5)
 
     import webview
+    _win_icon = None
+    _ico = _res_path(os.path.join("img", "icon.ico"))
+    _png = _res_path(os.path.join("img", "icon.png"))
+    if os.name == "nt" and os.path.exists(_ico):
+        _win_icon = _ico
+    elif os.path.exists(_png):
+        _win_icon = _png
     try:
         webview.create_window(
             "Memo Superform - 墨墨数据仪表盘",
@@ -230,6 +250,7 @@ def run_desktop(guard=None):
             height=820,
             min_size=(960, 640),
             text_select=False,
+            icon=_win_icon,
         )
         webview.start()
     finally:
