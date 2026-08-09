@@ -4,6 +4,18 @@
 // ==========================================
 
 const StudyWeb = (function() {
+    var loginPollTimer = null;
+
+    // 强制重新登录：清掉本地陈旧 token，回到登录页
+    function forceRelogin(iframe, loading, actions) {
+        try { localStorage.removeItem('token'); } catch(e) {}
+        try { localStorage.removeItem('maimemo_token'); } catch(e) {}
+        if (loading) loading.style.display = 'none';
+        if (actions) actions.style.display = 'none';
+        var loginUrl = '/memo-tc/study/api/v1/users/auth/login?return_url=' +
+            encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
+        if (iframe) iframe.src = loginUrl;
+    }
 
     function render(containerId) {
         var container = document.getElementById(containerId);
@@ -70,6 +82,13 @@ const StudyWeb = (function() {
             var url = '';
             try { url = iframe.contentWindow.location.href; } catch(e) {}
             syncIframeTheme();
+            // 轮询捕捉 SPA 异步的登录检查结果（加载后 precheck 才执行）
+            if (loginPollTimer) clearInterval(loginPollTimer);
+            var pollCount = 0;
+            loginPollTimer = setInterval(function() {
+                checkLoginState(iframe, loading, actions);
+                if (++pollCount > 12) { clearInterval(loginPollTimer); loginPollTimer = null; }
+            }, 2000);
 
             if (url.indexOf('/webstudy/app') >= 0 || url.indexOf('/memo-tc/webstudy/app') >= 0) {
                 // SPA loaded (either directly or after login callback)
@@ -155,11 +174,25 @@ const StudyWeb = (function() {
                                bodyText.indexOf('\u767b\u5f55\u58a8\u58a8') >= 0 ||
                                (doc.querySelector('input[type=password]') && !doc.querySelector('.study-web-iframe'));
 
+            // 登录检查失败（会话过期 / 令牌失效 / 上游异常）——给出重新登录入口
+            var hasLoginFailure = bodyText.indexOf('\u6682\u65f6\u65e0\u6cd5\u68c0\u67e5\u767b\u5f55\u72b6\u6001') >= 0;
+
             if (hasLoginForm) {
                 // 已在登录页，让用户在iframe里直接登录
                 loading.innerHTML = '<p style="font-size:13px;color:#888">\u8bf7\u5728\u4e0a\u65b9\u7a97\u53e3\u767b\u5f55\u58a8\u58a8\u8d26\u53f7</p>';
                 loading.style.display = 'block';
                 actions.style.display = 'none';
+            } else if (hasLoginFailure) {
+                loading.innerHTML =
+                    '<p style="font-size:13px;color:#e08585;margin:0 0 8px 0">\u767b\u5f55\u72b6\u6001\u68c0\u67e5\u5931\u8d25\uff0c\u4f1a\u8bdd\u53ef\u80fd\u5df2\u8fc7\u671f</p>' +
+                    '<button class="study-web-relogin" style="padding:6px 18px;border:none;border-radius:8px;' +
+                    'background:#e0658a;color:#fff;font-size:13px;cursor:pointer">\u91cd\u65b0\u767b\u5f55</button>';
+                loading.style.display = 'block';
+                actions.style.display = 'none';
+                var reloginBtn = loading.querySelector('.study-web-relogin');
+                if (reloginBtn) reloginBtn.addEventListener('click', function() {
+                    forceRelogin(iframe, loading, actions);
+                });
             }
         } catch(e) {
             // 跨域无法访问（不应该发生，因为通过代理是同源）
