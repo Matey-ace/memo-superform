@@ -12,8 +12,7 @@ const StudyWeb = (function() {
         try { localStorage.removeItem('maimemo_token'); } catch(e) {}
         if (loading) loading.style.display = 'none';
         if (actions) actions.style.display = 'none';
-        var loginUrl = '/memo-tc/study/api/v1/users/auth/login?return_url=' +
-            encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
+        var loginUrl = '/memo-www/home/login?continue=home/web_study';
         if (iframe) iframe.src = loginUrl;
     }
 
@@ -25,10 +24,9 @@ const StudyWeb = (function() {
             return createMockInstance(container);
         }
 
-        // 一律先进入登录页，登录成功回调后再跳转到背单词 SPA：
-        // 直接带（可能已过期的）token 进 SPA 会跳过登录握手，导致登录状态检查失败。
-        var iframeSrc = '/memo-tc/study/api/v1/users/auth/login?return_url=' +
-            encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
+        // 先进入墨墨网页版登录页（www.maimemo.com/home/login），登录后跳转到学习页：
+        // 直接带（可能已过期的）token 进学习页会跳过登录握手，导致登录状态检查失败。
+        var iframeSrc = '/memo-www/home/login?continue=home/web_study';
 
         container.innerHTML =
             '<div class="study-web-container">' +
@@ -78,13 +76,15 @@ const StudyWeb = (function() {
                 if (++pollCount > 12) { clearInterval(loginPollTimer); loginPollTimer = null; }
             }, 2000);
 
-            if (url.indexOf('/webstudy/app') >= 0 || url.indexOf('/memo-tc/webstudy/app') >= 0) {
-                // SPA loaded (either directly or after login callback)
+            if (url.indexOf('/webstudy/app') >= 0 || url.indexOf('/memo-tc/webstudy/app') >= 0 ||
+                url.indexOf('/memo-www/home/web_study') >= 0 || url.indexOf('/home/web_study') >= 0) {
+                // 学习页已加载（登录后跳转到达）
                 setTimeout(function() {
                     loading.style.display = 'none';
                     actions.style.display = 'flex';
                 }, 1500);
-            } else if (url.indexOf('/interaction/') >= 0 || url.indexOf('/memo-accounts/') >= 0) {
+            } else if (url.indexOf('/interaction/') >= 0 || url.indexOf('/memo-accounts/') >= 0 ||
+                       url.indexOf('/memo-www/home/login') >= 0 || url.indexOf('/home/login') >= 0) {
                 // Login page loaded - show login prompt
                 loading.innerHTML = '<p style="font-size:13px;color:#888">请在上方窗口登录墨墨账号</p>';
                 loading.style.display = 'block';
