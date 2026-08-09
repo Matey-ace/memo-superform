@@ -81,7 +81,7 @@ chmod +x launcher-linux.sh
 - 智能复习推荐需 SQL Server：Linux 上安装 [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) 后即可连接。
 - 数据库连接可用环境变量覆盖：`MEMO_DB_SERVER`（默认 `localhost`）、`MEMO_DB_DRIVER`（默认 `ODBC Driver 18 for SQL Server`，未安装时自动回退到已装驱动）、`MEMO_DB_USER` / `MEMO_DB_PASSWORD`（Linux 用 SQL 账号认证时设置）。
 - 语音（GPT-SoVITS 资源包）在 Linux 上要求资源包使用 `.venv311/bin/python` 结构（已在 tts.py 中按平台自动适配）。
-- 打包：`bash build_linux.sh` 生成 `dist/MemoSuperform-Web` 与 `dist/MemoSuperform-Desktop` 两个可执行文件。
+- 打包：`bash build_linux.sh` 生成单个 `dist/MemoSuperform` 可执行文件（与 Windows 版一致，启动时可选桌面/网页模式）。
 
 ## 图表
 
@@ -255,7 +255,7 @@ chmod +x launcher-linux.sh
 - Smart review recommendations need SQL Server: on Linux, install the [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) to connect.
 - Database connection can be overridden with env vars: `MEMO_DB_SERVER` (default `localhost`), `MEMO_DB_DRIVER` (default `ODBC Driver 18 for SQL Server`, falls back to an installed driver if missing), and `MEMO_DB_USER` / `MEMO_DB_PASSWORD` (set them to use SQL authentication on Linux).
 - Voice (GPT-SoVITS pack) on Linux requires the pack's `.venv311/bin/python` layout (tts.py already adapts to the platform).
-- Packaging: run `bash build_linux.sh` to produce `dist/MemoSuperform-Web` and `dist/MemoSuperform-Desktop`.
+- Packaging: run `bash build_linux.sh` to produce a single `dist/MemoSuperform` executable (same as the Windows version; choose desktop/web mode at launch).
 
 ## Charts
 
