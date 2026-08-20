@@ -484,7 +484,11 @@ const RecommendAPI = (function() {
             headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
             body: JSON.stringify({ records: records, force: !!force })
         });
-        return resp.json();
+        const data = await resp.json().catch(function() { return {}; });
+        if (!resp.ok || data.error) {
+            throw new Error(data.error || ('保存快照失败: ' + resp.status));
+        }
+        return data;
     }
       return { getToday: getToday, markReviewed: markReviewed, saveSnapshot: saveSnapshot,  };
 })();

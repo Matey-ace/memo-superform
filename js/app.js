@@ -11,8 +11,14 @@ const App = (function() {
     let countdownTimer = null;
     let nextRefreshTime = 0;
     let pendingRefresh = false;
+    const VALID_REFRESH_INTERVALS = [5, 10, 15, 30, 60];
     let autoRefreshEnabled = localStorage.getItem('auto_refresh_enabled') !== 'false';
     let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
+    if (!VALID_REFRESH_INTERVALS.includes(autoRefreshInterval)) autoRefreshInterval = 10;
+
+    function getTodayBeijing() {
+        return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    }
     
     function init() {
         setupSettingsPanel();
@@ -403,7 +409,8 @@ const App = (function() {
 
         const savedVoice = localStorage.getItem('tts_voice');
         if (savedVoice && voiceSelect) voiceSelect.value = savedVoice;
-        const savedSpeed = parseFloat(localStorage.getItem('tts_speed') || '1.0');
+        let savedSpeed = parseFloat(localStorage.getItem('tts_speed') || '1.0');
+        if (!Number.isFinite(savedSpeed) || savedSpeed < 0.5 || savedSpeed > 1.5) savedSpeed = 1.0;
         if (speedRange) speedRange.value = savedSpeed;
         if (speedValue) speedValue.textContent = savedSpeed.toFixed(1);
         if (autoRead) autoRead.checked = localStorage.getItem('tts_auto_read') === 'true';
@@ -640,7 +647,7 @@ const App = (function() {
             ChartManager.setRecords(records);
             // 每日首次自动上传快照并生成智能推荐
             try {
-                const _today = new Date().toLocaleDateString('sv-SE');
+                const _today = getTodayBeijing();
                 if (localStorage.getItem('memo_snapshot_date') !== _today) {
                     await RecommendAPI.saveSnapshot(records, false);
                     localStorage.setItem('memo_snapshot_date', _today);

@@ -28,6 +28,7 @@ const ChartManager = (function() {
     function toBeijingDate(isoString) {
         if (!isoString) return null;
         const date = new Date(isoString);
+        if (Number.isNaN(date.getTime())) return null;
         // 转为北京时间 (UTC+8)
         const beijingTime = date.getTime() + 8 * 60 * 60 * 1000;
         const beijingDate = new Date(beijingTime);
@@ -48,19 +49,20 @@ const ChartManager = (function() {
         const day = String(d.getUTCDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
     }
+
+    // 对 YYYY-MM-DD 做纯日历位移，不依赖运行机器的本地时区。
+    function shiftDateString(dateStr, deltaDays) {
+        const parts = dateStr.split('-').map(Number);
+        const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + deltaDays));
+        return d.toISOString().slice(0, 10);
+    }
     
     // 获取过去 N 天的日期数组
     function getDateRange(days) {
         const dates = [];
         const today = getTodayBeijing();
-        const baseDate = new Date(today + 'T00:00:00+08:00');
-        
         for (let i = days - 1; i >= 0; i--) {
-            const d = new Date(baseDate.getTime() - i * 24 * 60 * 60 * 1000);
-            const year = d.getFullYear();
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            dates.push(`${year}-${month}-${day}`);
+            dates.push(shiftDateString(today, -i));
         }
         return dates;
     }
@@ -155,21 +157,17 @@ const ChartManager = (function() {
 
         // 连续打卡天数（从今天往前数，今天没学则从昨天算）
         let streak = 0;
-        const cursor = new Date();
         const todayStr = getTodayBeijing();
+        let cursorStr = todayStr;
         if (dailyCount[todayStr] === 0) {
-            cursor.setDate(cursor.getDate() - 1);
+            cursorStr = shiftDateString(cursorStr, -1);
         }
         // 只在查看本月时计算连续打卡
-        if (formatMonth(cursor) === monthStr) {
+        if (cursorStr.slice(0, 7) === monthStr) {
             while (true) {
-                const y = cursor.getFullYear();
-                const m = String(cursor.getMonth() + 1).padStart(2, '0');
-                const d = String(cursor.getDate()).padStart(2, '0');
-                const ds = y + '-' + m + '-' + d;
-                if (dailyCount[ds] > 0) {
+                if (dailyCount[cursorStr] > 0) {
                     streak++;
-                    cursor.setDate(cursor.getDate() - 1);
+                    cursorStr = shiftDateString(cursorStr, -1);
                 } else {
                     break;
                 }
@@ -307,8 +305,7 @@ const ChartManager = (function() {
         const chart = echarts.init(document.getElementById(containerId));
 
         // 目标月份：options.month 或当前月
-        const today = new Date();
-        const currentMonth = formatMonth(today);
+        const currentMonth = getTodayBeijing().slice(0, 7);
         const targetMonth = options.month || currentMonth;
         const [ty, tm] = targetMonth.split('-').map(Number);
 
@@ -940,9 +937,9 @@ const ChartManager = (function() {
         for (const r of records) {
             const addDate = r.add_date;
             if (!addDate) continue;
-            const d = new Date(addDate);
-            if (isNaN(d.getTime())) continue;
-            const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+            const day = toBeijingDate(addDate);
+            if (!day) continue;
+            const key = day.slice(0, 7);
             monthMap[key] = (monthMap[key] || 0) + 1;
         }
 

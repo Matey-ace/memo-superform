@@ -22,17 +22,21 @@ var DiaryChart = (function () {
   function fmtCN(dateStr) {
     const p = dateStr.split('-');
     if (p.length !== 3) return dateStr;
-    const dt = new Date(+p[0], +p[1] - 1, +p[2]);
-    return p[1] + '月' + p[2] + '日 · 周' + WEEK[dt.getDay()];
+    const dt = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
+    return p[1] + '月' + p[2] + '日 · 周' + WEEK[dt.getUTCDay()];
+  }
+
+  function shiftDay(dateStr, delta) {
+    const p = dateStr.split('-').map(Number);
+    return new Date(Date.UTC(p[0], p[1] - 1, p[2] + delta)).toISOString().slice(0, 10);
   }
 
   // 最近 N 天日期（含今天）
   function range(n) {
     const out = [];
-    const now = new Date();
+    const today = toDay(new Date());
     for (let i = n - 1; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      out.push(toDay(d));
+      out.push(shiftDay(today, -i));
     }
     return out;
   }
@@ -64,13 +68,8 @@ var DiaryChart = (function () {
   const cap = 60;
   function pct(total) { return Math.min(100, Math.round(total / cap * 100)); }
 
-  let root = null;
-  let dayData = [];
-  let curIdx = 0;
-  let heartTimers = [];
-
   function heartChars() { return ['♥', '♡', '❤', '💗']; }
-  function spawnHearts(cardEl) {
+  function spawnHearts(cardEl, state) {
     const t = setInterval(function () {
       if (!cardEl || !document.contains(cardEl)) { clearInterval(t); return; }
       const h = document.createElement('span');
@@ -81,17 +80,17 @@ var DiaryChart = (function () {
       cardEl.appendChild(h);
       setTimeout(function () { h.remove(); }, 2600);
     }, 700);
-    heartTimers.push(t);
+    state.heartTimers.push(t);
   }
-  function clearHearts() {
-    heartTimers.forEach(clearInterval);
-    heartTimers = [];
+  function clearHearts(state) {
+    state.heartTimers.forEach(clearInterval);
+    state.heartTimers = [];
   }
 
   function stampHtml(s) { return '<span class="md-stamp ' + s.key + '">' + s.label + '</span>'; }
 
-  function buildList() {
-    const cards = dayData.map(function (d, i) {
+  function buildList(state) {
+    const cards = state.dayData.map(function (d, i) {
       const s = level(d.total);
       const empty = s.key === 'empty';
       return '<div class="md-day-card' + (empty ? ' empty' : '') + '" data-i="' + i + '">'
@@ -113,12 +112,12 @@ var DiaryChart = (function () {
       + '<div class="md-ruled"><div class="md-cards">' + cards + '</div></div>';
   }
 
-  function buildDetail(idx) {
-    const d = dayData[idx];
-    if (!d) return buildList();
+  function buildDetail(state, idx) {
+    const d = state.dayData[idx];
+    if (!d) return buildList(state);
     const s = level(d.total);
     const rate = d.total > 0 ? Math.round(d.correct / d.total * 100) : 0;
-    const dots = dayData.map(function (x, i) {
+    const dots = state.dayData.map(function (x, i) {
       if (level(x.total).key === 'empty') return '';
       return '<span class="md-dot' + (i === idx ? ' active' : '') + '" data-i="' + i + '"></span>';
     }).join('');
@@ -152,33 +151,33 @@ var DiaryChart = (function () {
       + '</div>';
   }
 
-  function refresh() {
-    if (!root) return;
-    root.classList.toggle('is-detail', curIdx >= 0);
-    const list = root.querySelector('.mydiary-list');
-    const detail = root.querySelector('.mydiary-detail');
-    if (list) list.innerHTML = curIdx < 0 ? buildList() : list.innerHTML;
-    if (detail) detail.innerHTML = curIdx >= 0 ? buildDetail(curIdx) : detail.innerHTML;
-    clearHearts();
+  function refresh(state) {
+    if (!state.root) return;
+    state.root.classList.toggle('is-detail', state.curIdx >= 0);
+    const list = state.root.querySelector('.mydiary-list');
+    const detail = state.root.querySelector('.mydiary-detail');
+    if (list) list.innerHTML = state.curIdx < 0 ? buildList(state) : list.innerHTML;
+    if (detail) detail.innerHTML = state.curIdx >= 0 ? buildDetail(state, state.curIdx) : detail.innerHTML;
+    clearHearts(state);
     // 给"爆肝"日卡片飘爱心
-    root.querySelectorAll('.md-day-card').forEach(function (c) {
+    state.root.querySelectorAll('.md-day-card').forEach(function (c) {
       const i = +c.dataset.i;
-      if (level(dayData[i].total).key === 'grind') spawnHearts(c);
+      if (level(state.dayData[i].total).key === 'grind') spawnHearts(c, state);
     });
-    if (curIdx >= 0 && level(dayData[curIdx].total).key === 'grind') {
-      const hero = root.querySelector('.md-hero');
-      if (hero) spawnHearts(hero);
+    if (state.curIdx >= 0 && level(state.dayData[state.curIdx].total).key === 'grind') {
+      const hero = state.root.querySelector('.md-hero');
+      if (hero) spawnHearts(hero, state);
     }
   }
 
-  function bind() {
-    root.addEventListener('click', function (e) {
+  function bind(state) {
+    state.root.addEventListener('click', function (e) {
       const card = e.target.closest('.md-day-card');
-      if (card) { curIdx = +card.dataset.i; refresh(); return; }
+      if (card) { state.curIdx = +card.dataset.i; refresh(state); return; }
       const back = e.target.closest('[data-back]');
-      if (back) { curIdx = -1; refresh(); return; }
+      if (back) { state.curIdx = -1; refresh(state); return; }
       const dot = e.target.closest('.md-dot');
-      if (dot) { curIdx = +dot.dataset.i; refresh(); }
+      if (dot) { state.curIdx = +dot.dataset.i; refresh(state); }
     });
   }
 
@@ -187,20 +186,23 @@ var DiaryChart = (function () {
     if (!container) return null;
     const days = (options && options.days) || 30;
     const records = (typeof ChartManager !== 'undefined' && ChartManager.getRecords) ? ChartManager.getRecords() : null;
-    dayData = aggregate(records, days);
-    curIdx = -1;
-    clearHearts();
+    const state = {
+      root: null,
+      dayData: aggregate(records, days),
+      curIdx: -1,
+      heartTimers: []
+    };
     container.innerHTML = '<div class="mydiary" id="' + containerId + '-diary">'
       + '<div class="mydiary-stage">'
       +   '<div class="mydiary-list"></div>'
       +   '<div class="mydiary-detail"></div>'
       + '</div>'
       + '</div>';
-    root = container.querySelector('.mydiary');
-    bind();
-    refresh();
+    state.root = container.querySelector('.mydiary');
+    bind(state);
+    refresh(state);
     return {
-      dispose: function () { clearHearts(); container.innerHTML = ''; root = null; },
+      dispose: function () { clearHearts(state); container.innerHTML = ''; state.root = null; },
       resize: function () {}
     };
   }

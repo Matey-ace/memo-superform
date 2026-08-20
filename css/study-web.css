@@ -18,57 +18,125 @@
     display: block;
 }
 
-/* ---- 底部操作按钮栏 ---- */
-.study-web-actions {
+/* ---- 手账模式专属：底部快捷判断笺 ---- */
+.study-web-actions[hidden],
+body:not(.notebook-mode) .study-web-actions {
+    display: none !important;
+    pointer-events: none;
+}
+
+body.notebook-mode .study-web-actions {
     position: absolute;
-    bottom: 10px;
+    bottom: 14px;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) rotate(-0.18deg);
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
     z-index: 100;
-    padding: 6px 10px;
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(8px);
-    border-radius: 14px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+    max-width: calc(100% - 28px);
+    padding: 12px 14px 10px;
+    background:
+        repeating-linear-gradient(0deg, transparent 0 23px, rgba(107, 181, 214, .12) 23px 24px),
+        rgba(253, 249, 240, .96);
+    border: 1px solid #dfd2c0;
+    border-radius: 8px 13px 9px 12px;
+    box-shadow: 0 7px 22px rgba(112, 88, 58, .18), 0 1px 0 rgba(255, 255, 255, .9) inset;
+    backdrop-filter: blur(7px);
+}
+
+body.notebook-mode .study-web-actions::before {
+    content: 'MEMORY NOTE';
+    position: absolute;
+    top: -9px;
+    left: 50%;
+    transform: translateX(-50%) rotate(1.4deg);
+    padding: 2px 12px 1px;
+    background: rgba(242, 160, 174, .52);
+    border-left: 1px dashed rgba(255, 255, 255, .78);
+    border-right: 1px dashed rgba(255, 255, 255, .78);
+    color: #8b5962;
+    font-family: 'M PLUS Rounded 1c', 'Microsoft YaHei', sans-serif;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 1.8px;
+    white-space: nowrap;
 }
 
 .study-web-btn {
-    padding: 8px 18px;
-    border: none;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 700;
+    --note-ink: #6f6253;
+    --note-edge: #ded2c2;
+    --note-tape: rgba(216, 207, 192, .62);
+    --note-turn: 0deg;
+    position: relative;
+    min-width: 76px;
+    padding: 9px 18px 7px;
+    border: 1px solid var(--note-edge);
+    border-radius: 5px 9px 6px 4px;
+    background:
+        radial-gradient(circle at 8px 8px, rgba(139, 115, 85, .08) 1px, transparent 1.3px) 0 0 / 15px 15px,
+        #fffdf9;
+    box-shadow: 0 3px 8px rgba(112, 88, 58, .11), 0 1px 0 #fff inset;
+    color: var(--note-ink);
+    font-family: 'M PLUS Rounded 1c', 'Microsoft YaHei', sans-serif;
+    font-size: 15px;
+    font-weight: 800;
     cursor: pointer;
-    color: #fff;
-    transition: all 0.12s ease;
+    transform: rotate(var(--note-turn));
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
     white-space: nowrap;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1px;
+    gap: 3px;
+}
+
+.study-web-btn::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    width: 28px;
+    height: 9px;
+    transform: translateX(-50%) rotate(-1.5deg);
+    background: var(--note-tape);
+    border-left: 1px dashed rgba(255, 255, 255, .72);
+    border-right: 1px dashed rgba(255, 255, 255, .72);
 }
 
 .study-web-btn .key-hint {
-    font-size: 10px;
-    opacity: 0.7;
-    font-weight: 400;
+    display: grid;
+    place-items: center;
+    width: 17px;
+    height: 17px;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    font-family: ui-monospace, 'Cascadia Mono', monospace;
+    font-size: 9px;
+    line-height: 1;
+    opacity: .72;
+    font-weight: 700;
 }
 
 .study-web-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    transform: translateY(-3px) rotate(0deg);
+    box-shadow: 0 7px 14px rgba(112, 88, 58, .18), 0 1px 0 #fff inset;
 }
 
 .study-web-btn:active {
-    transform: translateY(0);
+    transform: translateY(1px) scale(.96);
 }
 
-.study-web-btn.forget { background: linear-gradient(135deg, #ef5350, #e53935); }
-.study-web-btn.vague  { background: linear-gradient(135deg, #ffa726, #fb8c00); }
-.study-web-btn.know   { background: linear-gradient(135deg, #66bb6a, #43a047); }
-.study-web-btn.well   { background: linear-gradient(135deg, #42a5f5, #1e88e5); }
+.study-web-btn:focus-visible {
+    outline: 2px dashed var(--note-ink);
+    outline-offset: 3px;
+}
+
+.study-web-btn.know   { --note-ink: #55745f; --note-edge: #b9cdbd; --note-tape: rgba(151, 190, 162, .55); --note-turn: -1.1deg; }
+.study-web-btn.vague  { --note-ink: #9a742b; --note-edge: #e1ca93; --note-tape: rgba(240, 216, 144, .62); --note-turn: .7deg; }
+.study-web-btn.forget { --note-ink: #a34f62; --note-edge: #e4b7c1; --note-tape: rgba(242, 160, 174, .56); --note-turn: -.55deg; }
+.study-web-btn.well   { --note-ink: #467f99; --note-edge: #afd4e3; --note-tape: rgba(168, 216, 234, .62); --note-turn: 1deg; }
 
 /* ---- 加载提示 ---- */
 .study-web-loading {
@@ -168,5 +236,42 @@
 
 /* ---- 隐藏AI工具栏（背单词磁贴不需要） ---- */
 .tile:has(.study-web-container) .chart-toolbar {
+    display: none;
+}
+
+body.dark.notebook-mode .study-web-actions {
+    background:
+        repeating-linear-gradient(0deg, transparent 0 23px, rgba(168, 216, 234, .08) 23px 24px),
+        rgba(44, 39, 42, .95);
+    border-color: #665c56;
+    box-shadow: 0 7px 22px rgba(0, 0, 0, .38), 0 1px 0 rgba(255, 255, 255, .05) inset;
+}
+
+body.dark.notebook-mode .study-web-btn {
+    background:
+        radial-gradient(circle at 8px 8px, rgba(255, 255, 255, .05) 1px, transparent 1.3px) 0 0 / 15px 15px,
+        #393338;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, .28);
+}
+
+@media (max-width: 720px) {
+    body.notebook-mode .study-web-actions {
+        width: min(250px, calc(100% - 24px));
+        gap: 8px;
+        padding-inline: 10px;
+    }
+
+    .study-web-btn {
+        flex: 1 1 92px;
+        min-width: 0;
+        padding-inline: 12px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .study-web-btn { transition: none; }
+}
+/* ---- 背单词磁贴：完全移除覆盖层，z-index:0 仍会压住非定位 iframe ---- */
+.tile:has(.study-web-container)::before {
     display: none;
 }

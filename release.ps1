@@ -15,7 +15,7 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$Version,
-    [string]$Message = ""
+    [string]$Message = "统一 EXE：网页模式与桌面模式 + 手账页面修复"
 )
 
 $ErrorActionPreference = "Continue"  # avoid PS5.1 treating native stderr as a fatal error
@@ -47,19 +47,7 @@ if ($conn) {
 
 # ---- 2. PyInstaller 打包 ----
 Write-Host "[2/6] PyInstaller 打包 exe..." -ForegroundColor Yellow
-$pyArgs = @("--noconfirm","--onefile","--name","MemoSuperform",
-    "--icon","img/icon.ico",
-    "--add-data","index.html;.",
-    "--add-data","css;css",
-    "--add-data","js;js",
-    "--add-data","vendor;vendor",
-    "--add-data","index-anon.html;.",
-    "--add-data","img;img",
-    "--add-data","fonts;fonts",
-    "--add-data","LICENSE;.",
-    "--add-data","README.md;.",
-    "--add-data","schema.sql;.",
-    "launcher.py")
+$pyArgs = @("--noconfirm", "--clean", "MemoSuperform.spec")
 & python -m PyInstaller @pyArgs 2>&1 | Select-Object -Last 5
 if ($LASTEXITCODE -ne 0) { Write-Host "  打包失败!" -ForegroundColor Red; exit 1 }
 if (-not (Test-Path $exePath)) { Write-Host "  exe 未生成!" -ForegroundColor Red; exit 1 }

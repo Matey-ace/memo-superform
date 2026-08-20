@@ -26,7 +26,7 @@ import io
 import webbrowser
 import threading
 import traceback
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 # 修复 Windows 控制台编码问题
 if sys.platform == "win32":
@@ -161,8 +161,22 @@ except Exception as e:
     print("[db] 数据库不可用，推荐功能将禁用:", e)
 
 
+class MemoThreadingTCPServer(socketserver.ThreadingTCPServer):
+    """请求线程不阻塞退出，并避免 Windows 上多个进程同时占用同一端口。"""
+    # Unix 允许复用 TIME_WAIT 地址以便快速重启；Windows 的 SO_REUSEADDR
+    # 会允许两个监听进程绑定同一端口，因此必须改用独占地址。
+    allow_reuse_address = os.name != "nt"
+    allow_reuse_port = False
+    daemon_threads = True
+    block_on_close = False
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
-    allow_reuse_address = True
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
@@ -545,14 +559,24 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
     def _is_forbidden_static_path(self, path):
         """静态服务安全：拒绝点文件(.git/.env)、_ 前缀私有文件、源码/配置与运行数据，
         避免把项目根目录暴露给浏览器。"""
-        segs = [s for s in path.split('/') if s]
+        # SimpleHTTPRequestHandler.translate_path() 会先 URL 解码再访问磁盘；
+        # 过滤器必须在同一解码层级检查，否则 /server%2epy、/%2egit/ 等
+        # 编码路径会绕过白名单。Windows 文件系统还必须按大小写不敏感处理。
+        try:
+            decoded = unquote(path, errors='surrogatepass')
+        except (UnicodeDecodeError, ValueError):
+            return True
+        if '\x00' in decoded:
+            return True
+        segs = [s for s in decoded.replace('\\', '/').split('/') if s]
         if not segs:
             return False
-        if any(seg.startswith('.') or seg.startswith('_') for seg in segs):
+        lower_segs = [seg.lower() for seg in segs]
+        if any(seg.startswith('.') or seg.startswith('_') for seg in lower_segs):
             return True
-        if segs[0] in self._FORBIDDEN_STATIC_FILES:
+        if lower_segs[0] in {name.lower() for name in self._FORBIDDEN_STATIC_FILES}:
             return True
-        if segs[0] == 'data':
+        if lower_segs[0] == 'data':
             return True
         return False
 
@@ -798,6 +822,31 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             import tts
             return self._send_json(200, tts.get_status(TTS_PACK_DIR, DATA_DIR))
 
+        known_db_paths = {
+            "/api/recommendations/today",
+            "/api/stats/history",
+            "/api/db/status",
+        }
+        if path not in known_db_paths:
+            return self._send_json(404, {"error": "未知接口"})
+
+        # 参数错误和状态查询不应被可选数据库的离线状态掩盖。
+        if path == "/api/stats/history":
+            raw = parse_qs(parsed.query).get("days", ["30"])[0]
+            try:
+                days = int(raw)
+            except (ValueError, TypeError):
+                return self._send_json(400, {"error": "days must be an integer"})
+            if not (1 <= days <= 3650):
+                return self._send_json(400, {"error": "days out of range (1-3650)"})
+
+        if path == "/api/db/status" and not DB_READY:
+            return self._send_json(200, {
+                "db_ready": False,
+                "has_snapshot": False,
+                "has_recommendations": False,
+            })
+
         if not DB_READY:
             return self._send_json(503, {"error": "数据库未就绪"})
         try:
@@ -807,13 +856,6 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, {"recommendations": recs, "summary": summary})
 
             if path == "/api/stats/history":
-                raw = parse_qs(parsed.query).get("days", ["30"])[0]
-                try:
-                    days = int(raw)
-                except (ValueError, TypeError):
-                    return self._send_json(400, {"error": "days must be an integer"})
-                if not (1 <= days <= 3650):
-                    return self._send_json(400, {"error": "days out of range (1-3650)"})
                 return self._send_json(200, {"stats": db.get_history_stats(days)})
 
             if path == "/api/db/status":
@@ -823,7 +865,6 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                     "has_recommendations": db.has_today_recommendations(),
                 })
 
-            return self._send_json(404, {"error": "未知接口"})
         except Exception as e:
             traceback.print_exc()
             return self._send_json(500, {"error": str(e)})
@@ -903,20 +944,19 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 tts.shutdown(TTS_PACK_DIR, DATA_DIR)
                 return self._send_json(200, {"ok": True})
 
-            if not DB_READY:
-                return self._send_json(503, {"error": "数据库未就绪"})
-
             # 保存当日快照并生成推荐
             if path == "/api/snapshot":
+                records = body.get("records", []) or []
+                if not isinstance(records, list):
+                    return self._send_json(400, {"error": "records 必须是数组"})
+                if not DB_READY:
+                    return self._send_json(503, {"error": "数据库未就绪"})
                 force = bool(body.get("force"))
                 if not force and db.has_today_snapshot() and db.has_today_recommendations():
                     return self._send_json(200, {
                         "skipped": True,
                         "summary": recommender.get_recommendation_summary(),
                     })
-                records = body.get("records", []) or []
-                if not isinstance(records, list):
-                    return self._send_json(400, {"error": "records 必须是数组"})
                 n = db.save_snapshot(records)
                 stats = db.compute_and_save_daily_stats()
                 cnt = recommender.generate_recommendations(30)
@@ -931,7 +971,17 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             # 标记推荐为已复习: /api/recommendations/<id>/review
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[0] == "api" and parts[1] == "recommendations" and parts[3] == "review":
-                rc = recommender.mark_reviewed(parts[2])
+                try:
+                    rec_id = int(parts[2])
+                except (TypeError, ValueError):
+                    return self._send_json(400, {"error": "推荐 ID 必须是正整数"})
+                if rec_id <= 0:
+                    return self._send_json(400, {"error": "推荐 ID 必须是正整数"})
+                if not DB_READY:
+                    return self._send_json(503, {"error": "数据库未就绪"})
+                rc = recommender.mark_reviewed(rec_id)
+                if not rc:
+                    return self._send_json(404, {"error": "推荐记录不存在"})
                 return self._send_json(200, {"ok": True, "updated": rc})
 
             return self._send_json(404, {"error": "未知接口"})
@@ -1047,8 +1097,7 @@ def start_server(open_browser=True, block=True):
     """启动服务器。block=False 时在后台守护线程运行，返回 (httpd, url)。"""
     for port in [PORT, 8889, 8890, 3000, 5000]:
         try:
-            httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), MemoProxyHandler)
-            httpd.allow_reuse_address = True
+            httpd = MemoThreadingTCPServer(("127.0.0.1", port), MemoProxyHandler)
             url = "http://localhost:%d/index.html" % port
             print("")
             print("  ========================================")

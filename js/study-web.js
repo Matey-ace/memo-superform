@@ -9,6 +9,10 @@ const StudyWeb = (function() {
         var container = document.getElementById(containerId);
         if (!container) return null;
 
+        // 四个快捷判断按钮属于手账版专属交互。原版/桌面原版即使加载
+        // 同一份脚本也不创建可操作状态，避免样式或点击逻辑意外泄漏。
+        var notebookMode = document.body.classList.contains('notebook-mode');
+
         if (container.querySelector('.study-web-iframe')) {
             return createMockInstance(container);
         }
@@ -38,14 +42,14 @@ const StudyWeb = (function() {
                     '<div class="spinner"></div>' +
                     '<p>' + (token ? '正在加载墨墨背单词...' : '正在跳转登录页...') + '</p>' +
                 '</div>' +
-                '<div class="study-web-actions" style="display:none">' +
-                    '<button class="study-web-btn know" data-key="1">' +
+                '<div class="study-web-actions" hidden aria-label="手账模式快捷判断">' +
+                    '<button class="study-web-btn know" data-key="1" title="快捷键 1：认识">' +
                         '\u8ba4\u8bc6<span class="key-hint">1</span></button>' +
-                    '<button class="study-web-btn vague" data-key="2">' +
+                    '<button class="study-web-btn vague" data-key="2" title="快捷键 2：模糊">' +
                         '\u6a21\u7cca<span class="key-hint">2</span></button>' +
-                    '<button class="study-web-btn forget" data-key="3">' +
+                    '<button class="study-web-btn forget" data-key="3" title="快捷键 3：忘记">' +
                         '\u5fd8\u8bb0<span class="key-hint">3</span></button>' +
-                    '<button class="study-web-btn well" data-key="4">' +
+                    '<button class="study-web-btn well" data-key="4" title="快捷键 4：熟知">' +
                         '\u7194\u77e5<span class="key-hint">4</span></button>' +
                 '</div>' +
             '</div>';
@@ -75,25 +79,26 @@ const StudyWeb = (function() {
                 // SPA loaded (either directly or after login callback)
                 setTimeout(function() {
                     loading.style.display = 'none';
-                    actions.style.display = 'flex';
+                    actions.hidden = !notebookMode;
                 }, 1500);
             } else if (url.indexOf('/interaction/') >= 0 || url.indexOf('/memo-accounts/') >= 0) {
-                // Login page loaded - show login prompt
-                loading.innerHTML = '<p style="font-size:13px;color:#888">请在上方窗口登录墨墨账号</p>';
-                loading.style.display = 'block';
-                actions.style.display = 'none';
+                // 登录页已经可交互：必须撤掉全屏 loading，不能用提示层盖住表单。
+                loading.style.display = 'none';
+                actions.hidden = true;
             }
         });
 
         // Bind button events
-        container.querySelectorAll('.study-web-btn').forEach(function(btn) {
-            btn.addEventListener('click', function() {
-                var key = btn.getAttribute('data-key');
-                sendKey(iframe, key);
-                btn.style.transform = 'scale(0.92)';
-                setTimeout(function() { btn.style.transform = ''; }, 150);
+        if (notebookMode) {
+            container.querySelectorAll('.study-web-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var key = btn.getAttribute('data-key');
+                    sendKey(iframe, key);
+                    btn.style.transform = 'translateY(1px) scale(0.94)';
+                    setTimeout(function() { btn.style.transform = ''; }, 150);
+                });
             });
-        });
+        }
 
         return createMockInstance(container);
     }
@@ -156,10 +161,9 @@ const StudyWeb = (function() {
                                (doc.querySelector('input[type=password]') && !doc.querySelector('.study-web-iframe'));
 
             if (hasLoginForm) {
-                // 已在登录页，让用户在iframe里直接登录
-                loading.innerHTML = '<p style="font-size:13px;color:#888">\u8bf7\u5728\u4e0a\u65b9\u7a97\u53e3\u767b\u5f55\u58a8\u58a8\u8d26\u53f7</p>';
-                loading.style.display = 'block';
-                actions.style.display = 'none';
+                // 已在登录页，让用户直接操作 iframe 内的登录表单。
+                loading.style.display = 'none';
+                actions.hidden = true;
             }
         } catch(e) {
             // 跨域无法访问（不应该发生，因为通过代理是同源）

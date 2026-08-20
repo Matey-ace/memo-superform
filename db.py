@@ -137,19 +137,19 @@ def save_snapshot(records):
             _parse_date(r.get("next_study_date")),
             r.get("last_response"),
         ))
-    if not rows:
-        return 0
     conn = get_connection(autocommit=False)
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM study_records WHERE snapshot_date = ?", today)
-        sql = (
-            "INSERT INTO study_records "
-            "(snapshot_date, word, definition, add_date, last_study_date, next_study_date, last_response) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        cur.fast_executemany = True
-        cur.executemany(sql, rows)
+        # 空数组同样代表一次有效快照：必须清除当天旧数据，不能静默保留陈旧记录。
+        if rows:
+            sql = (
+                "INSERT INTO study_records "
+                "(snapshot_date, word, definition, add_date, last_study_date, next_study_date, last_response) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )
+            cur.fast_executemany = True
+            cur.executemany(sql, rows)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -233,7 +233,8 @@ def get_history_stats(days=30):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        start = beijing_today() - timedelta(days=days)
+        # 含今天共 days 个自然日；减 days 会多查询一天。
+        start = beijing_today() - timedelta(days=days - 1)
         cur.execute(
             """
             SELECT stat_date, total_words, new_words, reviewed_words,
@@ -297,7 +298,7 @@ def _parse_date(v):
         if n > 10 ** 12:
             n //= 1000
         try:
-            return datetime.utcfromtimestamp(n).replace(tzinfo=timezone.utc).astimezone(BJ_TZ).date()
+            return datetime.fromtimestamp(n, tz=timezone.utc).astimezone(BJ_TZ).date()
         except Exception:
             return None
     iso = s.replace("Z", "+00:00")

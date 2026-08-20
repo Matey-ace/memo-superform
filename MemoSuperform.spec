@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+# 统一 Windows 入口：launcher.py 负责网页模式与桌面模式的选择和切换。
 
 
 a = Analysis(

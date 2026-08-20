@@ -18,6 +18,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import webbrowser
 
 
 _ACTIVE_GUARD = None
@@ -116,6 +118,32 @@ def acquire_single_instance(port=8891):
     except OSError:
         _log("single instance lock DENIED (port %d)" % port)
         return None
+
+
+def find_running_app_url(timeout=0.35):
+    """寻找已启动的 Memo 服务；用于重复启动网页模式时重新打开页面。"""
+    for port in (8888, 8889, 8890, 3000, 5000):
+        api_url = "http://127.0.0.1:%d/api/app/current-mode" % port
+        try:
+            with urllib.request.urlopen(api_url, timeout=timeout) as response:
+                if response.status != 200:
+                    continue
+                payload = json.loads(response.read().decode("utf-8"))
+            if payload.get("mode") in ("web", "desktop") and "data_dir" in payload:
+                return "http://localhost:%d/index.html" % port
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def reopen_running_web_app():
+    """若已有实例正在提供网页，则把浏览器重新带回该实例。"""
+    url = find_running_app_url()
+    if not url:
+        return False
+    opened = bool(webbrowser.open(url))
+    _log("existing instance reopened: %s opened=%s" % (url, opened))
+    return opened
 
 
 def show_message(title, msg):
@@ -231,7 +259,8 @@ def run_desktop(guard=None):
     _log("server started: %s" % result[1])
     httpd, url = result
     # 给桌面窗口 URL 加版本参数，强制 WebView 拉取最新页面，避免陈旧缓存
-    url = url + "?v=40"
+    # 与当前静态入口版本同步，避免 WebView 继续命中旧版 index.html。
+    url = url + "?v=45"
     time.sleep(0.5)
 
     import webview
@@ -314,6 +343,8 @@ def main(argv=None):
 
     guard = acquire_single_instance()
     if guard is None:
+        if mode == "web" and reopen_running_web_app():
+            return 0
         show_message("Memo Superform", "Memo Superform 已经在运行中。")
         return 0
     _set_guard(guard)

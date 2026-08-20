@@ -124,7 +124,7 @@ def _state_path(data_dir):
 
 
 def _coerce_speed(value):
-    """speed 仅接受正有限数字（或可转换的数字字符串），否则回退 1.0。"""
+    """speed 仅接受前端支持的 0.5-1.5 倍速，否则回退 1.0。"""
     if isinstance(value, bool):
         return 1.0
     if isinstance(value, (int, float)):
@@ -136,7 +136,7 @@ def _coerce_speed(value):
             return 1.0
     else:
         return 1.0
-    if not math.isfinite(number) or number <= 0:
+    if not math.isfinite(number) or not (0.5 <= number <= 1.5):
         return 1.0
     return number
 
@@ -318,7 +318,9 @@ def clean_text(text):
     cleaned = re.sub(r"[\[\]【】]", "", cleaned)
     cleaned = cleaned.strip()
     cleaned = re.sub(r"^[^A-Za-z0-9\u3040-\u30FF\u4E00-\u9FFF]+", "", cleaned)
-    cleaned = cleaned.replace(" ", "")
+    # 保留英文单词之间的边界；直接删除空格会把 "hello world" 合并成
+    # "helloworld"，导致英文和中英混合朗读明显错误。
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     cleaned = cleaned.replace("...", "，")
     if not cleaned or re.fullmatch(r"[\W_]+", cleaned):
         raise TTSException("文本为空或无法合成语音")
@@ -724,7 +726,7 @@ def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None):
     cleaned = clean_text(text)
     voice_name = voice or state.get("voice") or "sakiko"
     language = language or state.get("language") or "中文"
-    speed = speed if speed is not None else state.get("speed") or 1.0
+    speed = _coerce_speed(speed if speed is not None else state.get("speed"))
     manager = _get_manager(pack_dir, data_dir)
     if manager.is_busy:
         raise TTSException("正在合成中，请稍候")

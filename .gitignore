@@ -35,3 +35,11 @@ _*.js
 
 # 本地重写前的 git 备份包（52MB，不入库）
 _backup_pre-rewrite.bundle
+
+# 审计、回滚与本地发布验证产物
+_verification/
+ROLLBACK.sh
+VERIFICATION.txt
+icon-anon.diff.txt
+img/icon-anon.ico
+img/icon-anon.png
