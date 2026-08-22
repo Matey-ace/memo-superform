@@ -115,12 +115,30 @@ html.memo-notebook .rev-top-stats {
     font-family: 'M PLUS Rounded 1c', sans-serif;
 }
 
+/* Keep Maimemo's native top actions reachable.  The three-dot action opens
+   the note/example-sentence editing commands, so theme layers must never
+   make it transparent or swallow its pointer events. */
+html.memo-notebook #rev-top-menu,
+html.memo-notebook .rev-top-stats .rev-search,
+html.memo-notebook .rev-top-stats .rev-shortcut {
+    position: relative;
+    z-index: 4;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
 html.memo-notebook .rev-top-stats .back,
 html.memo-notebook .rev-shortcut,
 html.memo-notebook .rev-search {
-    border-radius: 50%;
+    border: 1px dashed rgba(232, 207, 198, .9);
+    border-radius: 46% 54% 48% 52%;
+    background:
+        radial-gradient(circle at 25% 22%, rgba(255,255,255,.9) 0 12%, transparent 13%),
+        rgba(255, 250, 253, .78);
+    box-shadow: 0 .07rem .16rem rgba(139, 115, 85, .12), 0 1px 0 #fff inset;
     color: var(--memo-ink-mid);
-    transition: color .18s ease, background-color .18s ease, transform .18s ease;
+    transition: color .18s ease, background-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
 
 html.memo-notebook .rev-top-stats .back:hover,
@@ -128,7 +146,15 @@ html.memo-notebook .rev-shortcut:hover,
 html.memo-notebook .rev-search:hover {
     background: var(--memo-rose-pale);
     color: var(--memo-rose-deep);
-    transform: translateY(-1px);
+    box-shadow: 0 .1rem .22rem rgba(232, 120, 138, .18), 0 1px 0 #fff inset;
+    transform: translateY(-1px) rotate(-2deg);
+}
+
+html.memo-notebook .rev-top-stats .back:focus-visible,
+html.memo-notebook .rev-shortcut:focus-visible,
+html.memo-notebook .rev-search:focus-visible {
+    outline: 2px dashed var(--memo-rose-deep);
+    outline-offset: 2px;
 }
 
 html.memo-notebook .rev-top .spelling {

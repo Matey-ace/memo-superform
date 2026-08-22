@@ -123,23 +123,60 @@ body.notebook-mode .study-web-actions::before {
 
 body.notebook-mode .study-shortcut-toggle {
     position: absolute;
-    right: 14px;
-    top: 14px;
+    right: 0;
+    top: 50%;
     z-index: 105;
-    padding: 7px 11px;
-    border: 1px solid #e8cfc6;
-    border-radius: 999px;
-    background: rgba(255, 253, 254, .92);
+    min-height: 94px;
+    padding: 17px 8px 12px;
+    overflow: visible;
+    border: 1px dashed #e8cfc6;
+    border-right: 0;
+    border-radius: 15px 0 0 10px;
+    background:
+        repeating-linear-gradient(0deg, transparent 0 22px, rgba(107, 181, 214, .11) 22px 23px),
+        radial-gradient(circle at 7px 7px, rgba(139, 115, 85, .07) 1px, transparent 1.3px) 0 0 / 15px 15px,
+        rgba(255, 253, 249, .97);
     color: #7a6650;
-    font: 700 12px 'M PLUS Rounded 1c', sans-serif;
+    font: 800 12px 'M PLUS Rounded 1c', 'Microsoft YaHei', sans-serif;
+    writing-mode: vertical-rl;
+    letter-spacing: 2px;
     cursor: pointer;
-    box-shadow: 0 3px 10px rgba(139, 115, 85, .14);
+    box-shadow: -4px 6px 14px rgba(139, 115, 85, .16), 0 1px 0 #fff inset;
+    transform: translateY(-50%) rotate(-.7deg);
+    transition: color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+body.notebook-mode .study-shortcut-toggle::before {
+    content: 'KEYS';
+    position: absolute;
+    top: -7px;
+    left: 50%;
+    padding: 2px 5px 1px;
+    transform: translateX(-50%) rotate(2deg);
+    border-inline: 1px dashed rgba(255, 255, 255, .76);
+    background: rgba(255, 183, 197, .7);
+    color: #8b5962;
+    font: 800 7px/1 'M PLUS Rounded 1c', sans-serif;
+    letter-spacing: .8px;
+    writing-mode: horizontal-tb;
+}
+
+body.notebook-mode .study-shortcut-toggle:hover,
+body.notebook-mode .study-shortcut-toggle:focus-visible {
+    color: #e8788a;
+    box-shadow: -6px 8px 17px rgba(139, 115, 85, .2), 0 1px 0 #fff inset;
+    transform: translateY(-50%) translateX(-2px) rotate(0deg);
+}
+
+body.notebook-mode .study-shortcut-toggle:focus-visible {
+    outline: 2px dashed #e8788a;
+    outline-offset: 3px;
 }
 
 body.notebook-mode .study-shortcut-panel {
     position: absolute;
-    right: 14px;
-    top: 52px;
+    right: 38px;
+    top: 50%;
     z-index: 110;
     width: min(286px, calc(100% - 28px));
     max-height: calc(100% - 66px);
@@ -154,6 +191,7 @@ body.notebook-mode .study-shortcut-panel {
     box-shadow: 0 10px 36px rgba(139, 115, 85, .22);
     color: #4a3728;
     font: 12px 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+    transform: translateY(-50%);
 }
 .study-shortcut-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; font:700 15px 'Noto Serif SC', 'Microsoft YaHei', serif; letter-spacing:.8px; }
 .study-shortcut-head button { width:26px; height:26px; border:0; border-radius:50%; background:transparent; font-size:21px; line-height:1; cursor:pointer; color:#a89880; }
@@ -327,12 +365,12 @@ body.dark.notebook-mode .study-shortcut-panel input { background: rgba(30, 25, 2
     }
 
     body.notebook-mode .study-shortcut-panel {
-        top: 48px;
-        right: 10px;
+        top: 50%;
+        right: 34px;
         width: min(286px, calc(100% - 20px));
     }
 
-    body.notebook-mode .study-shortcut-toggle { top: 10px; right: 10px; }
+    body.notebook-mode .study-shortcut-toggle { right: 0; top: 50%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
