@@ -111,6 +111,25 @@ MEMO_DARK_JS = (
     '})();</script>'
 )
 
+# The proxied study SPA stays visually untouched unless it is hosted by the
+# anon notebook page.  Keeping the skin in a standalone stylesheet avoids
+# patching Maimemo's hashed bundles and lets upstream application updates keep
+# their original behavior.
+MEMO_NOTEBOOK_SKIN = (
+    '<link id="memo-notebook-fonts" rel="stylesheet" href="/css/fonts.css?v=40">'
+    '<link id="memo-notebook-skin" rel="stylesheet" href="/css/maimemo-notebook.css?v=20260822">'
+    '<script>(function(){'
+    'function notebookEnabled(){'
+    'try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")}catch(e){return false}'
+    '}'
+    'function syncMemoNotebook(){document.documentElement.classList.toggle("memo-notebook",notebookEnabled())}'
+    'syncMemoNotebook();'
+    'try{if(window.parent!==window){new MutationObserver(syncMemoNotebook).observe(window.parent.document.body,{attributes:true,attributeFilter:["class"]})}}catch(e){}'
+    'window.addEventListener("pageshow",syncMemoNotebook);'
+    'setInterval(syncMemoNotebook,1000);'
+    '})();</script>'
+)
+
 # 墨墨网页版自带快捷键系统（localStorage: shortcut_settings）。
 # 给 START_SPELLING（开始拼写，聚焦输入框）绑定空格键，并把“显示答案”让位到 S 键，
 # 这样背单词时按一下空格即可直接开始输入，无需再用鼠标点击输入框。
@@ -320,11 +339,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             html = re.sub(r'(<script[^>]*src=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             html = re.sub(r'(<link[^>]*href=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             if '<head>' in html:
-                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_KEYS_JS, 1)
+                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_NOTEBOOK_SKIN + MEMO_STUDY_KEYS_JS, 1)
             elif '<head ' in html:
-                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_KEYS_JS + '<head ', 1)
+                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_NOTEBOOK_SKIN + MEMO_STUDY_KEYS_JS + '<head ', 1)
             else:
-                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_KEYS_JS + html
+                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_NOTEBOOK_SKIN + MEMO_STUDY_KEYS_JS + html
             resp_body = html.encode('utf-8')
         else:
             resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)

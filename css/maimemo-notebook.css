@@ -1,0 +1,502 @@
+/* Memo Superform · 墨墨背词学习页手账皮肤
+   仅在注入脚本确认父页面为 notebook-mode 时激活。 */
+
+html.memo-notebook {
+    --memo-rose: #ff8899;
+    --memo-rose-deep: #e8788a;
+    --memo-rose-pale: #fff0f3;
+    --memo-sky: #87ceeb;
+    --memo-sky-deep: #6bb5d6;
+    --memo-mint: #a8dbc5;
+    --memo-gold: #d4a843;
+    --memo-paper: #fffdf9;
+    --memo-paper-strong: #fffafd;
+    --memo-canvas: #f6efe9;
+    --memo-ink: #4a3728;
+    --memo-ink-mid: #7a6650;
+    --memo-ink-light: #a89880;
+    --memo-line: #f0dfd9;
+    --memo-line-strong: #e8cfc6;
+    --memo-shadow: 0 .18rem .62rem rgba(139, 115, 85, .14);
+    --memo-shadow-strong: 0 .3rem .9rem rgba(139, 115, 85, .2);
+
+    --text-color-primary: var(--memo-ink);
+    --text-color-secondary: var(--memo-ink-mid);
+    --text-color-title: var(--memo-ink);
+    --bg-color-primary: var(--memo-paper);
+    --bg-color-secondary: var(--memo-rose-pale);
+    --bg-color-review: transparent;
+    --bg-color-group-line: transparent;
+    --divider-color: var(--memo-line);
+    --border-color: var(--memo-line-strong);
+    --popup-background-color: var(--memo-paper-strong);
+}
+
+html.memo-notebook,
+html.memo-notebook body {
+    background-color: var(--memo-canvas) !important;
+    background-image:
+        radial-gradient(25rem 11rem at 88% -4%, rgba(255, 183, 197, .22), transparent 62%),
+        radial-gradient(22rem 12rem at 4% 105%, rgba(135, 206, 235, .2), transparent 62%),
+        linear-gradient(rgba(122, 102, 80, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(122, 102, 80, .045) 1px, transparent 1px) !important;
+    background-size: auto, auto, .6rem .6rem, .6rem .6rem !important;
+    color: var(--memo-ink) !important;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif !important;
+}
+
+html.memo-notebook *,
+html.memo-notebook *::before,
+html.memo-notebook *::after {
+    box-sizing: border-box;
+}
+
+/* 主学习画布 */
+html.memo-notebook .rev-root {
+    position: relative;
+    isolation: isolate;
+    width: min(100%, 24rem);
+    margin: 0 auto;
+    background: transparent !important;
+    color: var(--memo-ink);
+}
+
+html.memo-notebook .rev-root::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: linear-gradient(115deg, rgba(255,255,255,.38), transparent 34% 68%, rgba(255,255,255,.2));
+}
+
+/* 顶部主单词卡 */
+html.memo-notebook .rev-top {
+    position: relative;
+    flex: 0 0 auto;
+    margin: .35rem .42rem .16rem;
+    overflow: visible;
+    border: 1px solid var(--memo-line-strong);
+    border-radius: .48rem .28rem .52rem .34rem;
+    background:
+        repeating-linear-gradient(0deg, transparent 0 .62rem, rgba(107, 181, 214, .09) .62rem .645rem),
+        rgba(255, 253, 249, .97) !important;
+    box-shadow: var(--memo-shadow-strong);
+    color: var(--memo-ink) !important;
+    transform: rotate(-.08deg);
+}
+
+html.memo-notebook .rev-top::before {
+    content: 'TODAY\2019S WORD';
+    position: absolute;
+    z-index: 2;
+    top: -.23rem;
+    left: 50%;
+    min-width: 2.5rem;
+    padding: .045rem .32rem;
+    transform: translateX(-50%) rotate(1.2deg);
+    border-inline: 1px dashed rgba(255,255,255,.7);
+    background: rgba(255, 183, 197, .58);
+    color: #8b5962;
+    font-family: 'M PLUS Rounded 1c', sans-serif;
+    font-size: .2rem;
+    font-weight: 800;
+    letter-spacing: .055rem;
+    text-align: center;
+    white-space: nowrap;
+}
+
+html.memo-notebook .rev-top-stats {
+    min-height: 1rem;
+    padding: .28rem .44rem .05rem;
+    border-bottom: 1px dashed var(--memo-line);
+    color: var(--memo-ink-mid) !important;
+    opacity: 1;
+    font-family: 'M PLUS Rounded 1c', sans-serif;
+}
+
+html.memo-notebook .rev-top-stats .back,
+html.memo-notebook .rev-shortcut,
+html.memo-notebook .rev-search {
+    border-radius: 50%;
+    color: var(--memo-ink-mid);
+    transition: color .18s ease, background-color .18s ease, transform .18s ease;
+}
+
+html.memo-notebook .rev-top-stats .back:hover,
+html.memo-notebook .rev-shortcut:hover,
+html.memo-notebook .rev-search:hover {
+    background: var(--memo-rose-pale);
+    color: var(--memo-rose-deep);
+    transform: translateY(-1px);
+}
+
+html.memo-notebook .rev-top .spelling {
+    margin: .12rem 0 .1rem;
+    padding: 0 .55rem;
+    color: var(--memo-ink) !important;
+    font-family: 'Noto Serif SC', Georgia, serif;
+    font-size: 1.08rem;
+    font-weight: 700;
+    letter-spacing: .018rem;
+    text-shadow: 0 1px 0 #fff;
+}
+
+html.memo-notebook .rev-top > .phonetic {
+    padding: 0 .55rem .34rem;
+    color: var(--memo-ink-mid) !important;
+    font-family: 'M PLUS Rounded 1c', sans-serif;
+}
+
+html.memo-notebook .rev-top .phonetic .accent {
+    border: 1px solid rgba(107, 181, 214, .32);
+    border-radius: 999px;
+    background: rgba(135, 206, 235, .17) !important;
+    color: #467f99 !important;
+}
+
+html.memo-notebook .rev-top .phonetic .phonetic {
+    color: var(--memo-ink-mid);
+}
+
+html.memo-notebook .rev-top .interp-ctn {
+    margin: 0 .2rem .18rem;
+    padding: .28rem .38rem;
+    border: 1px dashed rgba(107, 181, 214, .32) !important;
+    border-radius: .2rem .32rem .22rem .28rem;
+    background: rgba(234, 246, 253, .68);
+    color: var(--memo-ink) !important;
+    font-family: 'Noto Serif SC', 'Noto Sans SC', serif;
+    line-height: 1.55;
+}
+
+html.memo-notebook .rev-top .spelling-hint {
+    margin: .32rem .44rem .4rem;
+    padding: .22rem .32rem;
+    border: 1px dashed var(--memo-line-strong);
+    border-radius: .28rem .18rem .3rem .2rem;
+    background: rgba(255, 240, 243, .72) !important;
+    color: var(--memo-ink-mid) !important;
+    opacity: 1;
+}
+
+/* 滚动正文：各区块成为可阅读的便签 */
+html.memo-notebook .rev-scroller {
+    padding: .12rem .42rem 4.6rem;
+    scrollbar-color: rgba(232, 120, 138, .45) transparent;
+    scrollbar-width: thin;
+}
+
+html.memo-notebook .rev-content-blank {
+    height: .2rem;
+    background: transparent !important;
+}
+
+html.memo-notebook .rev-content-header {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    width: auto;
+    margin: .2rem 0 -.08rem .28rem;
+    padding: .08rem .28rem;
+    border: 0 !important;
+    border-radius: .12rem .18rem .08rem .16rem;
+    background: rgba(255, 183, 197, .68);
+    color: #8b5962 !important;
+    font-family: 'M PLUS Rounded 1c', sans-serif;
+    font-size: .34rem;
+    font-weight: 800;
+    letter-spacing: .035rem;
+    line-height: .5rem;
+    transform: rotate(-.5deg);
+}
+
+html.memo-notebook .rev-content-container {
+    margin: 0 0 .22rem;
+    padding: .45rem .5rem .28rem;
+    border: 1px solid var(--memo-line);
+    border-radius: .26rem .42rem .3rem .36rem;
+    background:
+        repeating-linear-gradient(0deg, transparent 0 .66rem, rgba(122, 102, 80, .045) .66rem .685rem),
+        rgba(255, 253, 254, .94);
+    box-shadow: var(--memo-shadow);
+    color: var(--memo-ink);
+}
+
+html.memo-notebook .rev-content-container:nth-of-type(even) {
+    transform: rotate(.05deg);
+}
+
+html.memo-notebook .phrase-root {
+    padding: .06rem .08rem .08rem;
+    border-bottom: 1px dashed var(--memo-line);
+}
+
+html.memo-notebook .phrase-root:last-child {
+    border-bottom: 0;
+}
+
+html.memo-notebook .phrase-phrase,
+html.memo-notebook .phrase-interpretation {
+    color: var(--memo-ink) !important;
+    font-family: 'Noto Serif SC', 'Noto Sans SC', serif;
+    line-height: 1.65;
+}
+
+html.memo-notebook .phrase-interpretation {
+    color: var(--memo-ink-mid) !important;
+}
+
+html.memo-notebook .phrase-hl {
+    color: var(--memo-rose-deep) !important;
+    text-decoration-color: rgba(232, 120, 138, .45) !important;
+}
+
+html.memo-notebook .phrase-play-btn {
+    display: inline-grid;
+    place-items: center;
+    width: .68rem;
+    height: .68rem;
+    border: 1px solid var(--memo-line-strong);
+    border-radius: 50%;
+    background: rgba(255,255,255,.78);
+    color: var(--memo-sky-deep) !important;
+    opacity: .9;
+}
+
+/* 回忆、拼写与输入反馈 */
+html.memo-notebook .rev-recall-mask,
+html.memo-notebook .rev-recall-mask-partial {
+    color: var(--memo-ink-mid);
+}
+
+html.memo-notebook .rev-recall-mask-partial .hint-text {
+    margin: .42rem;
+    padding: .42rem;
+    border: 1px dashed var(--memo-line-strong);
+    border-radius: .28rem .4rem .3rem .36rem;
+    background: rgba(255, 253, 249, .88) !important;
+    box-shadow: var(--memo-shadow);
+    color: var(--memo-ink-mid);
+}
+
+html.memo-notebook .rev-root .verify-input {
+    left: 50%;
+    width: min(86%, 16rem);
+    padding: .3rem .45rem;
+    transform: translateX(-50%) rotate(-.2deg);
+    border: 0;
+    border-bottom: 2px solid var(--memo-sky-deep);
+    border-radius: .2rem .35rem .16rem .3rem;
+    background:
+        repeating-linear-gradient(0deg, transparent 0 .68rem, rgba(107, 181, 214, .14) .68rem .705rem),
+        rgba(255, 253, 249, .96);
+    box-shadow: var(--memo-shadow-strong);
+    color: var(--memo-ink);
+    font-family: 'M PLUS Rounded 1c', 'Cascadia Mono', monospace;
+    caret-color: var(--memo-rose-deep);
+    outline: none;
+}
+
+html.memo-notebook .rev-root .verify-input:focus {
+    box-shadow: 0 0 0 .08rem rgba(135, 206, 235, .22), var(--memo-shadow-strong);
+}
+
+html.memo-notebook .rev-root .verify-input.correct {
+    border-bottom-color: #60a775;
+    color: #4b8a5e !important;
+}
+
+html.memo-notebook .rev-root .verify-input.wrong {
+    border-bottom-color: #dc5f73;
+    color: #c84e63 !important;
+}
+
+html.memo-notebook .rev-bottom .ask-spelling {
+    gap: .28rem;
+    padding: .18rem .42rem .35rem;
+}
+
+html.memo-notebook .rev-bottom .ask-spelling > * {
+    margin: 0 !important;
+    border: 1px dashed var(--memo-line-strong) !important;
+    border-radius: .25rem .38rem .28rem .34rem !important;
+    background: rgba(255, 253, 249, .95) !important;
+    color: var(--memo-ink-mid) !important;
+    box-shadow: var(--memo-shadow);
+    font-family: 'M PLUS Rounded 1c', sans-serif;
+}
+
+/* 手账版由父页面的四个放大按钮接管判断，移除原生三个按钮的占位。 */
+html.memo-notebook .rev-resp-btns {
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* 搜索、单词详情和通用弹窗 */
+html.memo-notebook .memo-word-popup,
+html.memo-notebook .taro-modal__content,
+html.memo-notebook .taro-modal__inner,
+html.memo-notebook .taro-model__bd,
+html.memo-notebook .taroify-dialog,
+html.memo-notebook .taroify-popup--center {
+    border: 1px solid var(--memo-line-strong) !important;
+    border-radius: .42rem .26rem .46rem .32rem !important;
+    background:
+        repeating-linear-gradient(0deg, transparent 0 .66rem, rgba(122, 102, 80, .045) .66rem .685rem),
+        var(--memo-paper-strong) !important;
+    box-shadow: 0 .4rem 1.2rem rgba(83, 59, 38, .24) !important;
+    color: var(--memo-ink) !important;
+}
+
+html.memo-notebook .memo-word-popup .header {
+    border-bottom: 1px dashed var(--memo-line);
+    color: var(--memo-ink);
+    font-family: 'Noto Serif SC', serif;
+}
+
+html.memo-notebook .taroify-dialog__header,
+html.memo-notebook .taroify-dialog__content,
+html.memo-notebook .taroify-dialog__message {
+    color: var(--memo-ink) !important;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif;
+}
+
+html.memo-notebook .taroify-dialog__header {
+    font-family: 'Noto Serif SC', serif;
+}
+
+html.memo-notebook .taroify-dialog__footer {
+    border-top: 1px dashed var(--memo-line) !important;
+}
+
+html.memo-notebook .taroify-dialog__confirm {
+    color: var(--memo-rose-deep) !important;
+}
+
+html.memo-notebook .memo-word-popup .spelling {
+    border-bottom-color: var(--memo-sky-deep);
+    color: var(--memo-sky-deep);
+    font-family: 'M PLUS Rounded 1c', sans-serif;
+}
+
+html.memo-notebook .taro-modal__mask {
+    background: rgba(74, 55, 40, .38) !important;
+    backdrop-filter: blur(3px);
+}
+
+html.memo-notebook .taroify-backdrop {
+    background: rgba(74, 55, 40, .38) !important;
+    backdrop-filter: blur(3px);
+}
+
+html.memo-notebook button:focus-visible,
+html.memo-notebook [role='button']:focus-visible,
+html.memo-notebook input:focus-visible {
+    outline: 2px dashed var(--memo-rose-deep) !important;
+    outline-offset: 3px;
+}
+
+/* 暗色手账：保留纸张层级，而不是回到纯黑界面。 */
+html.memo-notebook.memo-dark {
+    --memo-paper: #393338;
+    --memo-paper-strong: #40383d;
+    --memo-canvas: #29252a;
+    --memo-ink: #f0e5de;
+    --memo-ink-mid: #c8b8ad;
+    --memo-ink-light: #a9988d;
+    --memo-line: #5d5257;
+    --memo-line-strong: #74646a;
+    --memo-rose-pale: #4c343d;
+    --memo-shadow: 0 .18rem .62rem rgba(0, 0, 0, .3);
+    --memo-shadow-strong: 0 .3rem .9rem rgba(0, 0, 0, .42);
+}
+
+html.memo-notebook.memo-dark,
+html.memo-notebook.memo-dark body {
+    background-image:
+        radial-gradient(25rem 11rem at 88% -4%, rgba(232, 120, 138, .11), transparent 62%),
+        radial-gradient(22rem 12rem at 4% 105%, rgba(107, 181, 214, .1), transparent 62%),
+        linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px) !important;
+}
+
+html.memo-notebook.memo-dark .rev-top,
+html.memo-notebook.memo-dark .rev-content-container,
+html.memo-notebook.memo-dark .rev-recall-mask-partial .hint-text,
+html.memo-notebook.memo-dark .rev-bottom .ask-spelling > * {
+    background-color: rgba(57, 51, 56, .96) !important;
+}
+
+html.memo-notebook.memo-dark .rev-top .interp-ctn {
+    background: rgba(54, 76, 84, .55);
+}
+
+html.memo-notebook.memo-dark .phrase-play-btn {
+    background: rgba(31, 27, 30, .72);
+}
+
+@media (max-width: 720px) {
+    html.memo-notebook .rev-top {
+        margin: .24rem .24rem .1rem;
+        border-radius: .36rem .2rem .4rem .28rem;
+    }
+
+    html.memo-notebook .rev-top .spelling {
+        font-size: .88rem;
+    }
+
+    html.memo-notebook .rev-scroller {
+        padding: .08rem .24rem 4.9rem;
+    }
+
+    html.memo-notebook .rev-content-container {
+        padding-inline: .36rem;
+    }
+
+    html.memo-notebook .rev-root .verify-input {
+        width: calc(100% - .7rem);
+    }
+}
+
+@media (max-height: 680px) {
+    html.memo-notebook .rev-top-stats {
+        min-height: .76rem;
+        padding-top: .18rem;
+    }
+
+    html.memo-notebook .rev-top .spelling {
+        margin-top: .05rem;
+        font-size: .82rem;
+    }
+
+    html.memo-notebook .rev-top > .phonetic {
+        padding-bottom: .2rem;
+    }
+
+    html.memo-notebook .rev-top .interp-ctn {
+        padding-block: .18rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.memo-notebook .rev-top,
+    html.memo-notebook .rev-content-container,
+    html.memo-notebook .rev-content-header {
+        transform: none !important;
+    }
+
+    html.memo-notebook * {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}

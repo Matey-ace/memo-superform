@@ -27,16 +27,17 @@ body:not(.notebook-mode) .study-web-actions {
 
 body.notebook-mode .study-web-actions {
     position: absolute;
-    bottom: 14px;
+    bottom: 54px;
     left: 50%;
     transform: translateX(-50%) rotate(-0.18deg);
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 10px;
+    gap: 12px;
     z-index: 100;
-    max-width: calc(100% - 28px);
-    padding: 12px 14px 10px;
+    width: min(92%, 620px);
+    max-width: calc(100% - 22px);
+    padding: 16px 18px 14px;
     background:
         repeating-linear-gradient(0deg, transparent 0 23px, rgba(107, 181, 214, .12) 23px 24px),
         rgba(253, 249, 240, .96);
@@ -70,8 +71,9 @@ body.notebook-mode .study-web-actions::before {
     --note-tape: rgba(216, 207, 192, .62);
     --note-turn: 0deg;
     position: relative;
-    min-width: 76px;
-    padding: 9px 18px 7px;
+    flex: 1 1 110px;
+    min-width: 108px;
+    padding: 13px 20px 11px;
     border: 1px solid var(--note-edge);
     border-radius: 5px 9px 6px 4px;
     background:
@@ -80,7 +82,7 @@ body.notebook-mode .study-web-actions::before {
     box-shadow: 0 3px 8px rgba(112, 88, 58, .11), 0 1px 0 #fff inset;
     color: var(--note-ink);
     font-family: 'M PLUS Rounded 1c', 'Microsoft YaHei', sans-serif;
-    font-size: 15px;
+    font-size: 18px;
     font-weight: 800;
     cursor: pointer;
     transform: rotate(var(--note-turn));
@@ -108,16 +110,62 @@ body.notebook-mode .study-web-actions::before {
 .study-web-btn .key-hint {
     display: grid;
     place-items: center;
-    width: 17px;
-    height: 17px;
+    width: 22px;
+    height: 22px;
     border: 1px solid currentColor;
     border-radius: 50%;
     font-family: ui-monospace, 'Cascadia Mono', monospace;
-    font-size: 9px;
+    font-size: 11px;
     line-height: 1;
     opacity: .72;
     font-weight: 700;
 }
+
+body.notebook-mode .study-shortcut-toggle {
+    position: absolute;
+    right: 14px;
+    top: 14px;
+    z-index: 105;
+    padding: 7px 11px;
+    border: 1px solid #e8cfc6;
+    border-radius: 999px;
+    background: rgba(255, 253, 254, .92);
+    color: #7a6650;
+    font: 700 12px 'M PLUS Rounded 1c', sans-serif;
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(139, 115, 85, .14);
+}
+
+body.notebook-mode .study-shortcut-panel {
+    position: absolute;
+    right: 14px;
+    top: 52px;
+    z-index: 110;
+    width: min(286px, calc(100% - 28px));
+    max-height: calc(100% - 66px);
+    overflow: auto;
+    padding: 14px;
+    border: 1px solid #f0dfd9;
+    border-radius: 16px 8px 16px 10px;
+    background:
+        linear-gradient(90deg, rgba(255, 183, 197, .28) 0 9px, transparent 9px),
+        repeating-linear-gradient(0deg, transparent 0 25px, rgba(122, 102, 80, .055) 25px 26px),
+        rgba(255, 253, 254, .98);
+    box-shadow: 0 10px 36px rgba(139, 115, 85, .22);
+    color: #4a3728;
+    font: 12px 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+}
+.study-shortcut-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; font:700 15px 'Noto Serif SC', 'Microsoft YaHei', serif; letter-spacing:.8px; }
+.study-shortcut-head button { width:26px; height:26px; border:0; border-radius:50%; background:transparent; font-size:21px; line-height:1; cursor:pointer; color:#a89880; }
+.study-shortcut-head button:hover { background:#fff0f3; color:#e8788a; }
+.study-shortcut-panel p { margin:4px 0 10px; color:#a89880; line-height:1.5; }
+.study-shortcut-group { margin:9px 0 0; padding:7px 0 1px; border-top:1px dashed #f0dfd9; }
+.study-shortcut-group > span { display:block; margin-bottom:4px; color:#e8788a; font:800 10px 'M PLUS Rounded 1c', sans-serif; letter-spacing:1.2px; }
+.study-shortcut-panel label { display:flex; justify-content:space-between; align-items:center; gap:8px; min-height:29px; color:#7a6650; }
+.study-shortcut-panel input { width:102px; padding:4px 6px; border:1px dashed #e8cfc6; border-radius:999px; background:rgba(255,255,255,.72); color:#4a3728; text-align:center; font:700 11px ui-monospace, 'Cascadia Mono', monospace; cursor:pointer; }
+.study-shortcut-panel input:hover, .study-shortcut-panel input:focus { border-color:#ff8899; outline:2px solid rgba(255,136,153,.16); }
+.study-shortcut-reset { width:100%; margin-top:11px; padding:7px; border:1px solid #e8cfc6; border-radius:999px; background:linear-gradient(135deg, #ff8899, #e8788a); color:#fff; font:700 12px 'M PLUS Rounded 1c', sans-serif; cursor:pointer; box-shadow:0 3px 8px rgba(255,136,153,.26); }
+.study-shortcut-reset:hover { filter:brightness(1.04); }
 
 .study-web-btn:hover {
     transform: translateY(-3px) rotate(0deg);
@@ -254,9 +302,20 @@ body.dark.notebook-mode .study-web-btn {
     box-shadow: 0 3px 8px rgba(0, 0, 0, .28);
 }
 
+body.dark.notebook-mode .study-shortcut-toggle,
+body.dark.notebook-mode .study-shortcut-panel {
+    background-color: rgba(57, 51, 56, .96);
+    border-color: #665c56;
+    color: #eadfd8;
+}
+body.dark.notebook-mode .study-shortcut-panel p,
+body.dark.notebook-mode .study-shortcut-panel label { color: #c8b8ad; }
+body.dark.notebook-mode .study-shortcut-group { border-color: #665c56; }
+body.dark.notebook-mode .study-shortcut-panel input { background: rgba(30, 25, 28, .72); border-color: #846f64; color: #f4e8df; }
+
 @media (max-width: 720px) {
     body.notebook-mode .study-web-actions {
-        width: min(250px, calc(100% - 24px));
+        width: min(94%, 500px);
         gap: 8px;
         padding-inline: 10px;
     }
@@ -266,6 +325,14 @@ body.dark.notebook-mode .study-web-btn {
         min-width: 0;
         padding-inline: 12px;
     }
+
+    body.notebook-mode .study-shortcut-panel {
+        top: 48px;
+        right: 10px;
+        width: min(286px, calc(100% - 20px));
+    }
+
+    body.notebook-mode .study-shortcut-toggle { top: 10px; right: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
