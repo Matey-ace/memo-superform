@@ -111,8 +111,27 @@ const StudyWeb = (function() {
                     setTimeout(function() { btn.style.transform = ''; }, 150);
                 });
             });
-            shortcutToggle.addEventListener('click', function() { shortcutPanel.hidden = !shortcutPanel.hidden; });
-            shortcutPanel.querySelector('[data-close-shortcuts]').addEventListener('click', function() { shortcutPanel.hidden = true; });
+            var shortcutCloseTimer = 0;
+            shortcutToggle.setAttribute('aria-expanded', 'false');
+            shortcutPanel.setAttribute('aria-hidden', 'true');
+            function setShortcutPanelOpen(open) {
+                clearTimeout(shortcutCloseTimer);
+                shortcutToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                shortcutPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
+                if (open) {
+                    shortcutPanel.hidden = false;
+                    requestAnimationFrame(function() {
+                        requestAnimationFrame(function() { shortcutPanel.classList.add('is-open'); });
+                    });
+                    return;
+                }
+                shortcutPanel.classList.remove('is-open');
+                shortcutCloseTimer = setTimeout(function() {
+                    if (!shortcutPanel.classList.contains('is-open')) shortcutPanel.hidden = true;
+                }, 360);
+            }
+            shortcutToggle.addEventListener('click', function() { setShortcutPanelOpen(!shortcutPanel.classList.contains('is-open')); });
+            shortcutPanel.querySelector('[data-close-shortcuts]').addEventListener('click', function() { setShortcutPanelOpen(false); });
             shortcutPanel.querySelectorAll('[data-shortcut]').forEach(function(input) {
                 input.addEventListener('keydown', function(e) {
                     e.preventDefault();

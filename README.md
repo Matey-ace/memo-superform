@@ -110,6 +110,11 @@ chmod +x launcher-linux.sh
 - API Endpoint：默认 https://api.deepseek.com/v1
 - 数据源：云词本全部单词，或按自定义时间区间筛选学习记录中的单词
 
+也支持 **OpenAI Codex（ChatGPT OAuth）** 调用方式：在设置的“调用方式”中选择
+“OpenAI Codex”，点击登录并在浏览器完成 ChatGPT 授权。授权令牌只保存在本机
+`data/codex_auth.json`，服务会自动刷新令牌，并通过 Codex Responses 接口完成分类与释义。
+可选模型包括 `gpt-5.6-terra`、`gpt-5.6-sol`、`gpt-5.6-luna`、`gpt-5.5` 和 `gpt-5.4`。
+
 ## 智能复习推荐原理
 
 每日首次加载时，会把当日全部学习记录保存为快照（`study_records`），并按以下权重计算每个单词的遗忘风险分（0-100）：

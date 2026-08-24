@@ -201,6 +201,23 @@
                 <div class="setting-group">
                     <h3>AI API 配置（可选）</h3>
                     <div class="setting-item">
+                        <label>调用方式</label>
+                        <select id="aiProviderSelect">
+                            <option value="openai-compatible">OpenAI 兼容 API Key</option>
+                            <option value="codex">OpenAI Codex（ChatGPT 登录）</option>
+                        </select>
+                        <p class="hint">Codex 模式通过 ChatGPT OAuth 登录，调用 Responses 接口，无需填写 API Key。</p>
+                    </div>
+                    <div id="codexAuthBox" class="setting-item" style="display:none">
+                        <label>Codex 账号</label>
+                        <div>
+                            <button id="codexLoginBtn" type="button" class="test-btn">登录 OpenAI Codex</button>
+                            <button id="codexLogoutBtn" type="button" class="danger-btn" style="display:none">退出登录</button>
+                        </div>
+                        <p id="codexStatus" class="hint">正在检查登录状态...</p>
+                    </div>
+                    <div id="aiApiKeyFields">
+                    <div class="setting-item">
                         <label>API Endpoint</label>
                         <input type="text" id="aiEndpointInput" placeholder="https://api.deepseek.com/v1" value="https://api.deepseek.com/v1">
                         <p class="hint">支持 OpenAI 兼容接口，如 DeepSeek、智谱、通义千问等</p>
@@ -210,9 +227,19 @@
                         <input type="password" id="aiKeyInput" placeholder="sk-...">
                         <p class="hint">Key 仅保存在浏览器本地</p>
                     </div>
+                    </div>
                     <div class="setting-item">
                         <label>模型名称</label>
-                        <input type="text" id="aiModelInput" placeholder="deepseek-chat" value="deepseek-chat">
+                        <input type="text" id="aiModelInput" list="codexModelList" placeholder="deepseek-chat" value="deepseek-chat">
+                        <datalist id="codexModelList">
+                            <option value="gpt-5.6-terra"></option>
+                            <option value="gpt-5.6-sol"></option>
+                            <option value="gpt-5.6-luna"></option>
+                            <option value="gpt-5.5"></option>
+                            <option value="gpt-5.4"></option>
+                            <option value="gpt-5.4-mini"></option>
+                            <option value="gpt-5.3-codex-spark"></option>
+                        </datalist>
                     </div>
                 </div>
 
@@ -300,11 +327,11 @@
         </div>
     </div>
 
-    <script src="js/api.js?v=44"></script>
+    <script src="js/api.js?v=45"></script>
     <script src="js/tts.js?v=40"></script>
     <script src="js/charts.js?v=44"></script>
     <script src="js/layout.js?v=45"></script>
     <script src="js/study-web.js?v=42"></script>
-    <script src="js/app.js?v=44"></script>
+    <script src="js/app.js?v=45"></script>
 </body>
 </html>

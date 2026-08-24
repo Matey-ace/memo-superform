@@ -38,6 +38,7 @@ _backup_pre-rewrite.bundle
 
 # 审计、回滚与本地发布验证产物
 _verification/
+output/
 ROLLBACK.sh
 VERIFICATION.txt
 icon-anon.diff.txt

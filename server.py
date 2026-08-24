@@ -28,6 +28,8 @@ import threading
 import traceback
 from urllib.parse import urlparse, parse_qs, unquote
 
+import codex_auth
+
 # 修复 Windows 控制台编码问题
 if sys.platform == "win32":
     try:
@@ -59,6 +61,8 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
         os.makedirs(_data_dir, exist_ok=True)
     except OSError:
         pass
+
+CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
 
 MAIMEMO_BASE = "https://open.maimemo.com/open"
 TC_APIS_BASE = "https://tc-apis.maimemo.com"
@@ -754,6 +758,18 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 ai_key = req_data.get("apiKey", "")
                 ai_body = req_data.get("body", {})
 
+                if req_data.get("provider") == "codex":
+                    try:
+                        self._send_json(200, CODEX_OAUTH.chat(ai_body))
+                    except urllib.error.HTTPError as e:
+                        err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+                        self._send_json(e.code, {"error": err_body or str(e)})
+                    except urllib.error.URLError as e:
+                        self._send_json(502, {"error": "Codex 上游不可达: %s" % getattr(e, "reason", e)})
+                    except Exception as e:
+                        self._send_json(401 if "登录" in str(e) else 500, {"error": str(e)})
+                    return
+
                 if not ai_endpoint or not ai_key:
                     self._send_json(400, {"error": "Missing endpoint or apiKey"})
                     return
@@ -841,6 +857,9 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             import tts
             return self._send_json(200, tts.get_status(TTS_PACK_DIR, DATA_DIR))
 
+        if path == "/api/codex/status":
+            return self._send_json(200, CODEX_OAUTH.status())
+
         known_db_paths = {
             "/api/recommendations/today",
             "/api/stats/history",
@@ -917,6 +936,16 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 if not ok:
                     return self._send_json(400, {"error": msg})
                 return self._send_json(200, {"ok": True, "mode": mode, "relaunching": True})
+
+            if path == "/api/codex/login":
+                try:
+                    return self._send_json(200, CODEX_OAUTH.start_login())
+                except Exception as e:
+                    return self._send_json(500, {"error": str(e)})
+
+            if path == "/api/codex/logout":
+                CODEX_OAUTH.logout()
+                return self._send_json(200, {"ok": True})
 
             # 语音资源包接口（与数据库无关）
             if path == "/api/tts/speak":

@@ -176,9 +176,82 @@ const App = (function() {
         const token = MaimemoAPI.getToken();
         if (token) document.getElementById('tokenInput').value = token;
         const aiConfig = AIAPI.getConfig();
+        document.getElementById('aiProviderSelect').value = aiConfig.provider;
         document.getElementById('aiEndpointInput').value = aiConfig.endpoint;
         document.getElementById('aiKeyInput').value = aiConfig.apiKey;
         document.getElementById('aiModelInput').value = aiConfig.model;
+
+        const providerSelect = document.getElementById('aiProviderSelect');
+        const codexBox = document.getElementById('codexAuthBox');
+        const apiKeyFields = document.getElementById('aiApiKeyFields');
+        const codexStatus = document.getElementById('codexStatus');
+        const codexLoginBtn = document.getElementById('codexLoginBtn');
+        const codexLogoutBtn = document.getElementById('codexLogoutBtn');
+        let codexPollTimer = null;
+
+        function syncProviderFields() {
+            const codex = providerSelect.value === 'codex';
+            codexBox.style.display = codex ? '' : 'none';
+            apiKeyFields.style.display = codex ? 'none' : '';
+            if (codex && (!document.getElementById('aiModelInput').value || document.getElementById('aiModelInput').value === 'deepseek-chat')) {
+                document.getElementById('aiModelInput').value = 'gpt-5.6-terra';
+            }
+            if (codex) refreshCodexStatus();
+        }
+
+        async function refreshCodexStatus() {
+            try {
+                const resp = await fetch('/api/codex/status');
+                const status = await resp.json();
+                if (status.connected) {
+                    codexStatus.textContent = '✓ 已登录' + (status.email ? ' · ' + status.email : '') + (status.plan ? ' · ' + status.plan : '');
+                    codexStatus.className = 'status-text success';
+                    codexLoginBtn.style.display = 'none';
+                    codexLogoutBtn.style.display = '';
+                    if (codexPollTimer) { clearInterval(codexPollTimer); codexPollTimer = null; }
+                } else {
+                    codexStatus.textContent = status.error ? '✗ ' + status.error : (status.pending ? '请在浏览器中完成登录...' : '尚未登录');
+                    codexStatus.className = status.error ? 'status-text error' : 'hint';
+                    codexLoginBtn.style.display = '';
+                    codexLogoutBtn.style.display = 'none';
+                }
+            } catch (e) {
+                codexStatus.textContent = '✗ ' + e.message;
+                codexStatus.className = 'status-text error';
+            }
+        }
+
+        providerSelect.addEventListener('change', syncProviderFields);
+        codexLoginBtn.addEventListener('click', async function() {
+            this.disabled = true;
+            codexStatus.textContent = '正在启动登录...';
+            try {
+                const resp = await fetch('/api/codex/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    body: '{}'
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+                if (!data.opened) window.open(data.authorization_url, '_blank', 'noopener');
+                codexStatus.textContent = '请在浏览器中完成登录...';
+                if (codexPollTimer) clearInterval(codexPollTimer);
+                codexPollTimer = setInterval(refreshCodexStatus, 1500);
+            } catch (e) {
+                codexStatus.textContent = '✗ ' + e.message;
+                codexStatus.className = 'status-text error';
+            }
+            this.disabled = false;
+        });
+        codexLogoutBtn.addEventListener('click', async function() {
+            await fetch('/api/codex/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                body: '{}'
+            });
+            refreshCodexStatus();
+        });
+        syncProviderFields();
         
         document.getElementById('testTokenBtn').addEventListener('click', async function() {
             const testToken = document.getElementById('tokenInput').value.trim();
@@ -217,6 +290,7 @@ const App = (function() {
             const oldToken = MaimemoAPI.getToken();
             MaimemoAPI.setToken(token);
             AIAPI.setConfig({
+                provider: document.getElementById('aiProviderSelect').value,
                 endpoint: document.getElementById('aiEndpointInput').value.trim(),
                 apiKey: document.getElementById('aiKeyInput').value.trim(),
                 model: document.getElementById('aiModelInput').value.trim()

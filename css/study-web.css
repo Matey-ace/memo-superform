@@ -31,13 +31,13 @@ body.notebook-mode .study-web-actions {
     left: 50%;
     transform: translateX(-50%) rotate(-0.18deg);
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: center;
-    gap: 12px;
+    gap: 10px;
     z-index: 100;
-    width: min(92%, 620px);
-    max-width: calc(100% - 22px);
-    padding: 16px 18px 14px;
+    width: calc(100% - 8px);
+    max-width: 920px;
+    padding: 16px 10px 14px;
     background:
         repeating-linear-gradient(0deg, transparent 0 23px, rgba(107, 181, 214, .12) 23px 24px),
         rgba(253, 249, 240, .96);
@@ -71,8 +71,8 @@ body.notebook-mode .study-web-actions::before {
     --note-tape: rgba(216, 207, 192, .62);
     --note-turn: 0deg;
     position: relative;
-    flex: 1 1 110px;
-    min-width: 108px;
+    flex: 1 1 0;
+    min-width: 0;
     padding: 13px 20px 11px;
     border: 1px solid var(--note-edge);
     border-radius: 5px 9px 6px 4px;
@@ -191,7 +191,24 @@ body.notebook-mode .study-shortcut-panel {
     box-shadow: 0 10px 36px rgba(139, 115, 85, .22);
     color: #4a3728;
     font: 12px 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-    transform: translateY(-50%);
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(34px, -50%, 0) scale(.965) rotate(.45deg);
+    transform-origin: right center;
+    will-change: transform, opacity;
+    transition:
+        transform .34s cubic-bezier(.22, 1, .36, 1),
+        opacity .22s ease,
+        visibility 0s linear .34s;
+}
+
+body.notebook-mode .study-shortcut-panel.is-open {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate3d(0, -50%, 0) scale(1) rotate(0deg);
+    transition-delay: 0s;
 }
 .study-shortcut-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; font:700 15px 'Noto Serif SC', 'Microsoft YaHei', serif; letter-spacing:.8px; }
 .study-shortcut-head button { width:26px; height:26px; border:0; border-radius:50%; background:transparent; font-size:21px; line-height:1; cursor:pointer; color:#a89880; }
@@ -353,9 +370,10 @@ body.dark.notebook-mode .study-shortcut-panel input { background: rgba(30, 25, 2
 
 @media (max-width: 720px) {
     body.notebook-mode .study-web-actions {
-        width: min(94%, 500px);
-        gap: 8px;
-        padding-inline: 10px;
+        width: calc(100% - 6px);
+        max-width: none;
+        gap: 6px;
+        padding-inline: 7px;
     }
 
     .study-web-btn {
@@ -374,7 +392,8 @@ body.dark.notebook-mode .study-shortcut-panel input { background: rgba(30, 25, 2
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .study-web-btn { transition: none; }
+    .study-web-btn,
+    body.notebook-mode .study-shortcut-panel { transition: none; }
 }
 /* ---- 背单词磁贴：完全移除覆盖层，z-index:0 仍会压住非定位 iframe ---- */
 .tile:has(.study-web-container)::before {

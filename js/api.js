@@ -345,6 +345,7 @@ const MaimemoAPI = (function() {
 const AIAPI = (function() {
     function getConfig() {
         return {
+            provider: localStorage.getItem('ai_provider') || 'openai-compatible',
             endpoint: localStorage.getItem('ai_endpoint') || 'https://api.deepseek.com/v1',
             apiKey: localStorage.getItem('ai_key') || '',
             model: localStorage.getItem('ai_model') || 'deepseek-chat'
@@ -352,18 +353,20 @@ const AIAPI = (function() {
     }
     
     function setConfig(config) {
+        if (config.provider !== undefined) localStorage.setItem('ai_provider', config.provider);
         if (config.endpoint !== undefined) localStorage.setItem('ai_endpoint', config.endpoint);
         if (config.apiKey !== undefined) localStorage.setItem('ai_key', config.apiKey);
         if (config.model !== undefined) localStorage.setItem('ai_model', config.model);
     }
     
     function hasConfig() {
-        return getConfig().apiKey && getConfig().apiKey.length > 0;
+        const config = getConfig();
+        return config.provider === 'codex' || (config.apiKey && config.apiKey.length > 0);
     }
     
     async function classifyWords(words) {
         const config = getConfig();
-        if (!config.apiKey) throw new Error('请先在设置中配置 AI API Key');
+        if (config.provider !== 'codex' && !config.apiKey) throw new Error('请先在设置中配置 AI API Key');
         
         const wordList = words.slice(0, 200).join(', ');
         const categories = [
@@ -378,6 +381,7 @@ const AIAPI = (function() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                provider: config.provider,
                 endpoint: config.endpoint,
                 apiKey: config.apiKey,
                 body: {
@@ -425,7 +429,7 @@ const AIAPI = (function() {
         }
         if (uncached.length === 0) return result;
         const config = getConfig();
-        if (!config.apiKey) return result;
+        if (config.provider !== 'codex' && !config.apiKey) return result;
         for (let i = 0; i < uncached.length; i += 30) {
             const batch = uncached.slice(i, i + 30);
             const prompt = '请将以下英语单词翻译为中文，并返回JSON格式。\n\n单词列表：' + batch.join(', ') + '\n\n要求：\n1. 只输出JSON\n2. 格式：{"word": {"trans": "中文释义", "phonetic": "音标", "example": "英文例句"}}\n3. trans含词性如"n. 苹果"';
@@ -434,6 +438,7 @@ const AIAPI = (function() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
+                        provider: config.provider,
                         endpoint: config.endpoint, apiKey: config.apiKey,
                         body: {
                             model: config.model,
