@@ -121,7 +121,7 @@ MEMO_DARK_JS = (
 # their original behavior.
 MEMO_NOTEBOOK_SKIN = (
     '<link id="memo-notebook-fonts" rel="stylesheet" href="/css/fonts.css?v=40">'
-    '<link id="memo-notebook-skin" rel="stylesheet" href="/css/maimemo-notebook.css?v=20260822">'
+    '<link id="memo-notebook-skin" rel="stylesheet" href="/css/maimemo-notebook.css?v=20260825-exit-controls">'
     '<script>(function(){'
     'function notebookEnabled(){'
     'try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")}catch(e){return false}'

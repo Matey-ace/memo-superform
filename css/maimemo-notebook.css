@@ -430,6 +430,124 @@ html.memo-notebook input:focus-visible {
     outline-offset: 3px;
 }
 
+/* 子页面导航：保留 Taro 的返回/退出状态，只将按钮换成手账贴纸。 */
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-show {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 520 !important;
+    isolation: isolate;
+    min-height: 24px;
+    padding: calc(env(safe-area-inset-top) + 8px) 14px 8px !important;
+    border-bottom: 1px dashed var(--memo-line-strong);
+    background-color: rgba(255, 253, 248, .97) !important;
+    background-image:
+        linear-gradient(rgba(107, 181, 214, .08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(107, 181, 214, .08) 1px, transparent 1px) !important;
+    background-size: 16px 16px !important;
+    box-shadow: 0 .16rem .5rem rgba(104, 76, 61, .11);
+    color: var(--memo-ink) !important;
+}
+
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-title-wrap {
+    display: flex !important;
+    height: 30px !important;
+    align-items: center;
+    justify-content: center;
+}
+
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-title,
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-title-item {
+    color: var(--memo-ink) !important;
+    font-family: 'Noto Serif SC', 'STKaiti', serif !important;
+    font-weight: 700 !important;
+    letter-spacing: .06em;
+}
+
+/* 根页面继续不显示退出图标；进入子页面后，以 Taro 的 back/home 状态恢复对应按钮。 */
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-no-icon:not(.taro-navigation-bar-back-icon):not(.taro-navigation-bar-home-icon) > .taro-navigation-bar-back,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-no-icon:not(.taro-navigation-bar-back-icon):not(.taro-navigation-bar-home-icon) > .taro-navigation-bar-home {
+    display: none !important;
+}
+
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home {
+    position: absolute !important;
+    top: auto !important;
+    bottom: 8px !important;
+    left: 10px !important;
+    z-index: 3 !important;
+    display: grid !important;
+    width: 34px !important;
+    height: 30px !important;
+    place-items: center;
+    box-sizing: border-box;
+    overflow: visible !important;
+    border: 1px dashed var(--memo-line-strong);
+    border-radius: 12px 8px 11px 7px;
+    background: linear-gradient(145deg, rgba(255, 244, 240, .98), rgba(252, 226, 225, .98)) !important;
+    box-shadow: 0 .14rem .38rem rgba(104, 76, 61, .16);
+    color: var(--memo-ink-mid) !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    cursor: pointer;
+    transform: rotate(-1.5deg);
+    transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease;
+}
+
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home {
+    border-radius: 9px 12px 7px 11px;
+    background: linear-gradient(145deg, rgba(241, 251, 255, .98), rgba(219, 241, 249, .98)) !important;
+    transform: rotate(1deg);
+}
+
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back::before,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 9px;
+    width: 14px;
+    height: 7px;
+    border-inline: 1px solid rgba(226, 180, 161, .28);
+    background: rgba(255, 223, 196, .66);
+    transform: rotate(3deg);
+    pointer-events: none;
+}
+
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-back svg,
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-home svg {
+    display: block !important;
+    width: 18px !important;
+    height: 18px !important;
+}
+
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-back svg path,
+html.memo-notebook #taro-navigation-bar .taro-navigation-bar-home svg path {
+    fill: var(--memo-ink-mid) !important;
+    stroke: var(--memo-ink-mid);
+    stroke-width: .18;
+}
+
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back:hover,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home:hover {
+    background: var(--memo-rose-pale) !important;
+    box-shadow: 0 .2rem .52rem rgba(104, 76, 61, .22);
+    transform: translateY(-1px) rotate(0deg);
+}
+
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back:active,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home:active {
+    box-shadow: 0 .06rem .18rem rgba(104, 76, 61, .16);
+    transform: translateY(1px) rotate(0deg);
+}
+
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back:focus-visible,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home:focus-visible {
+    outline: 2px dashed var(--memo-rose-deep) !important;
+    outline-offset: 3px;
+}
+
 /* 暗色手账：保留纸张层级，而不是回到纯黑界面。 */
 html.memo-notebook.memo-dark {
     --memo-paper: #393338;
@@ -467,6 +585,17 @@ html.memo-notebook.memo-dark .rev-top .interp-ctn {
 
 html.memo-notebook.memo-dark .phrase-play-btn {
     background: rgba(31, 27, 30, .72);
+}
+
+html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-show {
+    background-color: rgba(57, 51, 56, .97) !important;
+    box-shadow: 0 .16rem .5rem rgba(0, 0, 0, .3);
+}
+
+html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back,
+html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home {
+    background: linear-gradient(145deg, rgba(76, 52, 61, .98), rgba(61, 46, 52, .98)) !important;
+    box-shadow: 0 .14rem .38rem rgba(0, 0, 0, .34);
 }
 
 @media (max-width: 720px) {
