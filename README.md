@@ -15,7 +15,7 @@
 
 Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘**。它通过墨墨官方开放 API 拉取你的学习记录和云词本，把枯燥的数字变成直观的图表，让你一眼看清自己的背词状态。v0.30 起内置**智能复习推荐引擎**（基于 SQL Server），并支持以**原生桌面窗口**运行。
 
-- **anon 笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
+- **Anon 笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
 - **记忆手账磁贴**：以手账/日记风展示每日背词（数量分级：摸鱼 / 日常 / 努力 / 爆肝），爆肝日飘爱心，支持列表 / 详情双视图
 - **背单词磁贴（网页版）**：内嵌墨墨网页版 SPA，可实时背单词，暗色主题跟随仪表盘
 - **字体本地化**：Noto Serif SC / Noto Sans SC / M PLUS Rounded 1c 完整中文子集已本地化，离线可用
@@ -198,7 +198,7 @@ memo-superform/
 
 Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It pulls your study records and cloud wordbooks through Maimemo's official open API and turns dry numbers into intuitive charts, so you can see your vocabulary-learning status at a glance. As of v0.30 it ships with a built-in **smart review-recommendation engine** (backed by SQL Server) and can also run as a **native desktop window**.
 
-- **anon notebook frontend (`index-anon.html`)**: notebook visuals, same features as the original dashboard.
+- **Anon notebook frontend (`index-anon.html`)**: notebook visuals, same features as the original dashboard.
 - **Memory Diary tile**: a journal-style daily word tracker (tiers: slacking / daily / focused / grinding), floating hearts on grind days, list & detail views
 - **Study tile (web edition)**: embeds the Maimemo web SPA for real-time word study, dark theme follows the dashboard
 - **Localized fonts**: full Chinese subsets of Noto Serif SC / Noto Sans SC / M PLUS Rounded 1c bundled locally, works offline
