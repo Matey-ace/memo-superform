@@ -40,6 +40,10 @@
         if (!body) return;
         body.classList.toggle('notebook-mode', notebook);
         body.classList.toggle('standard-mode', !notebook);
+        // Notebook colors are designed as a fixed light paper palette.  Do
+        // not overwrite the saved standard preference; only enforce the
+        // runtime invariant that notebook-mode and dark never coexist.
+        if (notebook) body.classList.remove('dark');
     }
 
     function activate(root) {

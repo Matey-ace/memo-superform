@@ -136,7 +136,9 @@ const StudyWeb = (function() {
             try {
                 var idoc = iframe.contentDocument;
                 if (idoc && idoc.documentElement) {
-                    idoc.documentElement.classList.toggle('memo-dark', document.body.classList.contains('dark'));
+                    var notebook = !!(window.MemoUIStyle && window.MemoUIStyle.isNotebook) ||
+                        document.body.classList.contains('notebook-mode');
+                    idoc.documentElement.classList.toggle('memo-dark', !notebook && document.body.classList.contains('dark'));
                 }
             } catch(e) {}
         }

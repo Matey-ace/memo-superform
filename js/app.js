@@ -111,12 +111,24 @@ const App = (function() {
     // ---- 明暗主题切换 ----
 
     function setupTheme() {
-        // 恢复上次的主题偏好
+        const notebook = !!(window.MemoUIStyle && window.MemoUIStyle.isNotebook);
+        const themeBtn = document.getElementById('themeBtn');
+        // 手账版固定使用浅色纸张，但保留普通版之前保存的主题偏好。
         const saved = localStorage.getItem('theme') || 'light';
-        document.body.classList.toggle('dark', saved === 'dark');
+        document.body.classList.toggle('dark', !notebook && saved === 'dark');
+        if (themeBtn) {
+            themeBtn.hidden = notebook;
+            themeBtn.setAttribute('aria-hidden', notebook ? 'true' : 'false');
+        }
         updateThemeIcon();
 
-        document.getElementById('themeBtn').addEventListener('click', function() {
+        if (!themeBtn) return;
+        themeBtn.addEventListener('click', function() {
+            if (window.MemoUIStyle && window.MemoUIStyle.isNotebook) {
+                document.body.classList.remove('dark');
+                updateThemeIcon();
+                return;
+            }
             const dark = document.body.classList.toggle('dark');
             localStorage.setItem('theme', dark ? 'dark' : 'light');
             updateThemeIcon();

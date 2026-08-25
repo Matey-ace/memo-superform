@@ -107,10 +107,12 @@ MEMO_DARK_CSS = (
 
 MEMO_DARK_JS = (
     '<script>(function(){'
-    'function applyMemoTheme(){var dark=false;try{dark=localStorage.getItem("theme")==="dark"}catch(e){}'
+    'function parentNotebook(){try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")}catch(e){return false}}'
+    'function applyMemoTheme(){var dark=false;try{dark=!parentNotebook()&&localStorage.getItem("theme")==="dark"}catch(e){}'
     'document.documentElement.classList.toggle("memo-dark",!!dark)}'
     'applyMemoTheme();'
     'window.addEventListener("storage",function(e){if(e.key==="theme"||e.key===null)applyMemoTheme()});'
+    'try{if(window.parent!==window){new MutationObserver(applyMemoTheme).observe(window.parent.document.body,{attributes:true,attributeFilter:["class","data-ui-style"]})}}catch(e){}'
     'setInterval(applyMemoTheme,800);'
     '})();</script>'
 )
