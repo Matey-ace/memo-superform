@@ -16,10 +16,6 @@ const App = (function() {
     let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
     if (!VALID_REFRESH_INTERVALS.includes(autoRefreshInterval)) autoRefreshInterval = 10;
 
-    function getTodayBeijing() {
-        return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    }
-    
     function init() {
         setupSettingsPanel();
         setupModeSettings();
@@ -110,41 +106,8 @@ const App = (function() {
 
     // ---- 明暗主题切换 ----
 
-    function setupTheme() {
-        const notebook = !!(window.MemoUIStyle && window.MemoUIStyle.isNotebook);
-        const themeBtn = document.getElementById('themeBtn');
-        // 手账版固定使用浅色纸张，但保留普通版之前保存的主题偏好。
-        const saved = localStorage.getItem('theme') || 'light';
-        document.body.classList.toggle('dark', !notebook && saved === 'dark');
-        if (themeBtn) {
-            themeBtn.hidden = notebook;
-            themeBtn.setAttribute('aria-hidden', notebook ? 'true' : 'false');
-        }
-        updateThemeIcon();
+    function setupTheme() { MemoDashboard.setupTheme(function() { ChartManager.renderAll(); }); }
 
-        if (!themeBtn) return;
-        themeBtn.addEventListener('click', function() {
-            if (window.MemoUIStyle && window.MemoUIStyle.isNotebook) {
-                document.body.classList.remove('dark');
-                updateThemeIcon();
-                return;
-            }
-            const dark = document.body.classList.toggle('dark');
-            localStorage.setItem('theme', dark ? 'dark' : 'light');
-            updateThemeIcon();
-            // 重绘所有图表以适配新主题的文字颜色
-            ChartManager.renderAll();
-        });
-    }
-
-    function updateThemeIcon() {
-        const dark = document.body.classList.contains('dark');
-        const sun = document.getElementById('iconSun');
-        const moon = document.getElementById('iconMoon');
-        if (sun) sun.style.display = dark ? '' : 'none';
-        if (moon) moon.style.display = dark ? 'none' : '';
-    }
-    
     // ---- 代理服务器检查 ----
     
     async function checkProxyServer() {
@@ -741,7 +704,7 @@ const App = (function() {
             ChartManager.setRecords(records);
             // 每日首次自动上传快照并生成智能推荐
             try {
-                const _today = getTodayBeijing();
+                const _today = MemoDashboard.todayBeijing();
                 if (localStorage.getItem('memo_snapshot_date') !== _today) {
                     await RecommendAPI.saveSnapshot(records, false);
                     localStorage.setItem('memo_snapshot_date', _today);

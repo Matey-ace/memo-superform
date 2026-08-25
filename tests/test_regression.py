@@ -29,11 +29,11 @@ class RepositoryContracts(unittest.TestCase):
         self.assertTrue((ROOT / "_archive/legacy/MemoSuperform-Web.spec").exists())
 
     def test_theme_and_study_contracts(self):
-        app = self.read("js/app.js")
+        dashboard = self.read("js/dashboard-core.js")
         study = self.read("js/study-web.js")
         injection = self.read("memo_injection.py")
-        self.assertIn("!notebook && saved === 'dark'", app)
-        self.assertIn("themeBtn.hidden = notebook", app)
+        self.assertIn("!notebook && saved === 'dark'", dashboard)
+        self.assertIn("button.hidden = notebook", dashboard)
         self.assertIn("isActualStudyScreen", study)
         self.assertIn("event.source !== iframe.contentWindow", study)
         self.assertIn('action !== \'home-fallback\'', study)

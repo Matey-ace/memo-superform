@@ -4,6 +4,11 @@
 // ==========================================
 
 const ChartManager = (function() {
+    const toBeijingDate = MemoDashboard.toBeijingDate;
+    const getTodayBeijing = MemoDashboard.todayBeijing;
+    const shiftDateString = MemoDashboard.shiftDate;
+    const getDateRange = MemoDashboard.dateRange;
+    const escapeHtml = MemoDashboard.escapeHtml;
     // 存储所有图表实例 { tileIndex: { chartType, instance } }
     const chartInstances = {};
     // 缓存数据
@@ -23,49 +28,6 @@ const ChartManager = (function() {
     let currentPaletteIndex = parseInt(localStorage.getItem('heatmap_palette') || '0', 10);
     
     // ---- 数据处理工具 ----
-    
-    // 将 ISO 日期字符串转为北京时区的日期字符串 (YYYY-MM-DD)
-    function toBeijingDate(isoString) {
-        if (!isoString) return null;
-        const date = new Date(isoString);
-        if (Number.isNaN(date.getTime())) return null;
-        // 转为北京时间 (UTC+8)
-        const beijingTime = date.getTime() + 8 * 60 * 60 * 1000;
-        const beijingDate = new Date(beijingTime);
-        const year = beijingDate.getUTCFullYear();
-        const month = String(beijingDate.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(beijingDate.getUTCDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    }
-    
-    // 获取今天的日期 (北京时区)
-    function getTodayBeijing() {
-        const now = new Date();
-        const beijingTime = now.getTime() + 8 * 60 * 60 * 1000;
-        const d = new Date(beijingTime);
-        // 用本地方法格式化，因为已经加了偏移
-        const year = d.getUTCFullYear();
-        const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(d.getUTCDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    }
-
-    // 对 YYYY-MM-DD 做纯日历位移，不依赖运行机器的本地时区。
-    function shiftDateString(dateStr, deltaDays) {
-        const parts = dateStr.split('-').map(Number);
-        const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + deltaDays));
-        return d.toISOString().slice(0, 10);
-    }
-    
-    // 获取过去 N 天的日期数组
-    function getDateRange(days) {
-        const dates = [];
-        const today = getTodayBeijing();
-        for (let i = days - 1; i >= 0; i--) {
-            dates.push(shiftDateString(today, -i));
-        }
-        return dates;
-    }
     
     // 从学习记录中聚合每日学习数据
     function aggregateDailyData(records, days) {
@@ -1159,12 +1121,6 @@ const ChartManager = (function() {
             }
         })();
         return { dispose: function() { disposed = true; container.innerHTML = ''; } };
-    }
-
-    function escapeHtml(s) {
-        return String(s || '').replace(/[&<>"']/g, function(c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
     }
 
     function renderRecCards(container, data) {

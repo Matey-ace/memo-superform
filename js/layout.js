@@ -7,21 +7,8 @@ const LayoutManager = (function() {
     let currentLayout = 'single';
     let fullscreenChartBackup = null;
 
-    const layoutTileCount = {
-        'single': 1, 'split2': 2, 'split3': 3, 'grid4': 4
-    };
-
-    const chartConfig = {
-        'heatmap': { icon: '🔥', title: '打卡热力图', color: '#52c41a', toolbar: 'heatmap' },
-        'trend':   { icon: '📈', title: '学习趋势',   color: '#1890ff', toolbar: 'trend' },
-        'memory':  { icon: '🧠', title: '记忆曲线',   color: '#722ed1', toolbar: null },
-        'aiclass': { icon: '🤖', title: 'AI 单词分类', color: '#fa8c16', toolbar: 'ai' },
-        'notepad': { icon: '📚', title: '词书进度',   color: '#13c2c2', toolbar: null },
-        'growth':  { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null },
-        'recommend': { icon: '🎯', title: '智能复习推荐', color: '#e74c3c', toolbar: null },
-        'study-web': { icon: '📖', title: '背单词',     color: '#1677ff', toolbar: null },
-        'diary':     { icon: '📔', title: '记忆手账', color: '#d4576b', toolbar: null }
-    };
+    const layoutTileCount = MemoDashboard.layoutTileCount;
+    const chartConfig = MemoDashboard.chartConfig;
 
     function init() {
         setupLayoutSwitcher();
