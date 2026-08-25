@@ -31,12 +31,15 @@ class RepositoryContracts(unittest.TestCase):
     def test_theme_and_study_contracts(self):
         dashboard = self.read("js/dashboard-core.js")
         study = self.read("js/study-web.js")
+        lifecycle = self.read("js/study-lifecycle.js")
         injection = self.read("memo_injection.py")
         self.assertIn("!notebook && saved === 'dark'", dashboard)
         self.assertIn("button.hidden = notebook", dashboard)
         self.assertIn("isActualStudyScreen", study)
         self.assertIn("event.source !== iframe.contentWindow", study)
         self.assertIn('action !== \'home-fallback\'', study)
+        self.assertIn("observer.disconnect()", lifecycle)
+        self.assertIn("clearInterval(poll)", lifecycle)
         self.assertIn('EXIT_ID="memo-tts-exit"', injection)
         self.assertIn('action:\"home-fallback\"', injection)
 
