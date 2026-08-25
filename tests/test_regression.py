@@ -2,9 +2,11 @@
 import hashlib
 import pathlib
 import re
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 class RepositoryContracts(unittest.TestCase):
     def read(self, path):
@@ -29,14 +31,36 @@ class RepositoryContracts(unittest.TestCase):
     def test_theme_and_study_contracts(self):
         app = self.read("js/app.js")
         study = self.read("js/study-web.js")
-        server = self.read("server.py")
+        injection = self.read("memo_injection.py")
         self.assertIn("!notebook && saved === 'dark'", app)
         self.assertIn("themeBtn.hidden = notebook", app)
         self.assertIn("isActualStudyScreen", study)
         self.assertIn("event.source !== iframe.contentWindow", study)
         self.assertIn('action !== \'home-fallback\'', study)
-        self.assertIn('EXIT_ID="memo-tts-exit"', server)
-        self.assertIn('action:\"home-fallback\"', server)
+        self.assertIn('EXIT_ID="memo-tts-exit"', injection)
+        self.assertIn('action:\"home-fallback\"', injection)
+
+    def test_proxy_route_table_preserves_targets(self):
+        from memo_proxy import resolve_web_route
+        self.assertEqual(
+            ("https://tc-apis.maimemo.com/webstudy/app?x=1", True, False),
+            resolve_web_route("/memo-tc/webstudy/app", "x=1", "GET"),
+        )
+        self.assertEqual(
+            ("https://api.maimemo.com/user/info", False, False),
+            resolve_web_route("/memo-api/user/info", "", "POST"),
+        )
+        self.assertEqual(
+            ("https://accounts.maimemo.com/oidc/auth", True, True),
+            resolve_web_route("/memo-accounts/oidc/auth", "", "GET"),
+        )
+
+    def test_static_security_contract(self):
+        from static_security import is_forbidden_static_path
+        for path in ("/.git/config", "/_archive/legacy/README.md", "/server.py", "/data/launcher.json"):
+            self.assertTrue(is_forbidden_static_path(path), path)
+        for path in ("/index.html", "/css/style.css", "/js/app.js"):
+            self.assertFalse(is_forbidden_static_path(path), path)
 
     def test_release_is_single_asset_and_non_destructive(self):
         script = self.read("release.ps1")

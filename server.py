@@ -29,6 +29,8 @@ import traceback
 from urllib.parse import urlparse, parse_qs, unquote
 
 import codex_auth
+from app_api import LocalApiMixin, configure_local_api
+from static_security import is_forbidden_static_path
 
 # 修复 Windows 控制台编码问题
 if sys.platform == "win32":
@@ -64,142 +66,11 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
 
 CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
 
-MAIMEMO_BASE = "https://open.maimemo.com/open"
-TC_APIS_BASE = "https://tc-apis.maimemo.com"
-API_BASE = "https://api.maimemo.com"
-WWW_BASE = "https://www.maimemo.com"
-ACCOUNTS_BASE = "https://accounts.maimemo.com"
+from memo_proxy import MAIMEMO_BASE, TC_APIS_BASE, resolve_web_route
 
-INTERCEPTOR_JS = (
-    '<script>(function(){'
-    + "var TC='https://tc-apis.maimemo.com',API='https://api.maimemo.com',WWW='https://www.maimemo.com',ACC='https://accounts.maimemo.com';"
-    + "function rw(u){if(typeof u!=='string')return u;return u.replace(TC,'/memo-tc').replace(API,'/memo-api').replace(WWW,'/memo-www').replace(ACC,'/memo-accounts');}"
-    + "var of=window.fetch;window.fetch=function(i,n){if(typeof i==='string'){i=rw(i);}else if(i&&i.url){i=new Request(rw(i.url),i);}return of.call(this,i,n);};"
-    + "var oo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=Array.prototype.slice.call(arguments);a[1]=rw(u);return oo.apply(this,a)};"
-    + "var origOpen=window.open;window.open=function(u){if(typeof u==='string')u=rw(u);return origOpen.call(this,u);};"
-    + "try{var loc=window.location;var origHref=Object.getOwnPropertyDescriptor(Location.prototype,'href');if(origHref&&origHref.set){var origSet=origHref.set;Object.defineProperty(Location.prototype,'href',{set:function(v){return origSet.call(this,rw(v));},get:origHref.get,configurable:true});}}catch(e){};"
-    + "try{var origReplace=Location.prototype.replace;Location.prototype.replace=function(u){return origReplace.call(this,rw(u));};var origAssign=Location.prototype.assign;Location.prototype.assign=function(u){return origAssign.call(this,rw(u));};}catch(e){};"
-    + '})();</script>'
-)
-
-# Dark theme injection for the embedded maimemo webstudy SPA.
-# The dashboard stores its theme in localStorage('theme') and the iframe is
-# same-origin, so we read that and toggle html.memo-dark, then override the
-# SPA's own CSS variables (which natively support dark mode) plus a few
-# hard-coded colors so the study UI follows the dashboard's dark theme.
-MEMO_DARK_CSS = (
-    '<style id="memo-dark-theme">'
-    'html.memo-dark,html.memo-dark body{--text-color-primary:#DBDBDB;--text-color-secondary:#A1A1A1;'
-    '--text-color-title:#FFF;--bg-color-primary:#222324;--bg-color-secondary:#1D1E1E;--bg-color-review:#18191A;'
-    '--bg-color-group-line:#101010;--divider-color:#303030;--border-color:#303030;--popup-background-color:#1D1E1E;'
-    '--white:#222324;background-color:#222324;color:#DBDBDB}'
-    'html.memo-dark .taro-navigation-bar,html.memo-dark .taro-navigation-bar-no-icon{background-color:#1D1E1E!important}'
-    'html.memo-dark .rev-top{background:linear-gradient(180deg,rgb(20 45 60/100%) 0%,rgb(24 58 68/100%) 51%,rgb(30 70 75/100%) 100%)!important}'
-    'html.memo-dark .rev-content-header{color:#8A94A6!important;border-bottom-color:#303030!important}'
-    'html.memo-dark .spelling-hint,html.memo-dark .phrase-play-btn{color:#A1A1A1!important}'
-    'html.memo-dark .phrase-play-btn{border-color:#A1A1A1!important}'
-    'html.memo-dark .phrase-hl{color:#4FD6BC!important}'
-    'html.memo-dark .verify-input{color:#DBDBDB!important;caret-color:#DBDBDB!important}'
-    'html.memo-dark .taro-modal__mask{background-color:rgba(0,0,0,.75)!important}'
-    'html.memo-dark .taro-modal__content,html.memo-dark .taro-modal__inner,html.memo-dark .taro-model__bd{background-color:#1D1E1E!important;color:#DBDBDB!important}'
-    '</style>'
-)
-
-MEMO_DARK_JS = (
-    '<script>(function(){'
-    'function parentNotebook(){try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")}catch(e){return false}}'
-    'function applyMemoTheme(){var dark=false;try{dark=!parentNotebook()&&localStorage.getItem("theme")==="dark"}catch(e){}'
-    'document.documentElement.classList.toggle("memo-dark",!!dark)}'
-    'applyMemoTheme();'
-    'window.addEventListener("storage",function(e){if(e.key==="theme"||e.key===null)applyMemoTheme()});'
-    'try{if(window.parent!==window){new MutationObserver(applyMemoTheme).observe(window.parent.document.body,{attributes:true,attributeFilter:["class","data-ui-style"]})}}catch(e){}'
-    'setInterval(applyMemoTheme,800);'
-    '})();</script>'
-)
-
-# Load exactly one iframe theme.  The standard branch never requests notebook
-# fonts or paper assets; the notebook branch never requests the standard skin.
-MEMO_STUDY_THEME = (
-    '<script>(function(){'
-    'var VERSION="20260825-unified-ui";'
-    'function parentStyle(){try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")?"notebook":"standard"}catch(e){return "standard"}}'
-    'function addCss(id,href){var link=document.getElementById(id);if(link&&link.getAttribute("href")===href)return;'
-    'if(link)link.remove();link=document.createElement("link");link.id=id;link.rel="stylesheet";link.href=href;document.head.appendChild(link)}'
-    'function syncMemoStudyTheme(){var mode=parentStyle(),root=document.documentElement;'
-    'root.classList.toggle("memo-notebook",mode==="notebook");root.classList.toggle("memo-standard",mode==="standard");'
-    'var skin=mode==="notebook"?"/css/maimemo-notebook.css?v="+VERSION:"/css/maimemo-standard.css?v="+VERSION;'
-    'addCss("memo-study-skin",skin);var fonts=document.getElementById("memo-notebook-fonts");'
-    'if(mode==="notebook"){addCss("memo-notebook-fonts","/css/fonts.css?v="+VERSION)}else if(fonts){fonts.remove()}}'
-    'syncMemoStudyTheme();'
-    'try{if(window.parent!==window){new MutationObserver(syncMemoStudyTheme).observe(window.parent.document.body,{attributes:true,attributeFilter:["class","data-ui-style"]})}}catch(e){}'
-    'window.addEventListener("pageshow",syncMemoStudyTheme);'
-    '})();</script>'
-)
-
-# Taro occasionally leaves the navigation bar in its root/no-icon state when
-# opening nested SPA settings.  Keep the native visual fallback for pages that
-# actually own a back handler, but give the TTS page a Memo-controlled exit:
-# try the native Taro stack first, then ask the embedding parent to reload the
-# Maimemo home route if the TTS page is still visible.
-MEMO_NAV_GUARD_JS = (
-    '<script>(function(){'
-    'var EXIT_ID="memo-tts-exit",busy=false,fallbackTimer=0,resetTimer=0;'
-    'function activeTaroPage(){var pages=[].slice.call(document.querySelectorAll(".taro_page.taro_page_show"));'
-    'var visible=pages.filter(function(page){if(page.classList.contains("taro_page_shade"))return false;'
-    'var style=getComputedStyle(page);return style.display!=="none"&&style.visibility!=="hidden"});'
-    'return visible.length?visible[visible.length-1]:null}'
-    'function isTtsPage(){var page=activeTaroPage();return!!(page&&page.querySelector(".tts-settings"))}'
-    'function requestParentHome(){if(!isTtsPage())return;'
-    'if(window.parent!==window){window.parent.postMessage({type:"memo-study-navigation",action:"home-fallback"},location.origin)}'
-    'else{location.replace("/memo-tc/webstudy/app?memo_home=1")}}'
-    'function runExit(){if(busy||!isTtsPage())return;busy=true;var button=document.getElementById(EXIT_ID);'
-    'if(button){button.disabled=true;button.setAttribute("aria-busy","true")}clearTimeout(fallbackTimer);clearTimeout(resetTimer);'
-    'var pages=[].slice.call(document.querySelectorAll(".taro_page.taro_page_show")).filter(function(page){return!page.classList.contains("taro_page_shade")});'
-    'var nativeBack=document.querySelector("#taro-navigation-bar > .taro-navigation-bar-back");'
-    'if(pages.length>1&&nativeBack){try{nativeBack.click()}catch(e){}}'
-    'else if(pages.length>1&&window.Taro&&typeof window.Taro.navigateBack==="function"){try{window.Taro.navigateBack({delta:1})}catch(e){}}'
-    'fallbackTimer=setTimeout(function(){if(isTtsPage())requestParentHome()},400);'
-    'resetTimer=setTimeout(function(){if(isTtsPage()){busy=false;var current=document.getElementById(EXIT_ID);'
-    'if(current){current.disabled=false;current.removeAttribute("aria-busy")}}},2500)}'
-    'function createExit(){var button=document.createElement("button");button.id=EXIT_ID;button.type="button";'
-    'button.setAttribute("aria-label","退出例句发音设置并返回");button.innerHTML="<span aria-hidden=true>&#8592;</span><span>返回</span>";'
-    'button.addEventListener("click",runExit);return button}'
-    'function syncMemoNavigation(){var nav=document.getElementById("taro-navigation-bar"),page=activeTaroPage();'
-    'var tts=!!(page&&page.querySelector(".tts-settings"));'
-    'var nativeNested=!!(page&&page.querySelector(".shortcut-settings,.word-search,.gp"));'
-    'if(nav)nav.classList.toggle("memo-navigation-back-fallback",nativeNested);'
-    'var button=document.getElementById(EXIT_ID);if(tts){if(!button&&document.body){button=createExit();document.body.appendChild(button)}}'
-    'else{busy=false;clearTimeout(fallbackTimer);clearTimeout(resetTimer);if(button)button.remove()}}'
-    'document.addEventListener("keydown",function(event){if(event.key!=="Escape"||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;'
-    'if(!isTtsPage())return;event.preventDefault();event.stopPropagation();runExit()},true);'
-    'var observer=new MutationObserver(syncMemoNavigation);'
-    'observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["class","style"]});'
-    'window.addEventListener("pageshow",syncMemoNavigation);setInterval(syncMemoNavigation,500);syncMemoNavigation();'
-    '})();</script>'
-)
-
-# 墨墨网页版自带快捷键系统（localStorage: shortcut_settings）。
-# 给 START_SPELLING（开始拼写，聚焦输入框）绑定空格键，并把“显示答案”让位到 S 键，
-# 这样背单词时按一下空格即可直接开始输入，无需再用鼠标点击输入框。
-MEMO_STUDY_KEYS_JS = (
-    '<script>(function(){'
-    'if(location.pathname.indexOf("/webstudy/app")<0)return;'
-    'try{'
-    'var KEY="shortcut_settings";'
-    'var cur=null;'
-    'try{cur=JSON.parse(localStorage.getItem(KEY)||"null");}catch(e){}'
-    'var base=(cur&&cur.version===1&&cur.shortcuts)?cur.shortcuts:{};'
-    'var show=base.SHOW_ANSWER;'
-    'var patch={START_SPELLING:{action:"START_SPELLING",key:"Space",modifiers:[],enabled:true}};'
-    'if(!show||show.key===""||show.key==="Space"){'
-    'patch.SHOW_ANSWER={action:"SHOW_ANSWER",key:"s",modifiers:[],enabled:true};'
-    '}'
-    'var merged={};'
-    'for(var k in base){merged[k]=base[k];}'
-    'for(var k2 in patch){merged[k2]=patch[k2];}'
-    'localStorage.setItem(KEY,JSON.stringify({version:1,shortcuts:merged}));'
-    '}catch(e){}'
-    '})();</script>'
+from memo_injection import (
+    INTERCEPTOR_JS, MEMO_DARK_CSS, MEMO_DARK_JS, MEMO_STUDY_THEME,
+    MEMO_NAV_GUARD_JS, MEMO_STUDY_KEYS_JS,
 )
 
 
@@ -243,7 +114,7 @@ class MemoThreadingTCPServer(socketserver.ThreadingTCPServer):
         super().server_bind()
 
 
-class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
+class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
@@ -615,37 +486,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
                 host = h
         return host in ('localhost', '127.0.0.1', '[::1]')
 
-    _FORBIDDEN_STATIC_FILES = {
-        'server.py', 'db.py', 'tts.py', 'recommender.py', 'launcher.py', 'app.py',
-        'schema.sql', 'release.ps1', 'build_linux.sh', 'launcher-linux.sh',
-        'requirements-linux.txt', 'requirements.txt',
-        'MemoSuperform.spec', 'MemoSuperform-Web.spec', 'MemoSuperform-Desktop.spec',
-        '_backup_pre-rewrite.bundle',
-    }
-
     def _is_forbidden_static_path(self, path):
-        """静态服务安全：拒绝点文件(.git/.env)、_ 前缀私有文件、源码/配置与运行数据，
-        避免把项目根目录暴露给浏览器。"""
-        # SimpleHTTPRequestHandler.translate_path() 会先 URL 解码再访问磁盘；
-        # 过滤器必须在同一解码层级检查，否则 /server%2epy、/%2egit/ 等
-        # 编码路径会绕过白名单。Windows 文件系统还必须按大小写不敏感处理。
-        try:
-            decoded = unquote(path, errors='surrogatepass')
-        except (UnicodeDecodeError, ValueError):
-            return True
-        if '\x00' in decoded:
-            return True
-        segs = [s for s in decoded.replace('\\', '/').split('/') if s]
-        if not segs:
-            return False
-        lower_segs = [seg.lower() for seg in segs]
-        if any(seg.startswith('.') or seg.startswith('_') for seg in lower_segs):
-            return True
-        if lower_segs[0] in {name.lower() for name in self._FORBIDDEN_STATIC_FILES}:
-            return True
-        if lower_segs[0] == 'data':
-            return True
-        return False
+        return is_forbidden_static_path(path)
 
     def _send_cors_headers(self):
         origin = (self.headers.get('Origin') or '').strip()
@@ -667,6 +509,22 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(204)
         self._send_cors_headers()
         self.end_headers()
+
+    def _dispatch_web_proxy(self, parsed, method):
+        """Resolve and forward one Maimemo SPA route; return whether matched."""
+        resolved = resolve_web_route(parsed.path, parsed.query, method)
+        if not resolved:
+            return False
+        target, inject, guard_errors = resolved
+        if guard_errors:
+            try:
+                self._web_proxy_request(target, method=method, inject_interceptor=inject)
+            except Exception:
+                self.log_error("proxy error for %s:\n%s", self.path, traceback.format_exc())
+                self.send_error(500)
+        else:
+            self._web_proxy_request(target, method=method, inject_interceptor=inject)
+        return True
 
     def do_GET(self):
         if not self._is_allowed_host():
@@ -694,45 +552,8 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._proxy_request(target_url, method="GET")
             return
 
-        # 普通静态文件
         # ---- Maimemo web study reverse proxy ----
-        if path.startswith("/memo-tc/"):
-            sub = path[len("/memo-tc/"):]
-            target = TC_APIS_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            inject = sub.startswith("webstudy/app") and "." not in sub.split("/")[-1]
-            self._web_proxy_request(target, method="GET", inject_interceptor=inject)
-            return
-
-        if path.startswith("/memo-api/"):
-            sub = path[len("/memo-api/"):]
-            target = API_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="GET")
-            return
-
-        if path.startswith("/memo-www/"):
-            sub = path[len("/memo-www/"):]
-            target = WWW_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="GET", inject_interceptor=True)
-            return
-
-        if path.startswith("/memo-accounts/"):
-            sub = path[len("/memo-accounts/"):]
-            target = ACCOUNTS_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            try:
-                self._web_proxy_request(target, method="GET", inject_interceptor=True)
-            except Exception:
-                self.log_error("proxy error for %s:\n%s", self.path, traceback.format_exc())
-                self.send_error(500)
-            return
-
-        if path.startswith("/webstudy/"):
-            target = TC_APIS_BASE + path
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="GET")
+        if self._dispatch_web_proxy(parsed, "GET"):
             return
 
         # 生成的语音文件（data/generated_audios/）
@@ -851,235 +672,10 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         # ---- Maimemo web study reverse proxy (POST) ----
-        if path.startswith("/memo-tc/"):
-            sub = path[len("/memo-tc/"):]
-            target = TC_APIS_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="POST")
-            return
-
-        if path.startswith("/memo-api/"):
-            sub = path[len("/memo-api/"):]
-            target = API_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="POST")
-            return
-
-        if path.startswith("/memo-www/"):
-            sub = path[len("/memo-www/"):]
-            target = WWW_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="POST")
-            return
-
-        if path.startswith("/memo-accounts/"):
-            sub = path[len("/memo-accounts/"):]
-            target = ACCOUNTS_BASE + "/" + sub
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="POST")
-            return
-
-        if path.startswith("/webstudy/"):
-            target = TC_APIS_BASE + path
-            if parsed.query: target += "?" + parsed.query
-            self._web_proxy_request(target, method="POST")
+        if self._dispatch_web_proxy(parsed, "POST"):
             return
 
         self.send_error(404, "Not Found")
-
-    # ===================== /api/* GET =====================
-    def _handle_api_get(self, path, parsed):
-        # 与数据库无关的本地接口（运行模式 / 语音资源包状态）
-        if path == "/api/app/current-mode":
-            return self._send_json(200, {
-                "mode": _current_mode(),
-                "is_frozen": bool(getattr(sys, "frozen", False)),
-                "data_dir": DATA_DIR,
-            })
-
-        if path == "/api/tts/status":
-            import tts
-            return self._send_json(200, tts.get_status(TTS_PACK_DIR, DATA_DIR))
-
-        if path == "/api/codex/status":
-            return self._send_json(200, CODEX_OAUTH.status())
-
-        known_db_paths = {
-            "/api/recommendations/today",
-            "/api/stats/history",
-            "/api/db/status",
-        }
-        if path not in known_db_paths:
-            return self._send_json(404, {"error": "未知接口"})
-
-        # 参数错误和状态查询不应被可选数据库的离线状态掩盖。
-        if path == "/api/stats/history":
-            raw = parse_qs(parsed.query).get("days", ["30"])[0]
-            try:
-                days = int(raw)
-            except (ValueError, TypeError):
-                return self._send_json(400, {"error": "days must be an integer"})
-            if not (1 <= days <= 3650):
-                return self._send_json(400, {"error": "days out of range (1-3650)"})
-
-        if path == "/api/db/status" and not DB_READY:
-            return self._send_json(200, {
-                "db_ready": False,
-                "has_snapshot": False,
-                "has_recommendations": False,
-            })
-
-        if not DB_READY:
-            return self._send_json(503, {"error": "数据库未就绪"})
-        try:
-            if path == "/api/recommendations/today":
-                recs = recommender.get_today_recommendations()
-                summary = recommender.get_recommendation_summary()
-                return self._send_json(200, {"recommendations": recs, "summary": summary})
-
-            if path == "/api/stats/history":
-                return self._send_json(200, {"stats": db.get_history_stats(days)})
-
-            if path == "/api/db/status":
-                return self._send_json(200, {
-                    "db_ready": True,
-                    "has_snapshot": db.has_today_snapshot(),
-                    "has_recommendations": db.has_today_recommendations(),
-                })
-
-        except Exception as e:
-            traceback.print_exc()
-            return self._send_json(500, {"error": str(e)})
-
-    # ===================== /api/* POST =====================
-    def _handle_api_post(self, path, parsed):
-        try:
-            # 写接口 CSRF 防护：要求自定义头（跨域简单请求无法携带，
-            # 会触发 CORS 预检并被同源策略拦截）
-            if self.headers.get("X-Requested-With") != "XMLHttpRequest":
-                return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
-            try:
-                body = self._read_json_body()
-            except (json.JSONDecodeError, ValueError):
-                return self._send_json(400, {"error": "Invalid JSON body"})
-
-            # 运行模式设置（与数据库无关）
-            if path == "/api/app/set-default-mode":
-                mode = body.get("mode")
-                if mode not in ("desktop", "web"):
-                    return self._send_json(400, {"error": "mode 必须是 desktop 或 web"})
-                if not _write_launcher_config(mode, True):
-                    return self._send_json(500, {"error": "无法写入启动配置文件"})
-                return self._send_json(200, {"ok": True, "mode": mode, "remember": True})
-
-            if path == "/api/app/relaunch":
-                mode = body.get("mode")
-                if mode not in ("desktop", "web"):
-                    return self._send_json(400, {"error": "mode 必须是 desktop 或 web"})
-                ok, msg = _relaunch_app(mode)
-                if not ok:
-                    return self._send_json(400, {"error": msg})
-                return self._send_json(200, {"ok": True, "mode": mode, "relaunching": True})
-
-            if path == "/api/codex/login":
-                try:
-                    return self._send_json(200, CODEX_OAUTH.start_login())
-                except Exception as e:
-                    return self._send_json(500, {"error": str(e)})
-
-            if path == "/api/codex/logout":
-                CODEX_OAUTH.logout()
-                return self._send_json(200, {"ok": True})
-
-            # 语音资源包接口（与数据库无关）
-            if path == "/api/tts/speak":
-                import tts
-                try:
-                    wav_path = tts.speak(
-                        TTS_PACK_DIR,
-                        DATA_DIR,
-                        body.get("text", ""),
-                        voice=body.get("voice"),
-                        language=body.get("language"),
-                        speed=body.get("speed"),
-                    )
-                    return self._send_json(200, {
-                        "ok": True,
-                        "audio_url": "/generated/" + os.path.basename(wav_path),
-                    })
-                except tts.TTSException as e:
-                    return self._send_json(404, {"error": str(e)})
-
-            if path == "/api/tts/enable":
-                import tts
-                try:
-                    state = tts.set_enabled(TTS_PACK_DIR, DATA_DIR, True)
-                    return self._send_json(200, {"ok": True, "enabled": True, "voice": state.get("voice")})
-                except tts.TTSException as e:
-                    return self._send_json(400, {"error": str(e)})
-
-            if path == "/api/tts/disable":
-                import tts
-                tts.set_enabled(TTS_PACK_DIR, DATA_DIR, False)
-                return self._send_json(200, {"ok": True, "enabled": False})
-
-            if path == "/api/tts/preload":
-                import tts
-                try:
-                    tts.preload(TTS_PACK_DIR, DATA_DIR, voice=body.get("voice"))
-                    return self._send_json(200, {"ok": True})
-                except tts.TTSException as e:
-                    return self._send_json(400, {"error": str(e)})
-
-            if path == "/api/tts/shutdown":
-                import tts
-                tts.shutdown(TTS_PACK_DIR, DATA_DIR)
-                return self._send_json(200, {"ok": True})
-
-            # 保存当日快照并生成推荐
-            if path == "/api/snapshot":
-                records = body.get("records", []) or []
-                if not isinstance(records, list):
-                    return self._send_json(400, {"error": "records 必须是数组"})
-                if not DB_READY:
-                    return self._send_json(503, {"error": "数据库未就绪"})
-                force = bool(body.get("force"))
-                if not force and db.has_today_snapshot() and db.has_today_recommendations():
-                    return self._send_json(200, {
-                        "skipped": True,
-                        "summary": recommender.get_recommendation_summary(),
-                    })
-                n = db.save_snapshot(records)
-                stats = db.compute_and_save_daily_stats()
-                cnt = recommender.generate_recommendations(30)
-                return self._send_json(200, {
-                    "skipped": False,
-                    "saved": n,
-                    "recommendations": cnt,
-                    "stats": stats,
-                    "summary": recommender.get_recommendation_summary(),
-                })
-
-            # 标记推荐为已复习: /api/recommendations/<id>/review
-            parts = path.strip("/").split("/")
-            if len(parts) == 4 and parts[0] == "api" and parts[1] == "recommendations" and parts[3] == "review":
-                try:
-                    rec_id = int(parts[2])
-                except (TypeError, ValueError):
-                    return self._send_json(400, {"error": "推荐 ID 必须是正整数"})
-                if rec_id <= 0:
-                    return self._send_json(400, {"error": "推荐 ID 必须是正整数"})
-                if not DB_READY:
-                    return self._send_json(503, {"error": "数据库未就绪"})
-                rc = recommender.mark_reviewed(rec_id)
-                if not rc:
-                    return self._send_json(404, {"error": "推荐记录不存在"})
-                return self._send_json(200, {"ok": True, "updated": rc})
-
-            return self._send_json(404, {"error": "未知接口"})
-        except Exception as e:
-            traceback.print_exc()
-            return self._send_json(500, {"error": str(e)})
 
     # ===================== helpers =====================
     def _safe_content_length(self):
@@ -1183,6 +779,14 @@ def _relaunch_app(mode):
     except Exception as e:
         return False, "重启失败：" + str(e)
     return True, "正在重启..."
+
+
+configure_local_api(
+    CODEX_OAUTH=CODEX_OAUTH, DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
+    DB_READY=DB_READY, db=globals().get("db"), recommender=globals().get("recommender"),
+    _current_mode=_current_mode, _write_launcher_config=_write_launcher_config,
+    _relaunch_app=_relaunch_app,
+)
 
 
 def start_server(open_browser=True, block=True):
