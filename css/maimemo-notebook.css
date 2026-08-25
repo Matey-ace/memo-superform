@@ -464,11 +464,12 @@ html.memo-notebook #taro-navigation-bar .taro-navigation-bar-title-item {
 }
 
 /* 根页面继续不显示退出图标；进入子页面后，以 Taro 的 back/home 状态恢复对应按钮。 */
-html.memo-notebook #taro-navigation-bar.taro-navigation-bar-no-icon:not(.taro-navigation-bar-back-icon):not(.taro-navigation-bar-home-icon) > .taro-navigation-bar-back,
-html.memo-notebook #taro-navigation-bar.taro-navigation-bar-no-icon:not(.taro-navigation-bar-back-icon):not(.taro-navigation-bar-home-icon) > .taro-navigation-bar-home {
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-no-icon:not(.taro-navigation-bar-back-icon):not(.taro-navigation-bar-home-icon):not(.memo-navigation-back-fallback) > .taro-navigation-bar-back,
+html.memo-notebook #taro-navigation-bar.taro-navigation-bar-no-icon:not(.taro-navigation-bar-back-icon):not(.taro-navigation-bar-home-icon):not(.memo-navigation-back-fallback) > .taro-navigation-bar-home {
     display: none !important;
 }
 
+html.memo-notebook #taro-navigation-bar.memo-navigation-back-fallback > .taro-navigation-bar-back,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home {
     position: absolute !important;
@@ -501,6 +502,7 @@ html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-na
     transform: rotate(1deg);
 }
 
+html.memo-notebook #taro-navigation-bar.memo-navigation-back-fallback > .taro-navigation-bar-back::before,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back::before,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home::before {
     content: '';
@@ -529,6 +531,7 @@ html.memo-notebook #taro-navigation-bar .taro-navigation-bar-home svg path {
     stroke-width: .18;
 }
 
+html.memo-notebook #taro-navigation-bar.memo-navigation-back-fallback > .taro-navigation-bar-back:hover,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back:hover,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home:hover {
     background: var(--memo-rose-pale) !important;
@@ -536,12 +539,14 @@ html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-na
     transform: translateY(-1px) rotate(0deg);
 }
 
+html.memo-notebook #taro-navigation-bar.memo-navigation-back-fallback > .taro-navigation-bar-back:active,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back:active,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home:active {
     box-shadow: 0 .06rem .18rem rgba(104, 76, 61, .16);
     transform: translateY(1px) rotate(0deg);
 }
 
+html.memo-notebook #taro-navigation-bar.memo-navigation-back-fallback > .taro-navigation-bar-back:focus-visible,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back:focus-visible,
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home:focus-visible {
     outline: 2px dashed var(--memo-rose-deep) !important;
@@ -592,10 +597,68 @@ html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-show {
     box-shadow: 0 .16rem .5rem rgba(0, 0, 0, .3);
 }
 
+html.memo-notebook.memo-dark #taro-navigation-bar.memo-navigation-back-fallback > .taro-navigation-bar-back,
 html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-back-icon > .taro-navigation-bar-back,
 html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-navigation-bar-home {
     background: linear-gradient(145deg, rgba(76, 52, 61, .98), rgba(61, 46, 52, .98)) !important;
     box-shadow: 0 .14rem .38rem rgba(0, 0, 0, .34);
+}
+
+/* 墨墨 TTS 原页没有可靠退出入口，因此使用手账风格的独立返回便签。 */
+html.memo-notebook #memo-tts-exit {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top));
+    left: max(16px, calc((100vw - 760px) / 2 + 16px));
+    z-index: 10020;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 82px;
+    height: 40px;
+    padding: 0 16px;
+    box-sizing: border-box;
+    overflow: visible;
+    border: 1px dashed var(--memo-line-strong);
+    border-radius: 13px 9px 12px 8px;
+    background: linear-gradient(145deg, rgba(255, 247, 241, .98), rgba(250, 225, 225, .98));
+    box-shadow: 0 .2rem .62rem rgba(104, 76, 61, .2);
+    color: var(--memo-ink-mid);
+    font-family: 'Noto Serif SC', 'STKaiti', serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    cursor: pointer;
+    transform: rotate(-1deg);
+    transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+html.memo-notebook #memo-tts-exit::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 29px;
+    width: 24px;
+    height: 9px;
+    border-inline: 1px solid rgba(226, 180, 161, .28);
+    background: rgba(255, 220, 192, .7);
+    transform: rotate(3deg);
+    pointer-events: none;
+}
+
+html.memo-notebook #memo-tts-exit[hidden] { display: none !important; }
+html.memo-notebook #memo-tts-exit:hover { background: var(--memo-rose-pale); box-shadow: 0 .28rem .78rem rgba(104, 76, 61, .25); transform: translateY(-1px) rotate(0); }
+html.memo-notebook #memo-tts-exit:active { transform: translateY(1px) rotate(0); }
+html.memo-notebook #memo-tts-exit:focus-visible { outline: 2px dashed var(--memo-rose-deep); outline-offset: 4px; }
+html.memo-notebook #memo-tts-exit:disabled { cursor: wait; opacity: .68; }
+html.memo-notebook.memo-dark #memo-tts-exit { background: linear-gradient(145deg, rgba(76, 52, 61, .98), rgba(61, 46, 52, .98)); box-shadow: 0 .2rem .62rem rgba(0, 0, 0, .35); color: var(--memo-ink); }
+
+@media (max-width: 820px) {
+    html.memo-notebook #memo-tts-exit { left: max(10px, env(safe-area-inset-left)); top: max(11px, env(safe-area-inset-top)); min-width: 72px; height: 37px; padding: 0 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.memo-notebook #memo-tts-exit { transition: none; }
 }
 
 @media (max-width: 720px) {

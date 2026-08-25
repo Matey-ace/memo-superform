@@ -139,7 +139,7 @@ const App = (function() {
         const el = document.getElementById('serverStatus');
         if (el) el.className = 'server-status checking';
         try {
-            const resp = await fetch('/css/style.css', { method: 'HEAD' });
+            const resp = await fetch('/index.html', { method: 'HEAD' });
             proxyOnline = resp.ok;
         } catch (e) { proxyOnline = false; }
         if (el) {
@@ -180,6 +180,8 @@ const App = (function() {
         document.getElementById('aiEndpointInput').value = aiConfig.endpoint;
         document.getElementById('aiKeyInput').value = aiConfig.apiKey;
         document.getElementById('aiModelInput').value = aiConfig.model;
+        const uiStyleSelect = document.getElementById('uiStyleSelect');
+        if (uiStyleSelect) uiStyleSelect.value = window.MemoUIStyle.name;
 
         const providerSelect = document.getElementById('aiProviderSelect');
         const codexBox = document.getElementById('codexAuthBox');
@@ -288,6 +290,7 @@ const App = (function() {
         document.getElementById('saveSettingsBtn').addEventListener('click', function() {
             const token = document.getElementById('tokenInput').value.trim();
             const oldToken = MaimemoAPI.getToken();
+            const nextStyle = uiStyleSelect ? uiStyleSelect.value : window.MemoUIStyle.name;
             MaimemoAPI.setToken(token);
             AIAPI.setConfig({
                 provider: document.getElementById('aiProviderSelect').value,
@@ -295,6 +298,11 @@ const App = (function() {
                 apiKey: document.getElementById('aiKeyInput').value.trim(),
                 model: document.getElementById('aiModelInput').value.trim()
             });
+            if (nextStyle !== window.MemoUIStyle.name) {
+                window.MemoUIStyle.save(nextStyle);
+                location.replace('index.html');
+                return;
+            }
             closeSettings();
             if (token) { hideWelcome(); if (token !== oldToken) loadAllData(); }
             else showWelcome();

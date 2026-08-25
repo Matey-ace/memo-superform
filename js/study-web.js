@@ -9,9 +9,6 @@ const StudyWeb = (function() {
         var container = document.getElementById(containerId);
         if (!container) return null;
 
-        // 四个快捷判断按钮属于手账版专属交互。原版/桌面原版即使加载
-        // 同一份脚本也不创建可操作状态，避免样式或点击逻辑意外泄漏。
-        var notebookMode = document.body.classList.contains('notebook-mode');
         var shortcutMap = loadShortcuts();
 
         if (container.querySelector('.study-web-iframe')) {
@@ -43,19 +40,19 @@ const StudyWeb = (function() {
                     '<div class="spinner"></div>' +
                     '<p>' + (token ? '正在加载墨墨背单词...' : '正在跳转登录页...') + '</p>' +
                 '</div>' +
-                '<div class="study-web-actions" hidden aria-label="手账模式快捷判断">' +
-                    '<button class="study-web-btn know" data-key="1" title="快捷键 1：认识">' +
+                '<div class="study-web-actions" hidden aria-label="快捷判断">' +
+                    '<button class="study-web-btn know" data-action="FAMILIAR" data-key="1" title="快捷键 1：认识">' +
                         '\u8ba4\u8bc6<span class="key-hint">1</span></button>' +
-                    '<button class="study-web-btn vague" data-key="2" title="快捷键 2：模糊">' +
+                    '<button class="study-web-btn vague" data-action="VAGUE" data-key="2" title="快捷键 2：模糊">' +
                         '\u6a21\u7cca<span class="key-hint">2</span></button>' +
-                    '<button class="study-web-btn forget" data-key="3" title="快捷键 3：忘记">' +
+                    '<button class="study-web-btn forget" data-action="FORGET" data-key="3" title="快捷键 3：忘记">' +
                         '\u5fd8\u8bb0<span class="key-hint">3</span></button>' +
-                    '<button class="study-web-btn well" data-key="4" title="快捷键 4：熟知">' +
-                        '\u7194\u77e5<span class="key-hint">4</span></button>' +
+                    '<button class="study-web-btn well" data-action="WELL_FAMILIAR" data-key="4" title="快捷键 4：熟知">' +
+                        '\u719f\u77e5<span class="key-hint">4</span></button>' +
                 '</div>' +
                 '<button class="study-shortcut-toggle" type="button" hidden aria-label="查看和修改快捷键">⌘ 快捷键</button>' +
                 '<section class="study-shortcut-panel" hidden aria-label="背单词快捷键设置">' +
-                    '<div class="study-shortcut-head"><strong>快捷键便签</strong><button type="button" data-close-shortcuts aria-label="关闭快捷键便签">×</button></div>' +
+                    '<div class="study-shortcut-head"><strong>快捷键设置</strong><button type="button" data-close-shortcuts aria-label="关闭快捷键设置">×</button></div>' +
                     '<p>点按按键框后按下新组合键；改动立即保存并生效。</p>' +
                     buildShortcutFields(shortcutMap) +
                     '<button class="study-shortcut-reset" type="button">恢复墨墨默认快捷键</button>' +
@@ -67,7 +64,70 @@ const StudyWeb = (function() {
         var actions = container.querySelector('.study-web-actions');
         var shortcutToggle = container.querySelector('.study-shortcut-toggle');
         var shortcutPanel = container.querySelector('.study-shortcut-panel');
-        shortcutToggle.hidden = !notebookMode;
+        var studyScreenObserver = null;
+        var studyScreenPoll = null;
+        var studyControlsActive = false;
+        var studyHomeFallbackPending = false;
+
+        // URL 只能说明墨墨 SPA 已加载，公测说明、词书和设置页也共用
+        // /webstudy/app。只有学习页的语义根节点实际挂载后才显示操作栏，
+        // 避免操作栏提前覆盖说明页并拦截“进入背单词”的点击。
+        function getActiveTaroPage(idoc) {
+            var pages = Array.prototype.slice.call(idoc.querySelectorAll('.taro_page.taro_page_show'));
+            var visible = pages.filter(function(page) {
+                if (page.classList.contains('taro_page_shade')) return false;
+                var style = iframe.contentWindow.getComputedStyle(page);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+            });
+            return visible.length ? visible[visible.length - 1] : null;
+        }
+
+        function isActualStudyScreen() {
+            try {
+                var idoc = iframe.contentDocument;
+                if (!idoc || !idoc.body) return false;
+                var activePage = getActiveTaroPage(idoc);
+                var scope = activePage || idoc;
+                var reviewRoot = scope.querySelector('.rev-root');
+                return !!(reviewRoot && scope.querySelector('.rev-top, .rev-scroller, .rev-bottom, .rev-resp-btns'));
+            } catch(e) {
+                return false;
+            }
+        }
+
+        function setStudyControlsActive(active) {
+            studyControlsActive = !!active;
+            actions.hidden = !studyControlsActive;
+            shortcutToggle.hidden = !studyControlsActive;
+            container.dataset.studyScreenActive = studyControlsActive ? 'true' : 'false';
+            if (!studyControlsActive) setShortcutPanelOpen(false);
+        }
+
+        function stopStudyScreenWatch() {
+            if (studyScreenObserver) studyScreenObserver.disconnect();
+            studyScreenObserver = null;
+            if (studyScreenPoll) clearInterval(studyScreenPoll);
+            studyScreenPoll = null;
+        }
+
+        function syncStudyScreen() {
+            setStudyControlsActive(isActualStudyScreen());
+        }
+
+        function startStudyScreenWatch() {
+            stopStudyScreenWatch();
+            setStudyControlsActive(false);
+            try {
+                var idoc = iframe.contentDocument;
+                if (!idoc || !idoc.documentElement) return;
+                var FrameMutationObserver = iframe.contentWindow && iframe.contentWindow.MutationObserver;
+                if (!FrameMutationObserver) return;
+                studyScreenObserver = new FrameMutationObserver(syncStudyScreen);
+                studyScreenObserver.observe(idoc.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+                studyScreenPoll = setInterval(syncStudyScreen, 500);
+                syncStudyScreen();
+            } catch(e) {}
+        }
 
         // Listen for iframe load events to detect state changes
         // (login page -> SPA after login)
@@ -81,28 +141,45 @@ const StudyWeb = (function() {
             } catch(e) {}
         }
 
+        // The upstream TTS settings route can be mounted without a working
+        // Taro back control.  Only the current, same-origin study iframe may
+        // request the hard fallback to the Maimemo home route.
+        function handleStudyNavigationMessage(event) {
+            if (event.source !== iframe.contentWindow || event.origin !== window.location.origin) return;
+            var message = event.data;
+            if (!message || message.type !== 'memo-study-navigation' || message.action !== 'home-fallback') return;
+            if (studyHomeFallbackPending) return;
+
+            studyHomeFallbackPending = true;
+            setStudyControlsActive(false);
+            stopStudyScreenWatch();
+            var loadingText = loading.querySelector('p');
+            if (loadingText) loadingText.textContent = '正在返回墨墨首页...';
+            loading.style.display = 'flex';
+            iframe.src = '/memo-tc/webstudy/app?memo_home=1';
+        }
+
+        window.addEventListener('message', handleStudyNavigationMessage);
+
         iframe.addEventListener('load', function() {
             var url = '';
             try { url = iframe.contentWindow.location.href; } catch(e) {}
+            studyHomeFallbackPending = false;
             syncIframeTheme();
+            loading.style.display = 'none';
+            startStudyScreenWatch();
 
             if (url.indexOf('/webstudy/app') >= 0 || url.indexOf('/memo-tc/webstudy/app') >= 0) {
-                // SPA loaded (either directly or after login callback)
-                setTimeout(function() {
-                    loading.style.display = 'none';
-                    actions.hidden = !notebookMode;
-                    shortcutToggle.hidden = !notebookMode;
-                }, 1500);
+                // SPA 已加载；选择栏继续等待 .rev-root 学习界面挂载。
+                syncStudyScreen();
             } else if (url.indexOf('/interaction/') >= 0 || url.indexOf('/memo-accounts/') >= 0) {
                 // 登录页已经可交互：必须撤掉全屏 loading，不能用提示层盖住表单。
-                loading.style.display = 'none';
-                actions.hidden = true;
+                setStudyControlsActive(false);
             }
         });
 
         // Bind button events
-        if (notebookMode) {
-            updateShortcutLabels(container, shortcutMap);
+        updateShortcutLabels(container, shortcutMap);
             container.querySelectorAll('.study-web-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     var shortcut = shortcutMap[btn.getAttribute('data-action') || actionForDefault(btn.getAttribute('data-key'))];
@@ -145,12 +222,16 @@ const StudyWeb = (function() {
                 });
             });
             shortcutPanel.querySelector('.study-shortcut-reset').addEventListener('click', function() { shortcutMap = defaultShortcuts(); saveShortcuts(shortcutMap); shortcutPanel.querySelectorAll('[data-shortcut]').forEach(function(i){i.value=formatShortcut(shortcutMap[i.getAttribute('data-shortcut')]);}); updateShortcutLabels(container, shortcutMap); });
-            document.addEventListener('keydown', handleShortcutKeydown);
-        }
+        document.addEventListener('keydown', handleShortcutKeydown);
 
-        return createMockInstance(container, function() { document.removeEventListener('keydown', handleShortcutKeydown); });
+        return createMockInstance(container, function() {
+            document.removeEventListener('keydown', handleShortcutKeydown);
+            window.removeEventListener('message', handleStudyNavigationMessage);
+            stopStudyScreenWatch();
+        });
 
         function handleShortcutKeydown(e) {
+            if (!studyControlsActive) return;
             var target = e.target;
             if (e.repeat || (target && target.closest && target.closest('.study-shortcut-panel, input, textarea, select, [contenteditable="true"]'))) return;
             var action = findShortcutAction(shortcutMap, e);

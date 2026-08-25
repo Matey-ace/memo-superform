@@ -37,6 +37,8 @@
   --round: 'M PLUS Rounded 1c', 'Noto Sans SC', sans-serif;
 }
 
+[hidden] { display: none !important; }
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 

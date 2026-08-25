@@ -115,22 +115,64 @@ MEMO_DARK_JS = (
     '})();</script>'
 )
 
-# The proxied study SPA stays visually untouched unless it is hosted by the
-# anon notebook page.  Keeping the skin in a standalone stylesheet avoids
-# patching Maimemo's hashed bundles and lets upstream application updates keep
-# their original behavior.
-MEMO_NOTEBOOK_SKIN = (
-    '<link id="memo-notebook-fonts" rel="stylesheet" href="/css/fonts.css?v=40">'
-    '<link id="memo-notebook-skin" rel="stylesheet" href="/css/maimemo-notebook.css?v=20260825-exit-controls">'
+# Load exactly one iframe theme.  The standard branch never requests notebook
+# fonts or paper assets; the notebook branch never requests the standard skin.
+MEMO_STUDY_THEME = (
     '<script>(function(){'
-    'function notebookEnabled(){'
-    'try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")}catch(e){return false}'
-    '}'
-    'function syncMemoNotebook(){document.documentElement.classList.toggle("memo-notebook",notebookEnabled())}'
-    'syncMemoNotebook();'
-    'try{if(window.parent!==window){new MutationObserver(syncMemoNotebook).observe(window.parent.document.body,{attributes:true,attributeFilter:["class"]})}}catch(e){}'
-    'window.addEventListener("pageshow",syncMemoNotebook);'
-    'setInterval(syncMemoNotebook,1000);'
+    'var VERSION="20260825-unified-ui";'
+    'function parentStyle(){try{return window.parent!==window&&window.parent.document.body.classList.contains("notebook-mode")?"notebook":"standard"}catch(e){return "standard"}}'
+    'function addCss(id,href){var link=document.getElementById(id);if(link&&link.getAttribute("href")===href)return;'
+    'if(link)link.remove();link=document.createElement("link");link.id=id;link.rel="stylesheet";link.href=href;document.head.appendChild(link)}'
+    'function syncMemoStudyTheme(){var mode=parentStyle(),root=document.documentElement;'
+    'root.classList.toggle("memo-notebook",mode==="notebook");root.classList.toggle("memo-standard",mode==="standard");'
+    'var skin=mode==="notebook"?"/css/maimemo-notebook.css?v="+VERSION:"/css/maimemo-standard.css?v="+VERSION;'
+    'addCss("memo-study-skin",skin);var fonts=document.getElementById("memo-notebook-fonts");'
+    'if(mode==="notebook"){addCss("memo-notebook-fonts","/css/fonts.css?v="+VERSION)}else if(fonts){fonts.remove()}}'
+    'syncMemoStudyTheme();'
+    'try{if(window.parent!==window){new MutationObserver(syncMemoStudyTheme).observe(window.parent.document.body,{attributes:true,attributeFilter:["class","data-ui-style"]})}}catch(e){}'
+    'window.addEventListener("pageshow",syncMemoStudyTheme);'
+    '})();</script>'
+)
+
+# Taro occasionally leaves the navigation bar in its root/no-icon state when
+# opening nested SPA settings.  Keep the native visual fallback for pages that
+# actually own a back handler, but give the TTS page a Memo-controlled exit:
+# try the native Taro stack first, then ask the embedding parent to reload the
+# Maimemo home route if the TTS page is still visible.
+MEMO_NAV_GUARD_JS = (
+    '<script>(function(){'
+    'var EXIT_ID="memo-tts-exit",busy=false,fallbackTimer=0,resetTimer=0;'
+    'function activeTaroPage(){var pages=[].slice.call(document.querySelectorAll(".taro_page.taro_page_show"));'
+    'var visible=pages.filter(function(page){if(page.classList.contains("taro_page_shade"))return false;'
+    'var style=getComputedStyle(page);return style.display!=="none"&&style.visibility!=="hidden"});'
+    'return visible.length?visible[visible.length-1]:null}'
+    'function isTtsPage(){var page=activeTaroPage();return!!(page&&page.querySelector(".tts-settings"))}'
+    'function requestParentHome(){if(!isTtsPage())return;'
+    'if(window.parent!==window){window.parent.postMessage({type:"memo-study-navigation",action:"home-fallback"},location.origin)}'
+    'else{location.replace("/memo-tc/webstudy/app?memo_home=1")}}'
+    'function runExit(){if(busy||!isTtsPage())return;busy=true;var button=document.getElementById(EXIT_ID);'
+    'if(button){button.disabled=true;button.setAttribute("aria-busy","true")}clearTimeout(fallbackTimer);clearTimeout(resetTimer);'
+    'var pages=[].slice.call(document.querySelectorAll(".taro_page.taro_page_show")).filter(function(page){return!page.classList.contains("taro_page_shade")});'
+    'var nativeBack=document.querySelector("#taro-navigation-bar > .taro-navigation-bar-back");'
+    'if(pages.length>1&&nativeBack){try{nativeBack.click()}catch(e){}}'
+    'else if(pages.length>1&&window.Taro&&typeof window.Taro.navigateBack==="function"){try{window.Taro.navigateBack({delta:1})}catch(e){}}'
+    'fallbackTimer=setTimeout(function(){if(isTtsPage())requestParentHome()},400);'
+    'resetTimer=setTimeout(function(){if(isTtsPage()){busy=false;var current=document.getElementById(EXIT_ID);'
+    'if(current){current.disabled=false;current.removeAttribute("aria-busy")}}},2500)}'
+    'function createExit(){var button=document.createElement("button");button.id=EXIT_ID;button.type="button";'
+    'button.setAttribute("aria-label","退出例句发音设置并返回");button.innerHTML="<span aria-hidden=true>&#8592;</span><span>返回</span>";'
+    'button.addEventListener("click",runExit);return button}'
+    'function syncMemoNavigation(){var nav=document.getElementById("taro-navigation-bar"),page=activeTaroPage();'
+    'var tts=!!(page&&page.querySelector(".tts-settings"));'
+    'var nativeNested=!!(page&&page.querySelector(".shortcut-settings,.word-search,.gp"));'
+    'if(nav)nav.classList.toggle("memo-navigation-back-fallback",nativeNested);'
+    'var button=document.getElementById(EXIT_ID);if(tts){if(!button&&document.body){button=createExit();document.body.appendChild(button)}}'
+    'else{busy=false;clearTimeout(fallbackTimer);clearTimeout(resetTimer);if(button)button.remove()}}'
+    'document.addEventListener("keydown",function(event){if(event.key!=="Escape"||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;'
+    'if(!isTtsPage())return;event.preventDefault();event.stopPropagation();runExit()},true);'
+    'var observer=new MutationObserver(syncMemoNavigation);'
+    'observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:["class","style"]});'
+    'window.addEventListener("pageshow",syncMemoNavigation);setInterval(syncMemoNavigation,500);syncMemoNavigation();'
     '})();</script>'
 )
 
@@ -343,11 +385,11 @@ class MemoProxyHandler(http.server.SimpleHTTPRequestHandler):
             html = re.sub(r'(<script[^>]*src=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             html = re.sub(r'(<link[^>]*href=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
             if '<head>' in html:
-                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_NOTEBOOK_SKIN + MEMO_STUDY_KEYS_JS, 1)
+                html = html.replace('<head>', '<head>' + INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_THEME + MEMO_NAV_GUARD_JS + MEMO_STUDY_KEYS_JS, 1)
             elif '<head ' in html:
-                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_NOTEBOOK_SKIN + MEMO_STUDY_KEYS_JS + '<head ', 1)
+                html = html.replace('<head ', INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_THEME + MEMO_NAV_GUARD_JS + MEMO_STUDY_KEYS_JS + '<head ', 1)
             else:
-                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_NOTEBOOK_SKIN + MEMO_STUDY_KEYS_JS + html
+                html = INTERCEPTOR_JS + MEMO_DARK_CSS + MEMO_DARK_JS + MEMO_STUDY_THEME + MEMO_NAV_GUARD_JS + MEMO_STUDY_KEYS_JS + html
             resp_body = html.encode('utf-8')
         else:
             resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)

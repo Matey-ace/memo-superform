@@ -5,18 +5,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
-    <link rel="stylesheet" href="css/style.css?v=40">
-    <link rel="stylesheet" href="css/ai-toolbar.css?v=40">
-    <link rel="stylesheet" href="css/drag.css?v=40">
-    <link rel="stylesheet" href="css/study-web.css?v=43">
+    <script src="js/ui-style.js?v=20260825-unified-ui"></script>
     <script src="vendor/echarts.min.js?v=40"></script>
 </head>
 <body>
+    <script>window.MemoUIStyle.applyBody(document.body);</script>
     <!-- 顶部导航栏 -->
     <header class="topbar">
         <div class="topbar-left">
-            <div class="logo">🧲</div>
-            <h1>Memo Superform</h1>
+            <div class="logo">
+                <span data-standard-only>🧲</span>
+                <img hidden data-notebook-only data-notebook-src="img/gifs/anon-think.gif" alt="mascot">
+            </div>
+            <div class="topbar-brand">
+                <h1>Memo Superform</h1>
+                <span class="topbar-sub" hidden data-notebook-only>anon 笔记本 · 数据磁贴</span>
+            </div>
         </div>
         <div class="topbar-center">
             <div class="layout-switcher">
@@ -60,11 +64,13 @@
                 <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
             </button>
         </div>
+        <div class="topbar-tape" hidden data-notebook-only aria-hidden="true"></div>
     </header>
 
     <!-- 主内容区 -->
     <main id="dashboard" class="dashboard layout-single">
         <div class="tile" draggable="true" data-tile="0">
+            <span class="tile-tape" hidden data-notebook-only aria-hidden="true"></span>
             <div class="tile-header" style="--accent-color: #52c41a;">
                 <span class="tile-icon">🔥</span>
                 <span class="tile-title">打卡热力图</span>
@@ -90,6 +96,7 @@
         </div>
 
         <div class="tile" draggable="true" data-tile="1" style="display: none;">
+            <span class="tile-tape" hidden data-notebook-only aria-hidden="true"></span>
             <div class="tile-header" style="--accent-color: #1890ff;">
                 <span class="tile-icon">📈</span>
                 <span class="tile-title">学习趋势</span>
@@ -123,6 +130,7 @@
         </div>
 
         <div class="tile" draggable="true" data-tile="2" style="display: none;">
+            <span class="tile-tape" hidden data-notebook-only aria-hidden="true"></span>
             <div class="tile-header" style="--accent-color: #722ed1;">
                 <span class="tile-icon">🧠</span>
                 <span class="tile-title">记忆曲线</span>
@@ -148,6 +156,7 @@
         </div>
 
         <div class="tile" draggable="true" data-tile="3" style="display: none;">
+            <span class="tile-tape" hidden data-notebook-only aria-hidden="true"></span>
             <div class="tile-header" style="--accent-color: #fa8c16;">
                 <span class="tile-icon">🤖</span>
                 <span class="tile-title">AI 单词分类</span>
@@ -187,6 +196,18 @@
                 <button id="closeSettings" class="close-btn">&times;</button>
             </div>
             <div class="settings-body">
+                <div class="setting-group">
+                    <h3>界面风格</h3>
+                    <div class="setting-item">
+                        <label for="uiStyleSelect">当前风格</label>
+                        <select id="uiStyleSelect">
+                            <option value="standard">普通版</option>
+                            <option value="notebook">手账版</option>
+                        </select>
+                        <p class="hint">保存后整页重载；两套视觉资源始终隔离加载。</p>
+                    </div>
+                </div>
+
                 <div class="setting-group">
                     <h3>墨墨 API 配置</h3>
                     <div class="setting-item">
@@ -315,7 +336,10 @@
     <!-- 欢迎/未配置提示 -->
     <div id="welcomeOverlay" class="welcome-overlay">
         <div class="welcome-card">
-            <div class="welcome-icon">🧲</div>
+            <div class="welcome-icon">
+                <span data-standard-only>🧲</span>
+                <img hidden data-notebook-only data-notebook-src="img/gifs/tomori-c.gif" class="welcome-gif" alt="">
+            </div>
             <h2>欢迎使用 Memo Superform</h2>
             <p>你的墨墨背单词数据磁贴仪表盘</p>
             <div class="welcome-steps">
@@ -327,11 +351,17 @@
         </div>
     </div>
 
-    <script src="js/api.js?v=45"></script>
+    <script>window.MemoUIStyle.activate(document);</script>
+    <script src="js/api.js?v=20260825-unified-ui"></script>
     <script src="js/tts.js?v=40"></script>
     <script src="js/charts.js?v=44"></script>
-    <script src="js/layout.js?v=45"></script>
-    <script src="js/study-web.js?v=42"></script>
-    <script src="js/app.js?v=45"></script>
+    <script src="js/layout.js?v=20260825-unified-ui"></script>
+    <script src="js/study-web.js?v=20260825-unified-ui"></script>
+    <script>
+        if (window.MemoUIStyle.isNotebook) {
+            document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
+        }
+    </script>
+    <script src="js/app.js?v=20260825-unified-ui"></script>
 </body>
 </html>
