@@ -1,0 +1,29 @@
+/* 停用的手账彩蛋样式；仅归档，不参与正式页面和 EXE。 */
+.egg-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(24, 18, 32, .55);
+  backdrop-filter: blur(3px);
+  overflow: hidden;
+  pointer-events: none;
+  animation: eggFadeIn .3s ease;
+}
+.egg-title {
+  position: absolute; top: 16%; left: 0; right: 0; z-index: 2;
+  text-align: center;
+  font-family: 'M PLUS Rounded 1c', sans-serif; font-weight: 900;
+  font-size: clamp(22px, 6vw, 40px); letter-spacing: 3px; color: #fff;
+  text-shadow: 0 0 20px rgba(255, 136, 153, .9);
+}
+.egg-gif {
+  position: absolute; top: -22%; object-fit: cover; border-radius: 16px;
+  border: 2px solid rgba(255, 255, 255, .65);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .4);
+  opacity: 0; animation: eggFall 4.2s linear forwards;
+}
+@keyframes eggFall {
+  0% { transform: translateY(0) rotate(0); opacity: 0; }
+  8% { opacity: 1; }
+  100% { transform: translateY(135vh) rotate(360deg) translateX(var(--drift, 0)); opacity: 1; }
+}
+@keyframes eggFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.egg-overlay.out { opacity: 0; transition: opacity .8s ease; }

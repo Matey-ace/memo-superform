@@ -1,0 +1,14 @@
+'use strict';
+const fs = require('fs');
+const assert = require('assert');
+const read = p => fs.readFileSync(p, 'utf8');
+const index = read('index.html');
+const files = ['js/ui-style.js','js/api.js','js/tts.js','js/charts.js','js/layout.js','js/study-web.js','js/app.js'];
+for (const file of files) assert(index.includes(file), `missing script load: ${file}`);
+const study = read('js/study-web.js');
+const actions = ['FAMILIAR','VAGUE','FORGET','WELL_FAMILIAR','START_SPELLING','SHOW_ANSWER','PREVIOUS_WORD','EXIT_SPELLING','CLEAR_INPUT','PLAY_AUDIO','TTS_PHRASE_1','TTS_PHRASE_2','TTS_PHRASE_3','SEARCH'];
+for (const action of actions) assert(study.includes(action), `missing shortcut ${action}`);
+assert.strictEqual(new Set(actions).size, 14);
+const globals = {App:'js/app.js',MaimemoAPI:'js/api.js',AIAPI:'js/api.js',RecommendAPI:'js/api.js',ChartManager:'js/charts.js',LayoutManager:'js/layout.js',StudyWeb:'js/study-web.js',TTS:'js/tts.js',MemoUIStyle:'js/ui-style.js'};
+for (const [name,file] of Object.entries(globals)) assert(new RegExp(`(?:const|var)\\s+${name}\\s*=`).test(read(file)) || read(file).includes(`window.${name} =`), `missing global ${name}`);
+console.log('JS_CONTRACTS_PASS: scripts, 14 shortcuts, and public globals are preserved');
