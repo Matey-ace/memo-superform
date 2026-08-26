@@ -83,8 +83,13 @@ if ($conn) {
 # ---- 3. PyInstaller 打包 ----
 Write-Host "[3/7] PyInstaller 打包 exe..." -ForegroundColor Yellow
 $pyArgs = @("--noconfirm", "--clean", "MemoSuperform.spec")
-& python -m PyInstaller @pyArgs 2>&1 | Select-Object -Last 5
-if ($LASTEXITCODE -ne 0) { Write-Host "  打包失败!" -ForegroundColor Red; exit 1 }
+$previousEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$buildOutput = & python -m PyInstaller @pyArgs 2>&1
+$buildExit = $LASTEXITCODE
+$ErrorActionPreference = $previousEap
+$buildOutput | Select-Object -Last 5
+if ($buildExit -ne 0) { Write-Host "  打包失败!" -ForegroundColor Red; exit 1 }
 if (-not (Test-Path $exePath)) { Write-Host "  exe 未生成!" -ForegroundColor Red; exit 1 }
 $sizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 2)
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
