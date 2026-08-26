@@ -104,7 +104,7 @@ Write-Host "  代码已推送" -ForegroundColor Green
 
 # ---- 5. 创建并推送不可覆盖 Tag ----
 Write-Host "[5/7] 创建 tag $tag..." -ForegroundColor Yellow
-Invoke-GitChecked tag -a $tag -m "$tag release" | Out-Null
+Invoke-GitChecked -Arguments @('tag', '-a', $tag, '-m', "$tag release") | Out-Null
 Invoke-GitChecked push origin $tag | Out-Null
 Write-Host "  tag $tag 已推送" -ForegroundColor Green
 
