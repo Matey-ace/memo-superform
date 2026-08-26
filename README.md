@@ -17,8 +17,8 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 完整版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-- **Anon 笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
-- **记忆手账磁贴**：以手账/日记风展示每日背词（数量分级：摸鱼 / 日常 / 努力 / 爆肝），爆肝日飘爱心，支持列表 / 详情双视图
+- **Anon的笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
+- **Anon的笔记本磁贴**：以Anon的笔记本/日记风展示每日背词（数量分级：摸鱼 / 日常 / 努力 / 爆肝），爆肝日飘爱心，支持列表 / 详情双视图
 - **背单词磁贴（网页版）**：内嵌墨墨网页版 SPA，可实时背单词，暗色主题跟随仪表盘
 - **字体本地化**：Noto Serif SC / Noto Sans SC / M PLUS Rounded 1c 完整中文子集已本地化，离线可用
 - **本地安全加固**：仅接受 localhost/127.0.0.1 的 Host，CORS 仅回显同源 Origin，避免跨域滥用
@@ -165,15 +165,15 @@ memo-superform/
 - POST /api/snapshot - 保存快照并生成推荐
 - GET /api/stats/history?days=30 - 历史统计
 
-| 记忆手账 | 每日背词手账：数量分级（摸鱼/日常/努力/爆肝），爆肝日飘爱心，列表/详情双视图 |
+| Anon的笔记本 | 每日背词Anon的笔记本：数量分级（摸鱼/日常/努力/爆肝），爆肝日飘爱心，列表/详情双视图 |
 | 背单词 | 内嵌墨墨网页版，实时背单词，暗色跟随 |
-- `index-anon.html`      # anon 笔记本前端
-- `css/style-anon.css`   # anon 笔记本风格样式
-- `css/diary.css`       # 记忆手账样式
+- `index-anon.html`      # Anon的笔记本前端
+- `css/style-anon.css`   # Anon的笔记本风格样式
+- `css/diary.css`       # Anon的笔记本样式
 - `css/fonts.css`       # 本地化字体（Noto 等完整中文子集）
-- `js/diary.js`         # 记忆手账渲染器
+- `js/diary.js`         # Anon的笔记本渲染器
 - `fonts/`              # 本地字体文件（woff2 子集）
-> 默认入口为 `index.html`（原版）；`index-anon.html` 为 anon 笔记本备用界面。打包时需将 `index-anon.html`、`fonts/` 一并打入。
+> 默认入口为 `index.html`（原版）；`index-anon.html` 为 Anon的笔记本备用界面。打包时需将 `index-anon.html`、`fonts/` 一并打入。
 
 ## 打包
 双击 `dist/MemoSuperform.exe` 即可运行。exe 内已内置 ECharts 与 SQLite，离线可查看已经同步的数据和推荐；拉取新数据与 AI 分类仍需联网。
@@ -208,7 +208,7 @@ Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-- **Anon notebook frontend (`index-anon.html`)**: notebook visuals, same features as the original dashboard.
+- **Anon’s Notebook frontend (`index-anon.html`)**: notebook visuals, same features as the original dashboard.
 - **Memory Diary tile**: a journal-style daily word tracker (tiers: slacking / daily / focused / grinding), floating hearts on grind days, list & detail views
 - **Study tile (web edition)**: embeds the Maimemo web SPA for real-time word study, dark theme follows the dashboard
 - **Localized fonts**: full Chinese subsets of Noto Serif SC / Noto Sans SC / M PLUS Rounded 1c bundled locally, works offline
@@ -349,13 +349,13 @@ Local recommendation APIs (served by server.py):
 
 | Memory Diary | Daily word journal with tiers + hearts on grind days, list/detail views |
 | Study | Embeds Maimemo web, real-time study, follows dark theme |
-- `index-anon.html`      # anon notebook frontend
-- `css/style-anon.css`   # anon notebook styles
+- `index-anon.html`      # Anon’s Notebook frontend
+- `css/style-anon.css`   # Anon’s Notebook styles
 - `css/diary.css`       # Memory Diary styles
 - `css/fonts.css`       # Localized fonts (full Chinese subsets)
 - `js/diary.js`         # Memory Diary renderer
 - `fonts/`              # Local font files (woff2 subsets)
-> Default landing is `index.html` (original); `index-anon.html` is the alternate anon-notebook frontend. Packaging must include `index-anon.html` and `fonts/`.
+> Default landing is `index.html` (original); `index-anon.html` is the alternate Anon’s Notebook frontend. Packaging must include `index-anon.html` and `fonts/`.
 
 ## Packaging
 Double-click `dist/MemoSuperform.exe` to run. The exe bundles ECharts and SQLite, so committed charts and recommendations remain available offline; fetching new data and AI classification require network access.

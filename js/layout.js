@@ -46,7 +46,7 @@ const LayoutManager = (function() {
         document.querySelectorAll('.tile').forEach((tile, index) => {
             tile.style.display = index < layoutTileCount[layout] ? 'flex' : 'none';
             // 这里使用的是 Pointer Events 自定义拖拽；开启原生 draggable 会吞掉
-            // 手账卡片和 ECharts 内部的 click/pointerup，导致多格布局无法交互。
+            // Anon的笔记本卡片和 ECharts 内部的 click/pointerup，导致多格布局无法交互。
             tile.draggable = false;
         });
         setTimeout(() => ChartManager.rerenderAll(), 100);
@@ -366,7 +366,7 @@ const LayoutManager = (function() {
             tileEl.addEventListener('pointerdown', function(e) {
                 // 单格布局或磁贴未显示时禁用
                 if (currentLayout === 'single') return;
-                // 图表/手账内容需要保留点击、框选、滚动等交互；拖拽只从磁贴空白区和标题区开始。
+                // 图表/Anon的笔记本内容需要保留点击、框选、滚动等交互；拖拽只从磁贴空白区和标题区开始。
                 if (e.target.closest('select, button, input, .chart-container, .chart-toolbar, .ai-toolbar')) return;
                 // 只响应鼠标主键
                 if (e.button !== 0) return;

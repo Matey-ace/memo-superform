@@ -1,5 +1,5 @@
 /* ============================================================
-   记忆手账 · Memory Diary（借鉴 Love Diary 状态栏）
+   Anon的笔记本 · Memory Diary（借鉴 Love Diary 状态栏）
    用每日背词数据当"好感度"：数量分等级、达标日飘爱心
    数据来源：ChartManager.getRecords()
    ============================================================ */
@@ -104,7 +104,7 @@ var DiaryChart = (function () {
         + '<span class="md-arrow">›</span>'
         + '</div>';
     }).join('');
-    return '<div class="mydiary-head"><span class="md-title"><img class="md-title-gif" src="img/gifs/rana-sleep.gif" alt=""> 记忆手账 · MEMORY DIARY</span><span class="md-tape"></span></div>'
+    return '<div class="mydiary-head"><span class="md-title"><img class="md-title-gif" src="img/gifs/rana-sleep.gif" alt=""> Anon的笔记本 · MEMORY DIARY</span><span class="md-tape"></span></div>'
       + '<div class="mydiary-ticker"><div class="mydiary-ticker-scroll">'
       +   '<span class="mydiary-ticker-item">— tap a day to open — 点击日期查看详情 —</span>'
       +   '<span class="mydiary-ticker-item">— tap a day to open — 点击日期查看详情 —</span>'

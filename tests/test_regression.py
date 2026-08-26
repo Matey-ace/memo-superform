@@ -108,6 +108,19 @@ class RepositoryContracts(unittest.TestCase):
         for phrase in ("## 0.70", "SQLite", "按需增量更新", "Windows 后台运行状态", "统一 EXE"):
             self.assertIn(phrase, changelog)
 
+    def test_anon_notebook_terminology_replaces_handbook_descriptions(self):
+        descriptions = (
+            "CHANGELOG.md", "README.md", "index.html", "index-anon.html",
+            "release.ps1", "memo_injection.py", "css/diary.css",
+            "css/maimemo-notebook.css", "css/study-web.css",
+            "css/study-web-notebook.css", "css/style-anon.css",
+            "js/dashboard-core.js", "js/diary.js", "js/layout.js", "js/ui-style.js",
+        )
+        for path in descriptions:
+            self.assertNotRegex(self.read(path), "\u624b\u8d26|\u624b\u5e10", path)
+        self.assertIn("Anon的笔记本", self.read("index.html"))
+        self.assertIn("Anon的笔记本", self.read("js/diary.js"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

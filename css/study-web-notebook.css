@@ -1,4 +1,4 @@
-/* Memo Superform - notebook-only study controls */
+/* Memo Superform - Anon’s Notebook-only study controls */
 body.notebook-mode .study-web-actions {
     position:absolute; bottom:54px; left:50%; z-index:100;
     width:calc(100% - 8px); max-width:920px; padding:16px 10px 14px;

@@ -14,7 +14,7 @@
 
     var notebook = value === 'notebook';
     document.documentElement.setAttribute('data-ui-style', value);
-    document.title = notebook ? 'Memo Superform · anon 笔记本' : 'Memo Superform - 墨墨数据磁贴';
+    document.title = notebook ? 'Memo Superform · Anon的笔记本' : 'Memo Superform - 墨墨数据磁贴';
 
     function css(path, id) {
         document.write('<link rel="stylesheet" id="' + id + '" href="' + path + '?v=' + VERSION + '">');
@@ -40,7 +40,7 @@
         if (!body) return;
         body.classList.toggle('notebook-mode', notebook);
         body.classList.toggle('standard-mode', !notebook);
-        // Notebook colors are designed as a fixed light paper palette.  Do
+// Anon的笔记本 colors are designed as a fixed light paper palette.  Do
         // not overwrite the saved standard preference; only enforce the
         // runtime invariant that notebook-mode and dark never coexist.
         if (notebook) body.classList.remove('dark');
@@ -64,7 +64,7 @@
             if (select.querySelector('option[value="diary"]')) return;
             var option = root.createElement('option');
             option.value = 'diary';
-            option.textContent = '记忆手账';
+            option.textContent = 'Anon的笔记本';
             select.appendChild(option);
         });
     }

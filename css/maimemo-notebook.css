@@ -1,4 +1,4 @@
-/* Memo Superform · 墨墨背词学习页手账皮肤
+/* Memo Superform · 墨墨背词学习页Anon的笔记本皮肤
    仅在注入脚本确认父页面为 notebook-mode 时激活。 */
 
 html.memo-notebook {
@@ -353,7 +353,7 @@ html.memo-notebook .rev-bottom .ask-spelling > * {
     font-family: 'M PLUS Rounded 1c', sans-serif;
 }
 
-/* 手账版由父页面的四个放大按钮接管判断，移除原生三个按钮的占位。 */
+/* Anon的笔记本版由父页面的四个放大按钮接管判断，移除原生三个按钮的占位。 */
 html.memo-notebook .rev-resp-btns {
     height: 0 !important;
     min-height: 0 !important;
@@ -430,7 +430,7 @@ html.memo-notebook input:focus-visible {
     outline-offset: 3px;
 }
 
-/* 子页面导航：保留 Taro 的返回/退出状态，只将按钮换成手账贴纸。 */
+/* 子页面导航：保留 Taro 的返回/退出状态，只将按钮换成Anon的笔记本贴纸。 */
 html.memo-notebook #taro-navigation-bar.taro-navigation-bar-show {
     position: sticky !important;
     top: 0 !important;
@@ -553,7 +553,7 @@ html.memo-notebook #taro-navigation-bar.taro-navigation-bar-home-icon > .taro-na
     outline-offset: 3px;
 }
 
-/* 暗色手账：保留纸张层级，而不是回到纯黑界面。 */
+/* 暗色Anon的笔记本：保留纸张层级，而不是回到纯黑界面。 */
 html.memo-notebook.memo-dark {
     --memo-paper: #393338;
     --memo-paper-strong: #40383d;
@@ -604,7 +604,7 @@ html.memo-notebook.memo-dark #taro-navigation-bar.taro-navigation-bar-home-icon 
     box-shadow: 0 .14rem .38rem rgba(0, 0, 0, .34);
 }
 
-/* 墨墨 TTS 原页没有可靠退出入口，因此使用手账风格的独立返回便签。 */
+/* 墨墨 TTS 原页没有可靠退出入口，因此使用Anon的笔记本风格的独立返回便签。 */
 html.memo-notebook #memo-tts-exit {
     position: fixed;
     top: max(16px, env(safe-area-inset-top));

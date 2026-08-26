@@ -49,7 +49,7 @@ MEMO_DARK_JS = (
 )
 
 # Load exactly one iframe theme.  The standard branch never requests notebook
-# fonts or paper assets; the notebook branch never requests the standard skin.
+ # fonts or paper assets; the Anon的笔记本 branch never requests the standard skin.
 MEMO_STUDY_THEME = (
     '<script>(function(){'
     'var VERSION="20260825-unified-ui";'

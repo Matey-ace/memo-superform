@@ -10,7 +10,7 @@ const MemoDashboard = (function() {
         growth: { icon: '📊', title: '词汇量增长', color: '#eb2f96', toolbar: null },
         recommend: { icon: '🎯', title: '智能复习推荐', color: '#e74c3c', toolbar: null },
         'study-web': { icon: '📖', title: '背单词', color: '#1677ff', toolbar: null },
-        diary: { icon: '📔', title: '记忆手账', color: '#d4576b', toolbar: null }
+        diary: { icon: '📔', title: 'Anon的笔记本', color: '#d4576b', toolbar: null }
     };
     function toBeijingDate(value) {
         if (!value) return null;

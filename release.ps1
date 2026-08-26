@@ -15,7 +15,7 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$Version,
-    [string]$Message = "统一 EXE：SQLite 增量数据中心、Windows 托盘运行状态、单实例唤醒与手账页面兼容；详情见 CHANGELOG.md"
+    [string]$Message = "统一 EXE：SQLite 增量数据中心、Windows 托盘运行状态、单实例唤醒与Anon的笔记本页面兼容；详情见 CHANGELOG.md"
 )
 
 $ErrorActionPreference = "Stop"
