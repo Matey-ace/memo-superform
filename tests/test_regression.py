@@ -24,6 +24,8 @@ class RepositoryContracts(unittest.TestCase):
         spec = self.read("MemoSuperform.spec")
         self.assertIn("['launcher.py']", spec)
         self.assertIn("sqlite_schema.sql", spec)
+        self.assertIn("windows_tray", spec)
+        self.assertIn("console=False", spec)
         self.assertFalse((ROOT / "MemoSuperform-Desktop.spec").exists())
         self.assertFalse((ROOT / "MemoSuperform-Web.spec").exists())
         self.assertTrue((ROOT / "_archive/legacy/MemoSuperform-Desktop.spec").exists())
@@ -94,6 +96,11 @@ class RepositoryContracts(unittest.TestCase):
         self.assertIn("MAIMEMO_TODAY_ITEMS_API", sync)
         self.assertNotIn('"offset"', sync)
         self.assertIn('path == "/api/study-sync"', app_api)
+
+    def test_windowed_exe_http_logging_does_not_require_console_stderr(self):
+        server = self.read("server.py")
+        self.assertIn("if sys.stderr is not None", server)
+        self.assertIn('os.path.join(DATA_DIR, "server.log")', server)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

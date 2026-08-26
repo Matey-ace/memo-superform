@@ -23,6 +23,105 @@ import webbrowser
 
 
 _ACTIVE_GUARD = None
+_ACTIVE_TRAY = None
+
+
+class InstanceBroker:
+    """Local single-instance lock with an activate-existing-instance channel.
+
+    The socket remains the exclusive ownership lock, while its accept loop lets
+    a second launch restore the already-running app instead of showing a vague
+    "already running" error.  Only a fixed local JSON message is accepted.
+    """
+
+    _REQUEST = {"app": "memo-superform", "version": 1, "action": "activate"}
+
+    def __init__(self, listener, port):
+        self.listener = listener
+        self.port = int(port)
+        self._closed = threading.Event()
+        self._lock = threading.RLock()
+        self._activation_callback = None
+        self._pending_activations = 0
+        self._thread = threading.Thread(target=self._serve, name="MemoInstanceBroker", daemon=True)
+        self._thread.start()
+
+    def set_activation_callback(self, callback):
+        with self._lock:
+            self._activation_callback = callback
+            count = self._pending_activations
+            self._pending_activations = 0
+        for _ in range(count):
+            self._dispatch_activation(callback)
+
+    def _dispatch_activation(self, callback):
+        if callback is None:
+            return
+        threading.Thread(target=self._safe_activate, args=(callback,),
+                         name="MemoInstanceActivate", daemon=True).start()
+
+    @staticmethod
+    def _safe_activate(callback):
+        try:
+            callback()
+        except Exception as exc:
+            _log("instance activation callback failed: %s" % exc)
+
+    def _trigger_activation(self):
+        with self._lock:
+            callback = self._activation_callback
+            if callback is None:
+                self._pending_activations += 1
+                return
+        self._dispatch_activation(callback)
+
+    def _serve(self):
+        try:
+            self.listener.settimeout(0.35)
+            while not self._closed.is_set():
+                try:
+                    connection, _address = self.listener.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                with connection:
+                    try:
+                        connection.settimeout(0.75)
+                        payload = connection.recv(1024)
+                        message = json.loads(payload.decode("utf-8", errors="strict").strip())
+                        valid = message == self._REQUEST
+                    except (OSError, ValueError, UnicodeError):
+                        valid = False
+                    try:
+                        connection.sendall(json.dumps({"ok": valid}).encode("utf-8"))
+                    except OSError:
+                        pass
+                    if valid:
+                        self._trigger_activation()
+        finally:
+            try:
+                self.listener.close()
+            except OSError:
+                pass
+
+    def close(self):
+        if self._closed.is_set():
+            return
+        self._closed.set()
+        try:
+            self.listener.close()
+        except OSError:
+            pass
+        if self._thread is not threading.current_thread():
+            self._thread.join(1.0)
+
+
+def _instance_port():
+    try:
+        return int(os.environ.get("MEMO_INSTANCE_PORT", "8891"))
+    except (TypeError, ValueError):
+        return 8891
 
 
 def _log(msg):
@@ -56,6 +155,21 @@ def _release_guard():
         _log("guard release skipped (none)")
 
 
+def _set_tray(tray):
+    global _ACTIVE_TRAY
+    _ACTIVE_TRAY = tray
+
+
+def _release_tray():
+    global _ACTIVE_TRAY
+    if _ACTIVE_TRAY is not None:
+        try:
+            _ACTIVE_TRAY.stop()
+        except Exception:
+            pass
+        _ACTIVE_TRAY = None
+
+
 def get_runtime_root():
     """exe 模式下返回 exe 所在目录；源码模式返回项目根目录。"""
     if getattr(sys, "frozen", False):
@@ -65,7 +179,8 @@ def get_runtime_root():
 
 def get_data_dir():
     """可写数据目录：exe 同级 data/，源码模式为项目根 data/。"""
-    path = os.path.join(get_runtime_root(), "data")
+    path = os.environ.get("MEMO_DATA_DIR") or os.path.join(get_runtime_root(), "data")
+    path = os.path.abspath(path)
     try:
         os.makedirs(path, exist_ok=True)
     except OSError:
@@ -77,6 +192,28 @@ def _res_path(name):
     """打包为 exe 时资源在 _MEIPASS 解压目录，源码模式在项目根目录。"""
     base = getattr(sys, "_MEIPASS", None) or get_runtime_root()
     return os.path.join(base, name)
+
+
+def create_windows_tray(mode, on_open, on_exit):
+    """Create the optional Windows notification-area lifecycle indicator."""
+    try:
+        from windows_tray import WindowsTray
+        label = "桌面模式 · 正在运行" if mode == "desktop" else "网页模式 · 正在运行"
+        tray = WindowsTray(
+            app_name="Memo Superform",
+            icon_path=_res_path(os.path.join("img", "icon.ico")),
+            on_open=on_open,
+            on_exit=on_exit,
+            status=label,
+        )
+        if tray.start():
+            _log("Windows tray started: %s" % label)
+        elif tray.supported:
+            _log("Windows tray unavailable: %s" % tray.last_error)
+        return tray
+    except Exception as exc:
+        _log("Windows tray creation failed: %s" % exc)
+        return None
 
 
 def get_launcher_config_path():
@@ -110,19 +247,34 @@ def clear_launcher_config():
 def acquire_single_instance(port=None):
     """占用专用端口实现单实例锁。返回 socket 或 None（已存在实例）。"""
     if port is None:
-        try:
-            port = int(os.environ.get("MEMO_INSTANCE_PORT", "8891"))
-        except (TypeError, ValueError):
-            port = 8891
+        port = _instance_port()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         s.bind(("127.0.0.1", port))
-        s.listen(1)
-        _log("single instance lock acquired (port %d)" % port)
-        return s
+        s.listen(8)
+        actual_port = int(s.getsockname()[1])
+        _log("single instance lock acquired (port %d)" % actual_port)
+        return InstanceBroker(s, actual_port)
     except OSError:
+        s.close()
         _log("single instance lock DENIED (port %d)" % port)
         return None
+
+
+def activate_existing_instance(port=None, timeout=0.9):
+    """Ask the owner to restore/open itself; returns False for unrelated locks."""
+    if port is None:
+        port = _instance_port()
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
+            connection.settimeout(timeout)
+            connection.sendall(json.dumps(InstanceBroker._REQUEST).encode("utf-8"))
+            response = json.loads(connection.recv(256).decode("utf-8"))
+        return bool(response.get("ok"))
+    except (OSError, ValueError, UnicodeError):
+        return False
 
 
 def find_running_app_url(timeout=0.35):
@@ -231,28 +383,77 @@ def choose_mode_interactive():
     return "web"
 
 
-def run_web():
-    """网页模式：启动本地服务器并自动打开浏览器。"""
+def run_web(guard=None):
+    """网页模式：后台服务器 + Windows 托盘运行状态 + 浏览器入口。"""
     os.environ["MEMO_MODE"] = "web"
     import server
     server.set_relaunch_handler(request_relaunch)
+    shutdown_requested = threading.Event()
+    stop_lock = threading.Lock()
+    tray_holder = {"tray": None}
+    httpd = None
     try:
-        server.start_server(open_browser=True, block=True)
+        result = server.start_server(open_browser=False, block=False)
+        if not result:
+            raise RuntimeError("无法启动本地服务器，请检查端口是否被占用。")
+        httpd, url = result
+        _log("server started: %s" % url)
+
+        def open_running_app():
+            if os.environ.get("MEMO_NO_BROWSER") == "1":
+                return
+            webbrowser.open(url)
+
+        def exit_application():
+            with stop_lock:
+                if shutdown_requested.is_set():
+                    return
+                shutdown_requested.set()
+                tray = tray_holder["tray"]
+                if tray:
+                    tray.set_status("网页模式 · 正在退出")
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
+
+        if guard is not None and hasattr(guard, "set_activation_callback"):
+            guard.set_activation_callback(open_running_app)
+        tray = create_windows_tray("web", open_running_app, exit_application)
+        tray_holder["tray"] = tray
+        _set_tray(tray)
+        threading.Timer(0.8, open_running_app).start()
+        # The server is running on its own thread.  Keeping this lifecycle loop
+        # alive makes the tray icon an honest indicator of a live background app.
+        shutdown_requested.wait()
     except KeyboardInterrupt:
-        pass
+        shutdown_requested.set()
     except RuntimeError as exc:
         print(exc)
         show_message("Memo Superform", str(exc))
+    finally:
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
+            try:
+                httpd.server_close()
+            except Exception:
+                pass
+        _release_tray()
 
 
 def run_desktop(guard=None):
-    """桌面模式：启动本地服务器（后台线程）并用 pywebview 打开原生窗口。"""
+    """桌面模式：窗口关闭后隐藏到托盘，托盘菜单负责恢复或完整退出。"""
     os.environ["MEMO_MODE"] = "desktop"
     if guard is None:
         guard = acquire_single_instance()
         if guard is None:
+            if activate_existing_instance():
+                return
             show_message("Memo Superform", "Memo Superform 已经在运行中。")
-            sys.exit(0)
+            return
     _set_guard(guard)
 
     import server
@@ -265,25 +466,96 @@ def run_desktop(guard=None):
     httpd, url = result
     # 给桌面窗口 URL 加版本参数，强制 WebView 拉取最新页面，避免陈旧缓存
     # 与当前静态入口版本同步，避免 WebView 继续命中旧版 index.html。
-    url = url + "?v=45"
+    url = url + "?v=70"
     time.sleep(0.5)
 
     import webview
-    try:
-        webview.create_window(
-            "Memo Superform - 墨墨数据仪表盘",
-            url,
-            width=1280,
-            height=820,
-            min_size=(960, 640),
-            text_select=False,
-        )
-        webview.start()
-    finally:
+    exit_requested = threading.Event()
+    gui_ready = threading.Event()
+    pending_activation = threading.Event()
+    tray_holder = {"tray": None}
+
+    window = webview.create_window(
+        "Memo Superform - 墨墨数据仪表盘",
+        url,
+        width=1280,
+        height=820,
+        min_size=(960, 640),
+        text_select=False,
+    )
+
+    def show_main_window():
+        if not gui_ready.is_set():
+            pending_activation.set()
+            return
+        try:
+            window.restore()
+        except Exception:
+            pass
+        try:
+            window.show()
+        except Exception:
+            pass
+        tray = tray_holder["tray"]
+        if tray:
+            tray.set_status("桌面模式 · 正在运行")
+
+    def close_to_tray():
+        # pywebview treats a False return as cancellation of the native close.
+        # If the tray host is unavailable, retain the traditional close-to-exit
+        # behavior instead of leaving an unreachable background process.
+        tray = tray_holder["tray"]
+        if exit_requested.is_set() or not tray or not tray.is_running:
+            return None
+        try:
+            window.hide()
+            tray.set_status("桌面模式 · 后台运行")
+            _log("desktop window hidden to tray")
+            return False
+        except Exception:
+            return None
+
+    def exit_application():
+        if exit_requested.is_set():
+            return
+        exit_requested.set()
+        tray = tray_holder["tray"]
+        if tray:
+            tray.set_status("桌面模式 · 正在退出")
+        try:
+            window.destroy()
+        except Exception:
+            pass
         try:
             httpd.shutdown()
         except Exception:
             pass
+
+    window.events.closing += close_to_tray
+    if guard is not None and hasattr(guard, "set_activation_callback"):
+        guard.set_activation_callback(show_main_window)
+
+    def on_gui_ready():
+        gui_ready.set()
+        tray = create_windows_tray("desktop", show_main_window, exit_application)
+        tray_holder["tray"] = tray
+        _set_tray(tray)
+        if pending_activation.is_set():
+            show_main_window()
+
+    try:
+        webview.start(on_gui_ready)
+    finally:
+        exit_requested.set()
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+        _release_tray()
         _release_guard()
 
 
@@ -294,6 +566,7 @@ def request_relaunch(mode):
     先释放锁是为了避免新进程抢不到 8891 锁而弹出“已在运行中”后退出。
     """
     _log("request_relaunch begin: mode=%s" % mode)
+    _release_tray()
     _release_guard()
     write_launcher_config(mode, remember=True)
     # 源码模式需要补 launcher.py 路径；frozen(exe) 模式下 sys.executable 就是程序本体。
@@ -348,6 +621,9 @@ def main(argv=None):
 
     guard = acquire_single_instance()
     if guard is None:
+        if activate_existing_instance():
+            _log("existing instance activation requested")
+            return 0
         if mode == "web" and reopen_running_web_app():
             return 0
         show_message("Memo Superform", "Memo Superform 已经在运行中。")
@@ -358,7 +634,7 @@ def main(argv=None):
     if mode == "desktop":
         run_desktop(guard=guard)
     else:
-        run_web()
+        run_web(guard=guard)
         _release_guard()
     _log("launcher main: exit")
     return 0

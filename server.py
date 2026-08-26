@@ -753,9 +753,23 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def log_message(self, format, *args):
-        sys.stderr.write("[%s] %s %s %s\n" % (
-            self.log_date_time_string(), args[0] if len(args) > 0 else '', args[1] if len(args) > 1 else '', args[2] if len(args) > 2 else ''
-        ))
+        line = "[%s] %s %s %s\n" % (
+            self.log_date_time_string(), args[0] if len(args) > 0 else '',
+            args[1] if len(args) > 1 else '', args[2] if len(args) > 2 else '',
+        )
+        try:
+            if sys.stderr is not None:
+                sys.stderr.write(line)
+                return
+        except Exception:
+            pass
+        # Windowed EXE builds have no console stream.  HTTP logging must never
+        # abort a response merely because the app is running from the tray.
+        try:
+            with open(os.path.join(DATA_DIR, "server.log"), "a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError:
+            pass
 
 
 def _current_mode():

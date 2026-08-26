@@ -28,6 +28,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 - **智能复习推荐**：基于 SQLite 冻结的每日快照，按遗忘风险（逾期 + 回应状态 + 复习间隔）自动生成 TOP-30 推荐词，分级展示并可标记已复习
 - **两种运行模式**：浏览器模式（`python server.py`）与桌面原生窗口模式（`python app.py`，基于 pywebview）
 - **统一 Windows EXE**：发布包只提供 `MemoSuperform.exe` 一个入口；启动后选择或记忆“网页模式 / 桌面模式”，两种运行方式共用同一份程序与数据目录
+- **Windows 托盘状态**：运行时会在右下角通知区域显示 Memo Superform 图标与当前模式；双击或菜单“打开”可恢复页面/窗口，菜单“退出”会完整停止后台服务。再次启动同一 EXE 会自动唤醒已有实例，不再误报启动错误。
 - **按需增量刷新**：日常只检查今日变化、到期候选和必要的 30 天活动窗口；默认 10 分钟，支持 5/10/15/30/60 分钟，设置内可手动完整核验
 - **热力图自定义配色**：6 套配色预设，亮色与暗色模式各一套，状态栏一键切换
 - **隐私安全**：Token 和 AI Key 只存在本地，代理服务器与数据库仅运行在你自己的电脑上
@@ -55,6 +56,8 @@ python app.py
 
 ### Windows 统一 EXE
 发布版本使用单一的 `MemoSuperform.exe`：首次启动可选择网页模式或桌面模式，之后会记住选择；运行 `MemoSuperform.exe --reset` 可清除该选择。
+
+Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏览器后服务仍可从托盘重新打开；桌面模式关闭窗口会隐藏到托盘，使用托盘菜单“退出 Memo Superform”才会完全退出。
 
 ### 配置 Token
 - 点击右上角 设置 按钮
@@ -211,6 +214,7 @@ Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It
 - **Seven chart types**: Check-in heatmap, study trends, memory curve, AI word classification, wordbook progress, vocabulary growth, and smart review recommendations.
 - **Smart review recommendations**: Based on immutable daily SQLite snapshots, it generates a TOP-30 list ranked by forgetting risk and preserves reviewed state.
 - **Two run modes**: Browser mode (`python server.py`) and native desktop window mode (`python app.py`, based on pywebview).
+- **Windows tray status**: The notification-area icon shows that Memo Superform is alive, restores the current page/window on double-click, and exits the background service from its menu. A second launch activates the existing instance instead of failing ambiguously.
 - **Incremental refresh**: Checks compact today-state and due candidates by default, scans the 30-day active window only when needed, and offers weekly/manual reconciliation.
 - **Custom heatmap palettes**: 6 preset palettes (one each for light and dark mode), switchable from the status bar.
 - **Privacy-first**: Tokens and AI keys are stored only locally; the proxy server and database run solely on your own machine.
@@ -234,6 +238,8 @@ Once the server starts it prints the access URL (default http://localhost:8888) 
 ```bash
 python app.py
 ```
+
+On Windows, the tray icon remains visible while the app is running. Closing the desktop window hides it to the tray; use **Exit Memo Superform** from the tray menu to stop it completely.
 Runs as a native window (no browser needed); closing the window exits the app.
 
 ### Configure your token
