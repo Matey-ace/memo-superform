@@ -22,6 +22,19 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
+function Invoke-GitChecked {
+    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & git @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previous
+    if ($exitCode -ne 0) {
+        throw "git $($Arguments -join ' ') failed (exit $exitCode): $($output -join ' ')"
+    }
+    return $output
+}
+
 $tag = "v$Version"
 $buildExeName = "MemoSuperform.exe"
 $exeName = "MemoSuperform-$tag.exe"
@@ -40,7 +53,7 @@ Write-Host ""
 Write-Host "[1/7] 检查工作区、版本与回归测试..." -ForegroundColor Yellow
 if ($Version -notmatch '^0\.\d+$') { throw "版本号必须类似 0.66（不包含 v 前缀）" }
 if (git status --porcelain) { throw "工作区不是干净状态；请先明确提交源码，脚本不会执行 git add -A" }
-git fetch origin main --tags 2>&1 | Out-Null
+Invoke-GitChecked fetch origin main --tags | Out-Null
 if (git rev-parse -q --verify "refs/tags/$tag") { throw "本地 Tag $tag 已存在，禁止覆盖" }
 if (git ls-remote --exit-code --tags origin "refs/tags/$tag" 2>$null) { throw "远端 Tag $tag 已存在，禁止覆盖" }
 try {
@@ -78,13 +91,13 @@ Write-Host "  打包成功: $exeName ($sizeMB MB, sha256:$sha256)" -ForegroundCo
 
 # ---- 4. 推送已验证提交 ----
 Write-Host "[4/7] 推送已验证提交..." -ForegroundColor Yellow
-git push origin HEAD:main 2>&1 | Out-Null
+Invoke-GitChecked push origin HEAD:main | Out-Null
 Write-Host "  代码已推送" -ForegroundColor Green
 
 # ---- 5. 创建并推送不可覆盖 Tag ----
 Write-Host "[5/7] 创建 tag $tag..." -ForegroundColor Yellow
-git tag -a $tag -m "$tag release" 2>&1 | Out-Null
-git push origin $tag 2>&1 | Out-Null
+Invoke-GitChecked tag -a $tag -m "$tag release" | Out-Null
+Invoke-GitChecked push origin $tag | Out-Null
 Write-Host "  tag $tag 已推送" -ForegroundColor Green
 
 # ---- 6. 创建 GitHub Release ----
