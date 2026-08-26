@@ -4,6 +4,11 @@ body.standard-mode .study-web-actions {
     display: flex; gap: 8px; padding: 10px;
     border: 1px solid var(--border-color); border-radius: 14px;
     background: rgba(255,255,255,.96); box-shadow: var(--shadow-md); backdrop-filter: blur(8px);
+    transition: opacity .18s ease, transform .28s cubic-bezier(.22,1,.36,1), visibility 0s linear .28s;
+}
+
+body.standard-mode .study-web-actions.is-add-word-overlay {
+    transform: translateY(calc(100% + 84px));
 }
 
 body.standard-mode .study-web-btn {

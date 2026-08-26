@@ -22,6 +22,14 @@
     pointer-events: none !important;
 }
 
+/* 单词详情的“加入复习”弹窗打开时，四个判断按钮平滑滑到可视区域下方。 */
+.study-web-actions.is-add-word-overlay {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transition: opacity .18s ease, transform .28s cubic-bezier(.22,1,.36,1), visibility 0s linear .28s;
+}
+
 .study-web-btn {
     position: relative;
     flex: 1 1 0;

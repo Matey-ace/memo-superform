@@ -77,6 +77,7 @@ const StudyWeb = (function() {
         var shortcutToggle = container.querySelector('.study-shortcut-toggle');
         var shortcutPanel = container.querySelector('.study-shortcut-panel');
         var studyControlsActive = false;
+        var studyAddWordOverlayOpen = false;
         var studyHomeFallbackPending = false;
 
         // URL 只能说明墨墨 SPA 已加载，公测说明、词书和设置页也共用
@@ -92,25 +93,72 @@ const StudyWeb = (function() {
             return visible.length ? visible[visible.length - 1] : null;
         }
 
+        function isIframeElementVisible(idoc, element) {
+            try {
+                var style = iframe.contentWindow.getComputedStyle(element);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                var rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            } catch(e) {
+                return false;
+            }
+        }
+
+        // 单词详情弹窗中的“加入复习”会被固定在底部的四个判断按钮遮住。
+        // 只识别可见的加入复习/背诵/学习操作，避免普通学习页误收起按钮。
+        function hasAddWordOverlay(idoc) {
+            var overlayRoots = Array.prototype.slice.call(idoc.querySelectorAll(
+                '.memo-word-popup, .taro-modal__content, .taro-modal__inner, ' +
+                '.taro-model__bd, .taroify-dialog, .taroify-popup--center'
+            ));
+            var addAction = /(?:加入|添加).{0,8}(?:复习|背诵|学习)/;
+            if (overlayRoots.some(function(root) {
+                return isIframeElementVisible(idoc, root) && addAction.test((root.innerText || root.textContent || '').replace(/\s+/g, ''));
+            })) return true;
+            var actionNodes = Array.prototype.slice.call(idoc.querySelectorAll(
+                '.memo-word-popup button, .memo-word-popup [role="button"], ' +
+                '.taro-modal__content button, .taro-modal__content [role="button"], ' +
+                '.taro-modal__inner button, .taro-modal__inner [role="button"], ' +
+                '.taroify-dialog button, .taroify-dialog [role="button"], ' +
+                '.taroify-popup--center button, .taroify-popup--center [role="button"]'
+            ));
+            return actionNodes.some(function(node) {
+                if (!isIframeElementVisible(idoc, node)) return false;
+                var label = (node.innerText || node.textContent || '').replace(/\s+/g, '');
+                return addAction.test(label);
+            });
+        }
+
         function isActualStudyScreen() {
             try {
                 var idoc = iframe.contentDocument;
-                if (!idoc || !idoc.body) return false;
+                if (!idoc || !idoc.body) {
+                    studyAddWordOverlayOpen = false;
+                    return false;
+                }
                 var activePage = getActiveTaroPage(idoc);
                 var scope = activePage || idoc;
                 var reviewRoot = scope.querySelector('.rev-root');
-                return !!(reviewRoot && scope.querySelector('.rev-top, .rev-scroller, .rev-bottom, .rev-resp-btns'));
+                var active = !!(reviewRoot && scope.querySelector('.rev-top, .rev-scroller, .rev-bottom, .rev-resp-btns'));
+                studyAddWordOverlayOpen = active && hasAddWordOverlay(idoc);
+                return active;
             } catch(e) {
+                studyAddWordOverlayOpen = false;
                 return false;
             }
         }
 
         function setStudyControlsActive(active) {
             studyControlsActive = !!active;
+            var hideForAddWordOverlay = studyControlsActive && studyAddWordOverlayOpen;
             actions.hidden = !studyControlsActive;
+            actions.classList.toggle('is-add-word-overlay', hideForAddWordOverlay);
+            actions.toggleAttribute('inert', hideForAddWordOverlay);
+            actions.setAttribute('aria-hidden', (!studyControlsActive || hideForAddWordOverlay) ? 'true' : 'false');
             shortcutToggle.hidden = !studyControlsActive;
             container.dataset.studyScreenActive = studyControlsActive ? 'true' : 'false';
-            if (!studyControlsActive) setShortcutPanelOpen(false);
+            container.dataset.studyAddWordOverlay = hideForAddWordOverlay ? 'true' : 'false';
+            if (!studyControlsActive || hideForAddWordOverlay) setShortcutPanelOpen(false);
         }
 
         var studyWatch = StudyLifecycle.create(iframe, isActualStudyScreen, setStudyControlsActive);
@@ -222,7 +270,7 @@ const StudyWeb = (function() {
         });
 
         function handleShortcutKeydown(e) {
-            if (!studyControlsActive) return;
+            if (!studyControlsActive || studyAddWordOverlayOpen) return;
             var target = e.target;
             if (e.repeat || (target && target.closest && target.closest('.study-shortcut-panel, input, textarea, select, [contenteditable="true"]'))) return;
             var action = findShortcutAction(shortcutMap, e);

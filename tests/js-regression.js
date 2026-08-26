@@ -22,4 +22,10 @@ for (const route of ['/api/study-records','/api/study-sync','/api/study-sync/sta
 const syncUI = read('js/study-sync-ui.js');
 assert(syncUI.includes('完整核验'), 'missing manual reconciliation confirmation');
 assert(syncUI.includes("sync('incremental'"), 'normal refresh is not incremental');
+const studyWeb = read('js/study-web.js');
+assert(studyWeb.includes('hasAddWordOverlay'), 'missing add-word overlay detector');
+assert(studyWeb.includes('studyAddWordOverlayOpen'), 'missing add-word overlay state');
+assert(studyWeb.includes("actions.classList.toggle('is-add-word-overlay'"), 'actions are not hidden for add-word overlay');
+const studyCss = read('css/study-web.css') + read('css/study-web-standard.css') + read('css/study-web-notebook.css');
+assert(studyCss.includes('.study-web-actions.is-add-word-overlay'), 'missing add-word overlay hide style');
 console.log('JS_CONTRACTS_PASS: scripts, 14 shortcuts, and public globals are preserved');

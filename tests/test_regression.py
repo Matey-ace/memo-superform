@@ -121,6 +121,15 @@ class RepositoryContracts(unittest.TestCase):
         self.assertIn("Anon的笔记本", self.read("index.html"))
         self.assertIn("Anon的笔记本", self.read("js/diary.js"))
 
+    def test_add_word_overlay_hides_study_response_actions(self):
+        study = self.read("js/study-web.js")
+        css = self.read("css/study-web.css") + self.read("css/study-web-standard.css") + self.read("css/study-web-notebook.css")
+        self.assertIn("hasAddWordOverlay", study)
+        self.assertIn("studyAddWordOverlayOpen", study)
+        self.assertIn("is-add-word-overlay", study)
+        self.assertIn("actions.toggleAttribute('inert'", study)
+        self.assertIn(".study-web-actions.is-add-word-overlay", css)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

@@ -7,6 +7,10 @@ body.notebook-mode .study-web-actions {
     border:1px solid #dfd2c0; border-radius:8px 13px 9px 12px;
     box-shadow:0 7px 22px rgba(112,88,58,.18),0 1px 0 rgba(255,255,255,.9) inset;
     backdrop-filter:blur(7px);
+    transition:opacity .18s ease,transform .28s cubic-bezier(.22,1,.36,1),visibility 0s linear .28s;
+}
+body.notebook-mode .study-web-actions.is-add-word-overlay {
+    transform:translateX(-50%) translateY(calc(100% + 84px)) rotate(-.18deg);
 }
 body.notebook-mode .study-web-actions::before {
     content:'MEMORY NOTE'; position:absolute; top:-9px; left:50%;
