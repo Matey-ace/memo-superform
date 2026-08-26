@@ -15,7 +15,7 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$Version,
-    [string]$Message = "统一 EXE：网页模式与桌面模式 + 手账页面修复"
+    [string]$Message = "统一 EXE：SQLite 增量数据中心、Windows 托盘运行状态、单实例唤醒与手账页面兼容；详情见 CHANGELOG.md"
 )
 
 $ErrorActionPreference = "Stop"

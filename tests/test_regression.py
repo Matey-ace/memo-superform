@@ -26,6 +26,7 @@ class RepositoryContracts(unittest.TestCase):
         self.assertIn("sqlite_schema.sql", spec)
         self.assertIn("windows_tray", spec)
         self.assertIn("console=False", spec)
+        self.assertIn("CHANGELOG.md", spec)
         self.assertFalse((ROOT / "MemoSuperform-Desktop.spec").exists())
         self.assertFalse((ROOT / "MemoSuperform-Web.spec").exists())
         self.assertTrue((ROOT / "_archive/legacy/MemoSuperform-Desktop.spec").exists())
@@ -101,6 +102,11 @@ class RepositoryContracts(unittest.TestCase):
         server = self.read("server.py")
         self.assertIn("if sys.stderr is not None", server)
         self.assertIn('os.path.join(DATA_DIR, "server.log")', server)
+
+    def test_v070_changelog_documents_major_updates(self):
+        changelog = self.read("CHANGELOG.md")
+        for phrase in ("## 0.70", "SQLite", "按需增量更新", "Windows 后台运行状态", "统一 EXE"):
+            self.assertIn(phrase, changelog)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

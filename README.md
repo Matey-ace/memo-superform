@@ -15,6 +15,8 @@
 
 Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘**。它通过墨墨官方开放 API 拉取你的学习记录和云词本，把枯燥的数字变成直观的图表，让你一眼看清自己的背词状态。内置基于 SQLite 的**智能复习推荐引擎**，并支持以**原生桌面窗口**运行。
 
+完整版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 - **Anon 笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
 - **记忆手账磁贴**：以手账/日记风展示每日背词（数量分级：摸鱼 / 日常 / 努力 / 爆肝），爆肝日飘爱心，支持列表 / 详情双视图
 - **背单词磁贴（网页版）**：内嵌墨墨网页版 SPA，可实时背单词，暗色主题跟随仪表盘
@@ -137,6 +139,8 @@ memo-superform/
 ├── recommender.py     # 智能复习推荐引擎
 ├── sqlite_schema.sql  # SQLite 运行时架构
 ├── schema.sql         # 旧 SQL Server 架构（只读迁移参考）
+├── windows_tray.py     # Windows 通知区域运行状态
+├── CHANGELOG.md        # 版本更新记录
 ├── index.html         # 主页面
 ├── css/style.css      # 样式
 ├── js/
@@ -201,6 +205,8 @@ memo-superform/
 > Turn your Maimemo (墨墨背单词) study data into beautiful little tiles.
 
 Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It pulls study records and cloud wordbooks through Maimemo's official open API, stores committed state in SQLite, and can also run as a **native desktop window**.
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
 - **Anon notebook frontend (`index-anon.html`)**: notebook visuals, same features as the original dashboard.
 - **Memory Diary tile**: a journal-style daily word tracker (tiers: slacking / daily / focused / grinding), floating hearts on grind days, list & detail views
@@ -315,6 +321,8 @@ memo-superform/
 ├── recommender.py     # Smart review-recommendation engine
 ├── sqlite_schema.sql  # Runtime SQLite schema
 ├── schema.sql         # Legacy SQL Server schema reference
+├── windows_tray.py     # Windows notification-area status
+├── CHANGELOG.md        # Version history
 ├── index.html         # Main page
 ├── css/style.css      # Styles
 ├── js/
