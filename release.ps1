@@ -53,7 +53,10 @@ Write-Host ""
 Write-Host "[1/7] 检查工作区、版本与回归测试..." -ForegroundColor Yellow
 if ($Version -notmatch '^0\.\d+$') { throw "版本号必须类似 0.66（不包含 v 前缀）" }
 if (git status --porcelain) { throw "工作区不是干净状态；请先明确提交源码，脚本不会执行 git add -A" }
-Invoke-GitChecked fetch origin main --tags | Out-Null
+# Existing local historical tags may intentionally point at rewritten release
+# commits; fetch only the publication branch and query the target tag remotely
+# below, avoiding tag-clobber failures during ordinary release preparation.
+Invoke-GitChecked fetch origin main --no-tags | Out-Null
 if (git rev-parse -q --verify "refs/tags/$tag") { throw "本地 Tag $tag 已存在，禁止覆盖" }
 if (git ls-remote --exit-code --tags origin "refs/tags/$tag" 2>$null) { throw "远端 Tag $tag 已存在，禁止覆盖" }
 try {
