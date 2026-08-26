@@ -1,171 +1,136 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-recommender.py - 智能复习推荐引擎
-基于当日学习快照计算每个单词的遗忘风险分(0-100)，生成每日 TOP-N 推荐。
+"""SQLite-backed review recommendation engine (score-compatible with v0.69)."""
+from __future__ import annotations
 
-风险分构成：
-  逾期 (最高 50) : next_study_date 早于今天越多分越高；今天到期给 25 基础分
-  回应状态 (最高 30): FORGET=30 / VAGUE=20 / FAMILIAR=10 / WELL_FAMILIAR=5 / 未知=15
-  间隔天数 (最高 20): 距上次复习天数越久分越高，超过 20 天封顶
-"""
+from datetime import date, datetime, timedelta
+from typing import Any, Optional
 
-from datetime import date, datetime
 import db
 
 
-def generate_recommendations(top_n=30):
-    """根据当日快照生成推荐：先清空当日再插入 TOP-N。返回生成条数。"""
-    conn = db.get_connection(autocommit=True)
-    try:
-        cur = conn.cursor()
-        cur.execute("DECLARE @today DATE = ?; DELETE FROM recommendations WHERE recommend_date = @today", db.beijing_today())
-        sql = "DECLARE @today DATE = ?; " + """
-        INSERT INTO recommendations
-            (recommend_date, word, definition, risk_score, overdue_days, gap_days, last_response, next_study_date)
-        SELECT TOP (?)
-            @today, word, definition, risk_score, overdue_days, gap_days, last_response, next_study_date
-        FROM (
-            SELECT
-                word, definition, last_response, next_study_date,
-                (overdue_score + response_score + gap_score) AS risk_score,
-                overdue_days, gap_days
-            FROM (
-                SELECT
-                    word, definition, last_response, next_study_date,
-                    CASE
-                        WHEN next_study_date IS NULL THEN 0
-                        ELSE DATEDIFF(DAY, next_study_date, @today)
-                    END AS overdue_days,
-                    CASE
-                        WHEN last_study_date IS NULL THEN 0
-                        ELSE DATEDIFF(DAY, last_study_date, @today)
-                    END AS gap_days,
-                    CASE
-                        WHEN next_study_date IS NULL THEN 0
-                        WHEN next_study_date < @today THEN
-                            CASE WHEN DATEDIFF(DAY, next_study_date, @today) * 5 > 50 THEN 50
-                                 ELSE DATEDIFF(DAY, next_study_date, @today) * 5 END
-                        WHEN next_study_date = @today THEN 25
-                        ELSE 0
-                    END AS overdue_score,
-                    CASE
-                        WHEN last_response = 'FORGET' THEN 30
-                        WHEN last_response = 'VAGUE' THEN 20
-                        WHEN last_response = 'FAMILIAR' THEN 10
-                        WHEN last_response = 'WELL_FAMILIAR' THEN 5
-                        ELSE 15
-                    END AS response_score,
-                    CASE
-                        WHEN last_study_date IS NULL THEN 10
-                        WHEN DATEDIFF(DAY, last_study_date, @today) > 20 THEN 20
-                        ELSE DATEDIFF(DAY, last_study_date, @today)
-                    END AS gap_score
-                FROM study_records
-                WHERE snapshot_date = @today
-                  AND (next_study_date IS NULL OR next_study_date <= DATEADD(DAY, 7, @today))
-            ) AS s
-        ) AS t
-        ORDER BY
-            risk_score DESC,
-            -- 无复习日期(overdue_days=NULL)的词显式排最后，不依赖数据库方言的隐式 NULL 排序
-            CASE WHEN overdue_days IS NULL THEN 1 ELSE 0 END,
-            overdue_days DESC
-        """
-        cur.execute(sql, (db.beijing_today(), top_n))
-        cur.execute("DECLARE @today DATE = ?; SELECT COUNT(1) FROM recommendations WHERE recommend_date = @today", db.beijing_today())
-        return cur.fetchone()[0]
-    finally:
-        conn.close()
+def _as_date(value: Any) -> Optional[date]:
+    return db._parse_date(value)
 
 
-def get_today_recommendations():
-    """返回当日推荐列表，按风险分降序，附带分级标签。"""
-    conn = db.get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("DECLARE @today DATE = ?; " + """
-            SELECT id, word, definition, risk_score, overdue_days, gap_days,
-                   last_response, next_study_date, status
-            FROM recommendations
-            WHERE recommend_date = @today
-            ORDER BY risk_score DESC
-        """, db.beijing_today())
-        rows = db.rows_to_dicts(cur)
-        for r in rows:
-            score = r.get("risk_score") or 0
-            if score >= 60:
-                r["level"] = "high"
-                r["level_label"] = "紧急复习"
-                r["level_color"] = "#e74c3c"
-            elif score >= 30:
-                r["level"] = "mid"
-                r["level_label"] = "建议复习"
-                r["level_color"] = "#f39c12"
-            else:
-                r["level"] = "low"
-                r["level_label"] = "状态稳定"
-                r["level_color"] = "#27ae60"
-            r["last_response_label"] = _response_label(r.get("last_response"))
-        return rows
-    finally:
-        conn.close()
-
-
-def get_recommendation_summary():
-    """返回当日推荐的汇总统计。"""
-    conn = db.get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("DECLARE @today DATE = ?; " + """
-            SELECT
-                COUNT(1) AS total,
-                SUM(CASE WHEN risk_score >= 60 THEN 1 ELSE 0 END) AS high,
-                SUM(CASE WHEN risk_score >= 30 AND risk_score < 60 THEN 1 ELSE 0 END) AS mid,
-                SUM(CASE WHEN risk_score < 30 THEN 1 ELSE 0 END) AS low,
-                SUM(CASE WHEN status = 'reviewed' THEN 1 ELSE 0 END) AS reviewed
-            FROM recommendations
-            WHERE recommend_date = @today
-        """, db.beijing_today())
-        row = cur.fetchone()
-        return {
-            "total": int(row[0] or 0),
-            "high": int(row[1] or 0),
-            "mid": int(row[2] or 0),
-            "low": int(row[3] or 0),
-            "reviewed": int(row[4] or 0),
-        }
-    finally:
-        conn.close()
-
-
-def mark_reviewed(rec_id):
-    """标记某条推荐为已复习。返回受影响行数。"""
-    conn = db.get_connection(autocommit=True)
-    try:
-        cur = conn.cursor()
-        # 北京时区时间戳（UTC+8，与全项目日期体系一致；替代 SQL GETDATE() 的服务器本地时间）
-        reviewed_at = datetime.now(db.BJ_TZ).replace(tzinfo=None)
-        cur.execute(
-            "UPDATE recommendations SET status='reviewed', reviewed_at=? WHERE id=?",
-            reviewed_at, rec_id,
-        )
-        return cur.rowcount
-    finally:
-        conn.close()
-
-
-def _response_label(code):
+def _risk_row(row, today: date) -> dict[str, Any]:
+    next_day, last_day = _as_date(row["next_study_date"]), _as_date(row["last_study_date"])
+    overdue_days = (today - next_day).days if next_day else 0
+    gap_days = (today - last_day).days if last_day else 0
+    if next_day is None:
+        overdue_score = 0
+    elif next_day < today:
+        overdue_score = min(50, max(0, overdue_days) * 5)
+    elif next_day == today:
+        overdue_score = 25
+    else:
+        overdue_score = 0
+    response_score = {"FORGET": 30, "VAGUE": 20, "FAMILIAR": 10, "WELL_FAMILIAR": 5}.get(
+        row["last_response"], 15)
+    gap_score = 10 if last_day is None else min(20, max(0, gap_days))
     return {
-        "FORGET": "忘记",
-        "VAGUE": "模糊",
-        "FAMILIAR": "熟悉",
-        "WELL_FAMILIAR": "熟知",
-    }.get(code, code or "未知")
+        "voc_id": row["voc_id"], "word": row["voc_spelling"], "definition": row["definition"],
+        "risk_score": overdue_score + response_score + gap_score,
+        "overdue_days": overdue_days, "gap_days": gap_days,
+        "last_response": row["last_response"], "next_study_date": row["next_study_date"],
+        "_null_next": 1 if next_day is None else 0,
+    }
+
+
+def generate_recommendations(top_n: int = 30, profile_id: Any = None) -> int:
+    """Generate today's top-N atomically while preserving reviewed state."""
+    pk, today = db._profile_pk(profile_id), db.beijing_today()
+    today_text, horizon = today.isoformat(), (today + timedelta(days=7)).isoformat()
+    conn = db.get_connection()
+    try:
+        rows = conn.execute("""SELECT voc_id,voc_spelling,definition,last_study_date,next_study_date,last_response
+            FROM study_records WHERE profile_id=? AND is_active=1
+              AND (next_study_date IS NULL OR substr(next_study_date,1,10)<=?)""", (pk, horizon)).fetchall()
+    finally:
+        conn.close()
+    candidates = [_risk_row(row, today) for row in rows]
+    candidates.sort(key=lambda item: (-item["risk_score"], item["_null_next"], -item["overdue_days"], item["word"].lower()))
+    selected = candidates[:max(0, int(top_n))]
+    selected_ids = {item["voc_id"] for item in selected}
+    now = datetime.now(db.BJ_TZ).isoformat()
+    with db._write_connection() as conn:
+        existing = {row["voc_id"]: row for row in conn.execute(
+            "SELECT voc_id,status,reviewed_at FROM recommendations WHERE profile_id=? AND recommend_date=?",
+            (pk, today_text)).fetchall()}
+        for item in selected:
+            old = existing.get(item["voc_id"])
+            status, reviewed_at = (old["status"], old["reviewed_at"]) if old else ("pending", None)
+            conn.execute("""INSERT INTO recommendations(profile_id,recommend_date,voc_id,word,definition,risk_score,
+                overdue_days,gap_days,last_response,next_study_date,status,reviewed_at,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(profile_id,recommend_date,voc_id) DO UPDATE SET
+                word=excluded.word,definition=excluded.definition,risk_score=excluded.risk_score,
+                overdue_days=excluded.overdue_days,gap_days=excluded.gap_days,last_response=excluded.last_response,
+                next_study_date=excluded.next_study_date,status=excluded.status,reviewed_at=excluded.reviewed_at,
+                updated_at=excluded.updated_at""",
+                         (pk, today_text, item["voc_id"], item["word"], item["definition"], item["risk_score"],
+                          item["overdue_days"], item["gap_days"], item["last_response"], item["next_study_date"],
+                          status, reviewed_at, now, now))
+        # Obsolete pending rows are derived data; reviewed rows remain as an audit trail.
+        if selected_ids:
+            marks = ",".join("?" for _ in selected_ids)
+            conn.execute("DELETE FROM recommendations WHERE profile_id=? AND recommend_date=? AND status='pending' AND voc_id NOT IN (%s)" % marks,
+                         [pk, today_text] + sorted(selected_ids))
+        else:
+            conn.execute("DELETE FROM recommendations WHERE profile_id=? AND recommend_date=? AND status='pending'", (pk, today_text))
+    return len(selected)
+
+
+def get_today_recommendations(profile_id: Any = None) -> list[dict[str, Any]]:
+    pk, today, conn = db._profile_pk(profile_id), db.beijing_today().isoformat(), db.get_connection()
+    try:
+        rows = db.rows_to_dicts(conn.execute("""SELECT id,word,definition,risk_score,overdue_days,gap_days,
+            last_response,next_study_date,status FROM recommendations
+            WHERE profile_id=? AND recommend_date=? ORDER BY risk_score DESC,id""", (pk, today)))
+    finally:
+        conn.close()
+    for item in rows:
+        score = int(item.get("risk_score") or 0)
+        if score >= 60:
+            item.update(level="high", level_label="紧急复习", level_color="#e74c3c")
+        elif score >= 30:
+            item.update(level="mid", level_label="建议复习", level_color="#f39c12")
+        else:
+            item.update(level="low", level_label="状态稳定", level_color="#27ae60")
+        item["last_response_label"] = _response_label(item.get("last_response"))
+    return rows
+
+
+def get_recommendation_summary(profile_id: Any = None) -> dict[str, int]:
+    pk, today, conn = db._profile_pk(profile_id), db.beijing_today().isoformat(), db.get_connection()
+    try:
+        row = conn.execute("""SELECT COUNT(*),
+            COALESCE(SUM(CASE WHEN risk_score>=60 THEN 1 ELSE 0 END),0),
+            COALESCE(SUM(CASE WHEN risk_score>=30 AND risk_score<60 THEN 1 ELSE 0 END),0),
+            COALESCE(SUM(CASE WHEN risk_score<30 THEN 1 ELSE 0 END),0),
+            COALESCE(SUM(CASE WHEN status='reviewed' THEN 1 ELSE 0 END),0)
+            FROM recommendations WHERE profile_id=? AND recommend_date=?""", (pk, today)).fetchone()
+        return dict(zip(("total", "high", "mid", "low", "reviewed"), [int(value or 0) for value in row]))
+    finally:
+        conn.close()
+
+
+def mark_reviewed(rec_id: int, profile_id: Any = None) -> int:
+    now = datetime.now(db.BJ_TZ).isoformat()
+    pk = db._profile_pk(profile_id) if profile_id is not None else None
+    with db._write_connection() as conn:
+        if profile_id is None:
+            cur = conn.execute("UPDATE recommendations SET status='reviewed',reviewed_at=?,updated_at=? WHERE id=?",
+                               (now, now, int(rec_id)))
+        else:
+            cur = conn.execute("UPDATE recommendations SET status='reviewed',reviewed_at=?,updated_at=? WHERE id=? AND profile_id=?",
+                               (now, now, int(rec_id), pk))
+        return int(cur.rowcount or 0)
+
+
+def _response_label(code: Any) -> str:
+    return {"FORGET": "忘记", "VAGUE": "模糊", "FAMILIAR": "熟悉", "WELL_FAMILIAR": "熟知"}.get(code, code or "未知")
 
 
 if __name__ == "__main__":
-    print("生成推荐 ...")
-    n = generate_recommendations()
-    print("OK: 生成", n, "条推荐")
-    print(get_recommendation_summary())
+    db.init_db()
+    print("OK:", generate_recommendations(), get_recommendation_summary())

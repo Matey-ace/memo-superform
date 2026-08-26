@@ -23,6 +23,7 @@ class RepositoryContracts(unittest.TestCase):
     def test_unified_packaging_only(self):
         spec = self.read("MemoSuperform.spec")
         self.assertIn("['launcher.py']", spec)
+        self.assertIn("sqlite_schema.sql", spec)
         self.assertFalse((ROOT / "MemoSuperform-Desktop.spec").exists())
         self.assertFalse((ROOT / "MemoSuperform-Web.spec").exists())
         self.assertTrue((ROOT / "_archive/legacy/MemoSuperform-Desktop.spec").exists())
@@ -80,6 +81,19 @@ class RepositoryContracts(unittest.TestCase):
         self.assertNotIn(".egg-overlay", style)
         self.assertTrue((ROOT / "_archive/legacy/easter-egg.js").exists())
         self.assertTrue((ROOT / "_archive/legacy/easter-egg.css").exists())
+
+    def test_sqlite_incremental_data_contract(self):
+        database = self.read("db.py")
+        schema = self.read("sqlite_schema.sql")
+        sync = self.read("study_sync.py")
+        app_api = self.read("app_api.py")
+        self.assertNotRegex(database, r"(?m)^import pyodbc$")
+        self.assertIn("ApplicationIntent=ReadOnly", database)
+        self.assertIn("PRIMARY KEY (profile_id, voc_id)", schema)
+        self.assertIn("PRAGMA journal_mode=WAL", database)
+        self.assertIn("MAIMEMO_TODAY_ITEMS_API", sync)
+        self.assertNotIn('"offset"', sync)
+        self.assertIn('path == "/api/study-sync"', app_api)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

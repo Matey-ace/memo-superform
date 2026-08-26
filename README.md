@@ -13,7 +13,7 @@
 
 > 把墨墨背单词的学习数据，变成一块块好看的磁贴。
 
-Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘**。它通过墨墨官方开放 API 拉取你的学习记录和云词本，把枯燥的数字变成直观的图表，让你一眼看清自己的背词状态。v0.30 起内置**智能复习推荐引擎**（基于 SQL Server），并支持以**原生桌面窗口**运行。
+Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘**。它通过墨墨官方开放 API 拉取你的学习记录和云词本，把枯燥的数字变成直观的图表，让你一眼看清自己的背词状态。内置基于 SQLite 的**智能复习推荐引擎**，并支持以**原生桌面窗口**运行。
 
 - **Anon 笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
 - **记忆手账磁贴**：以手账/日记风展示每日背词（数量分级：摸鱼 / 日常 / 努力 / 爆肝），爆肝日飘爱心，支持列表 / 详情双视图
@@ -25,18 +25,18 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 - **磁贴卡片交互**：每张图表是一块圆角磁贴，支持拖拽互换位置、分屏对比（单格 / 左右 / 三分 / 田字格）、点击全屏放大
 - **七种图表**：打卡热力图、学习趋势、记忆曲线、AI 单词分类、词书进度、词汇量增长、智能复习推荐
-- **智能复习推荐**：基于 SQL Server 每日快照，按遗忘风险（逾期 + 回应状态 + 复习间隔）自动生成 TOP-30 推荐词，分级展示并可标记已复习
+- **智能复习推荐**：基于 SQLite 冻结的每日快照，按遗忘风险（逾期 + 回应状态 + 复习间隔）自动生成 TOP-30 推荐词，分级展示并可标记已复习
 - **两种运行模式**：浏览器模式（`python server.py`）与桌面原生窗口模式（`python app.py`，基于 pywebview）
 - **统一 Windows EXE**：发布包只提供 `MemoSuperform.exe` 一个入口；启动后选择或记忆“网页模式 / 桌面模式”，两种运行方式共用同一份程序与数据目录
-- **自动刷新**：定时拉取墨墨 API 获取最新数据并重算图表，默认 10 分钟，支持 5/10/15/30/60 分钟手动调节；拖拽时暂停、拖拽后自动补刷
+- **按需增量刷新**：日常只检查今日变化、到期候选和必要的 30 天活动窗口；默认 10 分钟，支持 5/10/15/30/60 分钟，设置内可手动完整核验
 - **热力图自定义配色**：6 套配色预设，亮色与暗色模式各一套，状态栏一键切换
 - **隐私安全**：Token 和 AI Key 只存在本地，代理服务器与数据库仅运行在你自己的电脑上
-- **本地缓存**：API 数据本地缓存，减少请求、打开更快
+- **SQLite 数据中心**：先显示本地已提交数据，再后台增量检查；历史快照不会被普通刷新反复拉取或覆盖
 - **背单词自测模式**：在电脑上复习今日单词，AI 批量翻译释义，翻卡片自测记忆，支持认识/模糊/忘记三级标记，结果本地保存
 
 ## 技术栈
 
-原生 HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python 本地代理 + SQL Server（智能推荐）。桌面窗口基于 [pywebview](https://pywebview.flowrl.com/)。
+原生 HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python 本地代理 + SQLite。桌面窗口基于 [pywebview](https://pywebview.flowrl.com/)。
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ python app.py
 - 填入墨墨 API Token（App: 我的 -> 更多设置 -> 实验功能 -> 开放 API）
 - 点击「测试连接」验证，保存后自动加载数据
 
-> 智能复习推荐需要本地 SQL Server（Express 即可）。首次加载当日数据时会自动建库、保存快照并生成推荐；若数据库不可用，其余图表照常工作。
+> SQLite 主库会在 `data/memo-superform.db` 自动建立，无需安装数据库。已有 SQL Server 数据库只会通过可选的只读迁移器导入，原库不会被修改。
 
 ## Linux 支持
 
@@ -82,8 +82,8 @@ chmod +x launcher-linux.sh
 
 - 桌面模式（pywebview + Qt 后端）需要系统库：`libnss3 libxkbcommon libxcomposite libxdamage libasound2` 等（Ubuntu/Debian 通常 `sudo apt install libnss3 libxkbcommon0 libxcomposite1 libxdamage1 libasound2`）；`python3-tk` 仅无参数启动时的模式选择窗口需要（不装也能用 `./launcher-linux.sh web|desktop` 直接指定模式）。
 - 若在无桌面环境的服务器上运行，请用 Web 模式。
-- 智能复习推荐需 SQL Server：Linux 上安装 [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) 后即可连接。
-- 数据库连接可用环境变量覆盖：`MEMO_DB_SERVER`（默认 `localhost`）、`MEMO_DB_DRIVER`（默认 `ODBC Driver 18 for SQL Server`，未安装时自动回退到已装驱动）、`MEMO_DB_USER` / `MEMO_DB_PASSWORD`（Linux 用 SQL 账号认证时设置）。
+- SQLite 主库使用 Python 标准库，Linux 无需安装数据库驱动。仅在导入旧 SQL Server 时才需要 Microsoft ODBC Driver 18 与可选的 `pyodbc`。
+- 旧库只读连接可用 `MEMO_DB_SERVER`、`MEMO_DB_DRIVER`、`MEMO_DB_USER` / `MEMO_DB_PASSWORD` 覆盖；未安装驱动不影响程序启动。
 - 语音（GPT-SoVITS 资源包）在 Linux 上要求资源包使用 `.venv311/bin/python` 结构（已在 tts.py 中按平台自动适配）。
 - 打包：`bash build_linux.sh` 生成单个 `dist/MemoSuperform` 可执行文件（与 Windows 版一致，启动时可选桌面/网页模式）。
 
@@ -130,9 +130,10 @@ chmod +x launcher-linux.sh
 memo-superform/
 ├── server.py          # 本地代理服务器（浏览器模式入口）
 ├── app.py             # 桌面原生窗口入口（pywebview）
-├── db.py              # SQL Server 数据库访问层
+├── db.py              # SQLite 数据中心与旧 SQL Server 只读迁移
 ├── recommender.py     # 智能复习推荐引擎
-├── schema.sql         # T-SQL 建表脚本
+├── sqlite_schema.sql  # SQLite 运行时架构
+├── schema.sql         # 旧 SQL Server 架构（只读迁移参考）
 ├── index.html         # 主页面
 ├── css/style.css      # 样式
 ├── js/
@@ -168,7 +169,7 @@ memo-superform/
 > 默认入口为 `index.html`（原版）；`index-anon.html` 为 anon 笔记本备用界面。打包时需将 `index-anon.html`、`fonts/` 一并打入。
 
 ## 打包
-双击 `dist/MemoSuperform.exe` 即可运行。exe 内已内置 ECharts，离线也能查看图表（拉取数据、AI 分类与推荐仍需联网 / SQL Server）。
+双击 `dist/MemoSuperform.exe` 即可运行。exe 内已内置 ECharts 与 SQLite，离线可查看已经同步的数据和推荐；拉取新数据与 AI 分类仍需联网。
 
 ## License
 
@@ -196,7 +197,7 @@ memo-superform/
 
 > Turn your Maimemo (墨墨背单词) study data into beautiful little tiles.
 
-Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It pulls your study records and cloud wordbooks through Maimemo's official open API and turns dry numbers into intuitive charts, so you can see your vocabulary-learning status at a glance. As of v0.30 it ships with a built-in **smart review-recommendation engine** (backed by SQL Server) and can also run as a **native desktop window**.
+Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It pulls study records and cloud wordbooks through Maimemo's official open API, stores committed state in SQLite, and can also run as a **native desktop window**.
 
 - **Anon notebook frontend (`index-anon.html`)**: notebook visuals, same features as the original dashboard.
 - **Memory Diary tile**: a journal-style daily word tracker (tiers: slacking / daily / focused / grinding), floating hearts on grind days, list & detail views
@@ -208,17 +209,17 @@ Memo Superform is a locally-run **data-visualization dashboard for Maimemo**. It
 
 - **Tile-card interaction**: Every chart is a rounded tile that can be dragged to swap positions, used in split-screen comparisons (single / left-right / three-way / quad grid), or clicked to go fullscreen.
 - **Seven chart types**: Check-in heatmap, study trends, memory curve, AI word classification, wordbook progress, vocabulary growth, and smart review recommendations.
-- **Smart review recommendations**: Based on daily SQL Server snapshots, it auto-generates a TOP-30 recommendation list ranked by forgetting risk (overdue + response status + review interval), displayed in tiers and markable as reviewed.
+- **Smart review recommendations**: Based on immutable daily SQLite snapshots, it generates a TOP-30 list ranked by forgetting risk and preserves reviewed state.
 - **Two run modes**: Browser mode (`python server.py`) and native desktop window mode (`python app.py`, based on pywebview).
-- **Auto refresh**: Periodically pulls the latest data from the Maimemo API and recomputes the charts-default 10 minutes, with 5/10/15/30/60-minute options. Refresh pauses while dragging and catches up automatically afterward.
+- **Incremental refresh**: Checks compact today-state and due candidates by default, scans the 30-day active window only when needed, and offers weekly/manual reconciliation.
 - **Custom heatmap palettes**: 6 preset palettes (one each for light and dark mode), switchable from the status bar.
 - **Privacy-first**: Tokens and AI keys are stored only locally; the proxy server and database run solely on your own machine.
-- **Local caching**: API data is cached locally to reduce requests and open faster.
+- **SQLite data centre**: Displays committed local data immediately and updates only changed rows; ordinary refreshes never rescan frozen history.
 - **Word self-test mode**: Review today’s words on PC with AI-translated definitions, flip-card recall, and know / vague / forget grading stored locally.
 
 ## Tech Stack
 
-Native HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python local proxy + SQL Server (smart recommendations). Desktop window via [pywebview](https://pywebview.flowrl.com/).
+Native HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python local proxy + SQLite. Desktop window via [pywebview](https://pywebview.flowrl.com/).
 
 ## Quick Start
 
@@ -240,7 +241,7 @@ Runs as a native window (no browser needed); closing the window exits the app.
 - Enter your Maimemo API token (in the app: Me -> More settings -> Experimental features -> Open API).
 - Click "Test connection" to verify; after saving, the data loads automatically.
 
-> Smart review recommendations require a local SQL Server (Express is fine). On the first load of the day it automatically creates the database, saves a snapshot, and generates recommendations; if the database is unavailable, the other charts still work normally.
+> The SQLite database is created automatically at `data/memo-superform.db`. A legacy SQL Server installation is optional and is opened read-only for migration only.
 
 ## Linux Support
 
@@ -261,8 +262,8 @@ chmod +x launcher-linux.sh
 
 - Desktop mode (pywebview + Qt backend) needs system libraries such as `libnss3`, `libxkbcommon`, `libxcomposite`, `libxdamage`, and `libasound2` (Ubuntu/Debian: `sudo apt install libnss3 libxkbcommon0 libxcomposite1 libxdamage1 libasound2`); `python3-tk` is only needed for the mode-selection window when launching without arguments (you can still use `./launcher-linux.sh web|desktop` without it).
 - On a headless server, use web mode.
-- Smart review recommendations need SQL Server: on Linux, install the [Microsoft ODBC Driver 18 for SQL Server](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) to connect.
-- Database connection can be overridden with env vars: `MEMO_DB_SERVER` (default `localhost`), `MEMO_DB_DRIVER` (default `ODBC Driver 18 for SQL Server`, falls back to an installed driver if missing), and `MEMO_DB_USER` / `MEMO_DB_PASSWORD` (set them to use SQL authentication on Linux).
+- SQLite uses Python's standard library. Microsoft ODBC Driver 18 and `pyodbc` are needed only for the optional read-only legacy import.
+- Legacy connection settings can be overridden with `MEMO_DB_SERVER`, `MEMO_DB_DRIVER`, `MEMO_DB_USER`, and `MEMO_DB_PASSWORD`; missing drivers never block startup.
 - Voice (GPT-SoVITS pack) on Linux requires the pack's `.venv311/bin/python` layout (tts.py already adapts to the platform).
 - Packaging: run `bash build_linux.sh` to produce a single `dist/MemoSuperform` executable (same as the Windows version; choose desktop/web mode at launch).
 
@@ -304,9 +305,10 @@ The top 30 words by risk score become the day's recommendations: >=60 is urgent 
 memo-superform/
 ├── server.py          # Local proxy server (browser-mode entry)
 ├── app.py             # Native desktop window entry (pywebview)
-├── db.py              # SQL Server data-access layer
+├── db.py              # SQLite data centre + read-only legacy import
 ├── recommender.py     # Smart review-recommendation engine
-├── schema.sql         # T-SQL schema script
+├── sqlite_schema.sql  # Runtime SQLite schema
+├── schema.sql         # Legacy SQL Server schema reference
 ├── index.html         # Main page
 ├── css/style.css      # Styles
 ├── js/
@@ -342,7 +344,7 @@ Local recommendation APIs (served by server.py):
 > Default landing is `index.html` (original); `index-anon.html` is the alternate anon-notebook frontend. Packaging must include `index-anon.html` and `fonts/`.
 
 ## Packaging
-Double-click `dist/MemoSuperform.exe` to run. The exe bundles ECharts, so charts can be viewed offline (fetching data, AI classification, and recommendations still require network / SQL Server).
+Double-click `dist/MemoSuperform.exe` to run. The exe bundles ECharts and SQLite, so committed charts and recommendations remain available offline; fetching new data and AI classification require network access.
 
 ## License
 

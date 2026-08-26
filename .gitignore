@@ -32,6 +32,7 @@ _build_*
 # 临时测试/备份文件
 _*.js
 *.bak
+TEMP/
 
 # 本地重写前的 git 备份包（52MB，不入库）
 _backup_pre-rewrite.bundle

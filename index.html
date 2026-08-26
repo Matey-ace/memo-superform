@@ -265,14 +265,23 @@
                 </div>
 
                 <div class="setting-group">
-                    <h3>数据缓存</h3>
+                    <h3>数据更新</h3>
                     <div class="setting-item">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="cacheToggle" checked>
-                            <span>启用本地缓存（减少 API 请求次数）</span>
-                        </label>
+                        <label>当前状态</label>
+                        <span id="studySyncStatus" class="hint">读取本地数据状态...</span>
                     </div>
-                    <button id="clearCacheBtn" class="danger-btn">清除缓存数据</button>
+                    <div class="setting-item">
+                        <label>更新信息</label>
+                        <span id="studySyncMeta" class="hint">上次更新：--</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>数据范围</label>
+                        <span id="studySyncCoverage" class="hint">加载中...</span>
+                    </div>
+                    <button id="runReconcileBtn" type="button" class="test-btn">完整核验</button>
+                    <button id="cancelStudySyncBtn" type="button" class="danger-btn" disabled>取消当前更新</button>
+                    <p class="hint">日常刷新只更新可能变化的数据；完整核验会重新核对历史单词当前状态，但不会重建历史统计。</p>
+                    <button id="clearCacheBtn" type="button" class="danger-btn">清除派生缓存</button>
                 </div>
 
                 <div class="setting-group">
@@ -352,7 +361,7 @@
     </div>
 
     <script>window.MemoUIStyle.activate(document);</script>
-    <script src="js/api.js?v=20260825-unified-ui"></script>
+    <script src="js/api.js?v=20260826-v070-sync"></script>
     <script src="js/tts.js?v=40"></script>
     <script src="js/dashboard-core.js?v=20260825-unified-ui"></script>
     <script src="js/charts.js?v=44"></script>
@@ -360,11 +369,12 @@
     <script src="js/study-shortcuts.js?v=20260825-unified-ui"></script>
     <script src="js/study-lifecycle.js?v=20260825-unified-ui"></script>
     <script src="js/study-web.js?v=20260825-unified-ui"></script>
+    <script src="js/study-sync-ui.js?v=20260826-sqlite-sync"></script>
     <script>
         if (window.MemoUIStyle.isNotebook) {
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260825-unified-ui"></script>
+    <script src="js/app.js?v=20260826-v070-sync"></script>
 </body>
 </html>

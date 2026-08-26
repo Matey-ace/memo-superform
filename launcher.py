@@ -107,8 +107,13 @@ def clear_launcher_config():
         pass
 
 
-def acquire_single_instance(port=8891):
+def acquire_single_instance(port=None):
     """占用专用端口实现单实例锁。返回 socket 或 None（已存在实例）。"""
+    if port is None:
+        try:
+            port = int(os.environ.get("MEMO_INSTANCE_PORT", "8891"))
+        except (TypeError, ValueError):
+            port = 8891
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.bind(("127.0.0.1", port))

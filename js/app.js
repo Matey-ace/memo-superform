@@ -10,7 +10,10 @@ const App = (function() {
     let autoRefreshTimer = null;
     let countdownTimer = null;
     let nextRefreshTime = 0;
-    let pendingRefresh = false;
+    let pendingSyncAfterDrag = false;
+    let pendingRecords = null;
+    let notepadDataLoaded = false;
+    let notepadDataPromise = null;
     const VALID_REFRESH_INTERVALS = [5, 10, 15, 30, 60];
     let autoRefreshEnabled = localStorage.getItem('auto_refresh_enabled') !== 'false';
     let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
@@ -25,6 +28,8 @@ const App = (function() {
         setupAIClassifyButton();
         setupTheme();
         LayoutManager.init();
+        window.addEventListener('memo-study-sync-status', updateCountdown);
+        StudySyncUI.init({ onRecordsChanged: handleStudyRecordsChanged });
         setupAutoRefresh();
         
         checkProxyServer().then(online => {
@@ -259,7 +264,7 @@ const App = (function() {
             const count = MaimemoAPI.clearCache();
             const aiCache = localStorage.getItem('ai_classification_cache');
             if (aiCache) localStorage.removeItem('ai_classification_cache');
-            alert('已清除 ' + count + ' 条缓存数据');
+            alert('已清除 ' + count + ' 条派生缓存；本地学习数据保持不变');
         });
         
         document.getElementById('saveSettingsBtn').addEventListener('click', function() {
@@ -279,12 +284,23 @@ const App = (function() {
                 return;
             }
             closeSettings();
-            if (token) { hideWelcome(); if (token !== oldToken) loadAllData(); }
-            else showWelcome();
+            if (token) {
+                hideWelcome();
+                if (token !== oldToken) {
+                    resetStudyDataForProfileChange();
+                    StudySyncUI.refreshStatus();
+                    loadAllData();
+                }
+            } else {
+                showWelcome();
+            }
         });
     }
     
-    function openSettings() { document.getElementById('settingsPanel').classList.add('show'); }
+    function openSettings() {
+        document.getElementById('settingsPanel').classList.add('show');
+        if (window.StudySyncUI) StudySyncUI.refreshStatus();
+    }
     function closeSettings() { document.getElementById('settingsPanel').classList.remove('show'); }
     
     // ---- AI 分类按钮（事件委托）----
@@ -563,13 +579,84 @@ const App = (function() {
         TTS.refresh().then(renderStatus).catch(function() { renderStatus(); });
     }
 
+    // ---- 本地数据更新、刷新与图表重绘 ----
+
+    function resetStudyDataForProfileChange() {
+        pendingRecords = null;
+        notepadDataLoaded = false;
+        notepadDataPromise = null;
+        StudySyncUI.reset();
+    }
+
+    function restoreAICache() {
+        const aiCache = localStorage.getItem('ai_classification_cache');
+        if (!aiCache) return;
+        try {
+            const cached = JSON.parse(aiCache);
+            if (Date.now() - cached.timestamp < 7 * 24 * 60 * 60 * 1000) {
+                ChartManager.setAIClassification(cached.data);
+            }
+        } catch (e) {}
+    }
+
+    function queueDailySnapshot(records) {
+        if (!Array.isArray(records) || !records.length) return;
+        const today = MemoDashboard.todayBeijing();
+        if (localStorage.getItem('memo_snapshot_date') === today) return;
+        RecommendAPI.saveSnapshot(records, false).then(function() {
+            localStorage.setItem('memo_snapshot_date', today);
+        }).catch(function(e) {
+            console.warn('快照保存失败:', e);
+        });
+    }
+
+    function loadSupplementalData() {
+        if (notepadDataLoaded) return Promise.resolve();
+        if (notepadDataPromise) return notepadDataPromise;
+        notepadDataPromise = MaimemoAPI.getAllNotepadWords().then(function(notepadWords) {
+            ChartManager.setNotepadWords(notepadWords);
+            notepadDataLoaded = true;
+            // 词书进度图依赖词本数据；只在它到达后补渲染一次。
+            ChartManager.renderVisibleFromSelectors(false);
+        }).catch(function(e) {
+            console.warn('加载云词本失败:', e.message);
+        }).finally(function() {
+            notepadDataPromise = null;
+        });
+        return notepadDataPromise;
+    }
+
+    function renderStudyRecords(records) {
+        ChartManager.setRecords(records);
+        queueDailySnapshot(records);
+        restoreAICache();
+        if (records.length) loadSupplementalData();
+        setTimeout(function() {
+            ChartManager.renderVisibleFromSelectors(false);
+        }, 100);
+    }
+
+    // StudySyncUI 只在 SQLite 提交的记录指纹变化时调用此函数；无变化刷新不会重绘图表。
+    function handleStudyRecordsChanged(records) {
+        if (LayoutManager.isDragging()) {
+            pendingRecords = records;
+            return;
+        }
+        renderStudyRecords(records);
+    }
+
     // ---- 刷新按钮 ----
     
     function setupRefreshButton() {
         document.getElementById('refreshBtn').addEventListener('click', function() {
-            checkProxyServer().then(online => {
-                if (online) loadAllData(true);
-                else alert('代理服务器未启动！\n\n请在项目目录下运行：\n  python server.py');
+            checkProxyServer().then(function(online) {
+                if (!online) {
+                    alert('代理服务器未启动！\n\n请在项目目录下运行：\n  python server.py');
+                    return null;
+                }
+                return StudySyncUI.manualRefresh();
+            }).catch(function(e) {
+                console.error('手动更新失败:', e);
             });
         });
     }
@@ -577,16 +664,21 @@ const App = (function() {
     // ---- 自动刷新 ----
     
     function setupAutoRefresh() {
-        // 拖拽结束回调：拖拽期间跳过的刷新，在拖拽完成后补刷
+        // 拖拽期间不改写图表；释放后先应用已完成的数据，再补一次跳过的增量更新。
         LayoutManager.setDragEndCallback(function() {
-            if (pendingRefresh) {
-                pendingRefresh = false;
-                doDeferredRefresh();
+            if (pendingRecords) {
+                const records = pendingRecords;
+                pendingRecords = null;
+                renderStudyRecords(records);
+            }
+            if (pendingSyncAfterDrag) {
+                pendingSyncAfterDrag = false;
+                doAutoRefresh();
             }
         });
         
-        var toggle = document.getElementById('autoRefreshToggle');
-        var select = document.getElementById('autoRefreshInterval');
+        const toggle = document.getElementById('autoRefreshToggle');
+        const select = document.getElementById('autoRefreshInterval');
         
         toggle.classList.toggle('active', autoRefreshEnabled);
         select.value = String(autoRefreshInterval);
@@ -595,26 +687,18 @@ const App = (function() {
             autoRefreshEnabled = !autoRefreshEnabled;
             localStorage.setItem('auto_refresh_enabled', autoRefreshEnabled ? 'true' : 'false');
             toggle.classList.toggle('active', autoRefreshEnabled);
-            if (autoRefreshEnabled) {
-                startAutoRefresh();
-            } else {
-                stopAutoRefresh();
-            }
+            if (autoRefreshEnabled) startAutoRefresh();
+            else stopAutoRefresh();
         });
         
         select.addEventListener('change', function() {
             autoRefreshInterval = parseInt(this.value, 10);
             localStorage.setItem('auto_refresh_interval', String(autoRefreshInterval));
-            if (autoRefreshEnabled) {
-                startAutoRefresh();
-            }
+            if (autoRefreshEnabled) startAutoRefresh();
         });
         
-        if (autoRefreshEnabled) {
-            startAutoRefresh();
-        } else {
-            updateCountdown();
-        }
+        if (autoRefreshEnabled) startAutoRefresh();
+        else updateCountdown();
     }
     
     function startAutoRefresh() {
@@ -622,7 +706,7 @@ const App = (function() {
         nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
         autoRefreshTimer = setInterval(function() {
             if (LayoutManager.isDragging()) {
-                pendingRefresh = true;
+                pendingSyncAfterDrag = true;
                 return;
             }
             doAutoRefresh();
@@ -636,109 +720,55 @@ const App = (function() {
         if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
         updateCountdown();
     }
-    
-    var pendingRecords = null;
 
     async function doAutoRefresh() {
-        if (isLoading) return;
-        if (!proxyOnline) return;
-        var toggle = document.getElementById('autoRefreshToggle');
-        if (toggle) toggle.classList.add('refreshing');
-        isLoading = true;
+        if (isLoading || !proxyOnline || StudySyncUI.isSyncing()) return;
+        if (LayoutManager.isDragging()) {
+            pendingSyncAfterDrag = true;
+            return;
+        }
         try {
-            var records = await MaimemoAPI.getAllStudyRecords(false);
-            // await 返回后可能用户已经开始新一轮拖拽，此时重绘会导致 DOM 与图表错位
-            // 先保存数据，若正在拖拽则延迟到拖拽结束后再重绘
-            if (LayoutManager.isDragging()) {
-                pendingRecords = records;
-                pendingRefresh = true;
-                return;
-            }
-            ChartManager.setRecords(records);
-            ChartManager.renderVisibleFromSelectors(true);
+            await StudySyncUI.runIncremental('auto-refresh');
         } catch (e) {
             console.warn('自动刷新失败:', e);
         } finally {
-            isLoading = false;
-            if (toggle) toggle.classList.remove('refreshing');
-            // 成功或失败都重新计时，避免倒计时停在 0:00
             nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
             updateCountdown();
         }
     }
-
-    // 拖拽结束后补刷：如果数据已拉取完成，直接重绘（无需重新请求 API）
-    function doDeferredRefresh() {
-        if (pendingRecords) {
-            ChartManager.setRecords(pendingRecords);
-            pendingRecords = null;
-        }
-        ChartManager.renderVisibleFromSelectors(true);
-        nextRefreshTime = Date.now() + autoRefreshInterval * 60 * 1000;
-        updateCountdown();
-    }
     
     function updateCountdown() {
-        var el = document.getElementById('autoRefreshCountdown');
+        const el = document.getElementById('autoRefreshCountdown');
         if (!el) return;
+        const syncText = StudySyncUI.getCountdownText();
+        if (syncText) {
+            el.textContent = syncText;
+            el.classList.remove('paused');
+            return;
+        }
         if (!autoRefreshEnabled) {
             el.textContent = '已暂停';
             el.classList.add('paused');
             return;
         }
         el.classList.remove('paused');
-        var remaining = Math.max(0, nextRefreshTime - Date.now());
-        var mins = Math.floor(remaining / 60000);
-        var secs = Math.floor((remaining % 60000) / 1000);
+        const remaining = Math.max(0, nextRefreshTime - Date.now());
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
         el.textContent = mins + ':' + String(secs).padStart(2, '0');
     }
-        // ---- 加载所有数据 ----
-    
+
+    // 启动时优先显示 SQLite 中的已提交数据；有数据时后台增量更新，无数据才等待首次建库。
     async function loadAllData(forceRefresh = false) {
         if (isLoading) return;
         isLoading = true;
-        document.querySelectorAll('.chart-container').forEach(el => el.classList.add('loading'));
-        
         try {
-            const records = await MaimemoAPI.getAllStudyRecords(!forceRefresh);
-            ChartManager.setRecords(records);
-            // 每日首次自动上传快照并生成智能推荐
-            try {
-                const _today = MemoDashboard.todayBeijing();
-                if (localStorage.getItem('memo_snapshot_date') !== _today) {
-                    await RecommendAPI.saveSnapshot(records, false);
-                    localStorage.setItem('memo_snapshot_date', _today);
-                }
-            } catch (e) { console.warn('快照保存失败:', e); }
-
-            // 预取云词本单词，供词书进度图使用
-            try {
-                const notepadWords = await MaimemoAPI.getAllNotepadWords();
-                ChartManager.setNotepadWords(notepadWords);
-            } catch (e) {
-                console.warn('加载云词本失败:', e.message);
-            }
-            
-            const aiCache = localStorage.getItem('ai_classification_cache');
-            if (aiCache) {
-                try {
-                    const cached = JSON.parse(aiCache);
-                    if (Date.now() - cached.timestamp < 7 * 24 * 60 * 60 * 1000) {
-                        ChartManager.setAIClassification(cached.data);
-                    }
-                } catch (e) {}
-            }
-            
-            // 根据磁贴下拉框的实际值渲染，确保标题与内容一致
-            setTimeout(function() {
-                ChartManager.renderVisibleFromSelectors(false);
-            }, 100);
+            await StudySyncUI.loadInitialData(forceRefresh ? 'manual-refresh' : null);
         } catch (e) {
             console.error('加载数据失败:', e);
             alert('加载数据失败: ' + e.message + '\n\n请检查：\n1. 代理服务器是否已启动\n2. Token 是否正确');
         } finally {
             isLoading = false;
-            document.querySelectorAll('.chart-container').forEach(el => el.classList.remove('loading'));
         }
     }
     

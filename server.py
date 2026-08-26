@@ -3,7 +3,7 @@
 """
 Memo Superform - 本地代理服务器
 解决墨墨 API 不支持 CORS 的问题，同时提供静态文件服务、AI 代理、
-以及基于 SQL Server 的智能复习推荐 API。
+以及基于 SQLite 的增量数据中心与智能复习推荐 API。
 
 使用方法：
   python server.py
@@ -54,7 +54,8 @@ def _runtime_root():
 
 # 可写数据目录：资源包、生成音频、启动模式记忆等一律落在 exe 同级 data/ 下，
 # 避免写入 PyInstaller 的临时解压目录。
-DATA_DIR = os.path.join(_runtime_root(), "data")
+DATA_DIR = os.environ.get("MEMO_DATA_DIR") or os.path.join(_runtime_root(), "data")
+DATA_DIR = os.path.abspath(DATA_DIR)
 TTS_PACK_DIR = os.path.join(DATA_DIR, "tts_pack")
 GENERATED_AUDIO_DIR = os.path.join(DATA_DIR, "generated_audios")
 LAUNCHER_CONFIG_PATH = os.path.join(DATA_DIR, "launcher.json")
@@ -89,14 +90,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 # ---- 数据库（可选，失败不致命，不影响代理与静态服务） ----
 DB_READY = False
+STUDY_SYNC_SERVICE = None
+STUDY_SYNC_MANAGER = None
 try:
     import db
     import recommender
-    db.init_db()
+    import study_sync
+    db.init_db(DATA_DIR)
+    _sync_repository = study_sync.DbStudySyncRepository(db)
+    STUDY_SYNC_SERVICE = study_sync.StudySyncService(_sync_repository)
+    STUDY_SYNC_MANAGER = study_sync.SyncManager(STUDY_SYNC_SERVICE)
     DB_READY = True
-    print("[db] SQL Server 已就绪，推荐功能可用")
+    print("[db] SQLite 已就绪：%s" % db.database_path())
 except Exception as e:
-    print("[db] 数据库不可用，推荐功能将禁用:", e)
+    print("[db] SQLite 数据中心不可用:", e)
 
 
 class MemoThreadingTCPServer(socketserver.ThreadingTCPServer):
@@ -677,6 +684,16 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
 
         self.send_error(404, "Not Found")
 
+    def do_DELETE(self):
+        if not self._is_allowed_host():
+            self.send_error(403, "Forbidden")
+            return
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/"):
+            self._handle_api_delete(parsed.path, parsed)
+            return
+        self.send_error(404, "Not Found")
+
     # ===================== helpers =====================
     def _safe_content_length(self):
         """安全读取 Content-Length 头。畸形值(非数字/空串等)返回 0，避免
@@ -784,6 +801,7 @@ def _relaunch_app(mode):
 configure_local_api(
     CODEX_OAUTH=CODEX_OAUTH, DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
     DB_READY=DB_READY, db=globals().get("db"), recommender=globals().get("recommender"),
+    STUDY_SYNC_SERVICE=STUDY_SYNC_SERVICE, STUDY_SYNC_MANAGER=STUDY_SYNC_MANAGER,
     _current_mode=_current_mode, _write_launcher_config=_write_launcher_config,
     _relaunch_app=_relaunch_app,
 )

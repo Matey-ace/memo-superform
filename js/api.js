@@ -44,7 +44,12 @@ const MaimemoAPI = (function() {
         const keys = [];
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key.startsWith(CACHE_PREFIX)) keys.push(key);
+            // 学习记录已迁移到本地 SQLite。保留旧浏览器基线，供首次迁移时校验，
+            // “清除派生缓存”不会破坏它，更不会删除 SQLite 中的学习数据。
+            if (key.startsWith(CACHE_PREFIX) &&
+                !key.slice(CACHE_PREFIX.length).startsWith('all_study_records_')) {
+                keys.push(key);
+            }
         }
         keys.forEach(k => localStorage.removeItem(k));
         return keys.length;
@@ -98,118 +103,99 @@ const MaimemoAPI = (function() {
         return data;
     }
     
-    // 分页拉取全部学习记录
-    async function getAllStudyRecords(useCache = true, onProgress = null) {
-        const cacheKey = 'all_study_records_v2_' + token.slice(-8);
-        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
-
-        const countData = await queryStudyRecords({ as_count: true }, false);
-        const total = countData.count || 0;
-        if (total === 0) return [];
-
-        // 去重辅助
-        function dedupe(records) {
-            const seen = new Set();
-            const out = [];
-            for (const r of records) {
-                const key = r.voc_id + '|' + r.next_study_date;
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    out.push(r);
-                }
-            }
-            return out;
-        }
-
-        // 拉取一段区间；若单次返回满 1000 条（可能被截断），二分递归
-        async function fetchSegment(startStr, endStr, depth) {
-            depth = depth || 0;
-            // 护栏1：递归深度上限，防止极端情况下栈溢出
-            if (depth > 60) {
-                console.warn('[fetchSegment] 达到深度上限 60，停止二分');
-                return [];
-            }
-            // 控制请求频率，避免触发 API 限流（10秒20次）
-            await new Promise(resolve => setTimeout(resolve, 300));
-            const result = await queryStudyRecords({
-                next_study_date: { start: startStr, end: endStr },
-                limit: 1000
-            }, false);
-            const recs = result.records || [];
-            if (recs.length < 1000) return recs;
-
-            const start = new Date(startStr);
-            const end = new Date(endStr);
-            // 护栏2：区间细分到不足1天（next_study_date 为天粒度，再分无意义），转 offset 分页
-            if (end.getTime() - start.getTime() < 86400000) {
-                return await fetchByOffset([startStr, endStr]);
-            }
-            const mid = new Date((start.getTime() + end.getTime()) / 2);
-            const left = await fetchSegment(start.toISOString(), mid.toISOString(), depth + 1);
-            const right = await fetchSegment(mid.toISOString(), end.toISOString(), depth + 1);
-            return left.concat(right);
-        }
-
-        // offset 分页兜底：当某个时间点/极小区间内单词 >=1000，二分已失效时逐页拉取
-        async function fetchByOffset(dateRange) {
-            const all = [];
-            let offset = 0;
-            let lastSig = null;
-            // 防御：最多拉 200 页（20万词），避免异常时无限循环
-            while (offset < 200000) {
-                await new Promise(resolve => setTimeout(resolve, 300));
-                const params = { limit: 1000, offset: offset };
-                if (dateRange) params.next_study_date = { start: dateRange[0], end: dateRange[1] };
-                const result = await queryStudyRecords(params, false);
-                const recs = result.records || [];
-                if (recs.length === 0) break;
-                // 护栏3：进展检测。若 offset 不被支持，返回的会与上一页相同 -> 停止
-                const sig = recs.map(function (r) { return r.voc_id + '|' + r.next_study_date; }).sort().join(',');
-                if (sig === lastSig) {
-                    console.warn('[fetchByOffset] offset 未生效（返回相同数据），停止分页，该区间已截断');
-                    break;
-                }
-                for (const r of recs) all.push(r);
-                lastSig = sig;
-                if (recs.length < 1000) break;
-                offset += 1000;
-            }
-            return all;
-        }
-
-        // next_study_date 可能从很早到 2100+：
-        // 按大段拉取（跳过大概率空的 2020-2025 等），满 1000 的段自动二分
-        const allRecords = [];
-        const ranges = [
-            ['2020-01-01T00:00:00', '2025-12-31T23:59:59'],
-            ['2026-01-01T00:00:00', '2026-12-31T23:59:59'],
-            ['2027-01-01T00:00:00', '2027-12-31T23:59:59'],
-            ['2028-01-01T00:00:00', '2028-12-31T23:59:59'],
-            ['2029-01-01T00:00:00', '2030-12-31T23:59:59'],
-            ['2031-01-01T00:00:00', '2200-12-31T23:59:59']
-        ];
-        for (const [startStr, endStr] of ranges) {
-            const rangeRecs = await fetchSegment(startStr, endStr);
-            allRecords.push(...rangeRecs);
-            if (onProgress) onProgress(allRecords.length, total);
-            if (allRecords.length >= total) break;
-        }
-
-        // 兜底：若还是没拉全，直接拉一次全量
-        // 补拉：无日期过滤，覆盖 next_study_date 为空/超范围的记录
-        const catchAll = await fetchByOffset(null);
-        for (const r of catchAll) allRecords.push(r);
-        if (onProgress) onProgress(allRecords.length, total);
-
-        // 去重后返回
-        const uniqueRecords = dedupe(allRecords);
-        if (uniqueRecords.length < total) {
-            console.warn('[getAllStudyRecords] 拉取数量不足 total:', uniqueRecords.length, '/', total);
-        }
-        if (useCache) setCache(cacheKey, uniqueRecords);
-        return uniqueRecords;
+    // ---- 本地 SQLite 学习数据接口 ----
+    // 学习记录的拉取、增量比对和限流统一由本地服务负责。前端只读取已提交的
+    // SQLite 当前状态，因此自动刷新不会再把 2020-2022 等历史区间重新拉取一遍。
+    function localHeaders(hasBody) {
+        const headers = {
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        };
+        if (token) headers.Authorization = 'Bearer ' + token;
+        if (hasBody) headers['Content-Type'] = 'application/json';
+        return headers;
     }
-    
+
+    async function localRequest(path, options = {}) {
+        const hasBody = options.body !== undefined;
+        const response = await fetch(path, {
+            method: options.method || 'GET',
+            headers: localHeaders(hasBody),
+            ...(hasBody ? { body: JSON.stringify(options.body) } : {})
+        });
+        const payload = await response.json().catch(function() { return {}; });
+        // 同步状态在 HTTP 200 中会携带最近一次任务的 error 字段；它是状态数据，
+        // 不是本次本地请求失败。真正接口错误始终使用非 2xx 或 success:false。
+        if (!response.ok || payload.success === false) {
+            throw new Error(payload.error || payload.message || ('本地数据服务错误: ' + response.status));
+        }
+        return payload.data !== undefined ? payload.data : payload;
+    }
+
+    function normalizeStudyRecords(payload) {
+        if (Array.isArray(payload)) return payload;
+        if (payload && Array.isArray(payload.records)) return payload.records;
+        return [];
+    }
+
+    // 旧版本可能保留过全量浏览器缓存。它只在 bootstrap 时作为一次性迁移种子，
+    // 绝不再被当作运行期数据源，也不触发远端全量补拉。
+    function getCachedStudyRecordSeed() {
+        const candidates = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (!key || !key.startsWith(CACHE_PREFIX + 'all_study_records_')) continue;
+                const parsed = JSON.parse(localStorage.getItem(key) || '{}');
+                const records = normalizeStudyRecords(parsed.value !== undefined ? parsed.value : parsed);
+                if (records.length) candidates.push({ timestamp: Number(parsed.timestamp) || 0, records: records });
+            }
+        } catch (e) {
+            console.warn('读取旧学习记录缓存失败:', e.message);
+        }
+        candidates.sort(function(a, b) { return b.timestamp - a.timestamp; });
+        if (!candidates.length) return [];
+
+        const seen = new Set();
+        const valid = [];
+        for (const record of candidates[0].records) {
+            if (!record || record.voc_id === undefined || record.voc_id === null || record.voc_id === '') continue;
+            const id = String(record.voc_id);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            valid.push(record);
+        }
+        return valid;
+    }
+
+    // 保持原公开名称和数组返回值。useCache 参数为旧调用方兼容保留；数据始终从
+    // SQLite 读取，避免 localStorage 过期数据覆盖服务端的增量结果。
+    async function getAllStudyRecords(useCache = true, onProgress = null) {
+        const data = await localRequest('/api/study-records');
+        const records = normalizeStudyRecords(data);
+        if (onProgress) onProgress(records.length, records.length);
+        return records;
+    }
+
+    async function startStudySync(mode = 'incremental', options = {}) {
+        const allowed = ['incremental', 'reconcile', 'bootstrap'];
+        if (!allowed.includes(mode)) throw new Error('未知数据更新模式: ' + mode);
+        const body = { mode: mode, reason: options.reason || 'manual' };
+        if (mode === 'bootstrap') {
+            const seed = Array.isArray(options.seedRecords) ? options.seedRecords : getCachedStudyRecordSeed();
+            if (seed.length) body.seed_records = seed;
+        }
+        return localRequest('/api/study-sync', { method: 'POST', body: body });
+    }
+
+    async function getStudySyncStatus() {
+        return localRequest('/api/study-sync/status');
+    }
+
+    async function cancelStudySync() {
+        return localRequest('/api/study-sync/current', { method: 'DELETE' });
+    }
+
     // 按时间范围从学习记录中提取单词
     // dateField: 'add_date' | 'first_study_date' | 'last_study_date'
     async function getWordsFromStudyRecords(startDate, endDate, dateField, useCache, onProgress) {
@@ -332,6 +318,7 @@ const MaimemoAPI = (function() {
     return {
         setToken, getToken, hasToken, clearCache,
         getStudyProgress, queryStudyRecords, getAllStudyRecords,
+        startStudySync, getStudySyncStatus, cancelStudySync,
         getWordsFromStudyRecords,
         listNotepads, listAllNotepads, getNotepad, getAllNotepadWords,
         testToken
@@ -471,22 +458,30 @@ return { getConfig, setConfig, hasConfig, classifyWords, getWordDefinitions };
 })();
 
 // ==========================================
-// 智能推荐 API 模块（本地 SQL Server）
+// 智能推荐 API 模块（本地 SQLite）
 // ==========================================
 const RecommendAPI = (function() {
+    function authHeaders(extra) {
+        const headers = Object.assign({}, extra || {});
+        const token = MaimemoAPI.getToken();
+        if (token) headers.Authorization = 'Bearer ' + token;
+        return headers;
+    }
     async function getToday() {
-        const resp = await fetch('/api/recommendations/today');
+        const resp = await fetch('/api/recommendations/today', { headers: authHeaders() });
         if (!resp.ok) throw new Error('获取推荐失败: ' + resp.status);
         return resp.json();
     }
     async function markReviewed(id) {
-        const resp = await fetch('/api/recommendations/' + id + '/review', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+        const resp = await fetch('/api/recommendations/' + id + '/review', {
+            method: 'POST', headers: authHeaders({ 'X-Requested-With': 'XMLHttpRequest' })
+        });
         return resp.ok;
     }
     async function saveSnapshot(records, force) {
         const resp = await fetch('/api/snapshot', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            headers: authHeaders({ 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }),
             body: JSON.stringify({ records: records, force: !!force })
         });
         const data = await resp.json().catch(function() { return {}; });
