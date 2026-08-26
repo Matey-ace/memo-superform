@@ -130,6 +130,11 @@ class RepositoryContracts(unittest.TestCase):
         self.assertIn("actions.toggleAttribute('inert'", study)
         self.assertIn(".study-web-actions.is-add-word-overlay", css)
 
+    def test_v071_changelog_documents_anon_overlay_fix(self):
+        changelog = self.read("CHANGELOG.md")
+        for phrase in ("## 0.71", "Anon的笔记本", "加入复习", "四个判断按钮"):
+            self.assertIn(phrase, changelog)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
