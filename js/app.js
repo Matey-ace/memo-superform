@@ -480,6 +480,7 @@ const App = (function() {
         const speedRange = document.getElementById('ttsSpeedRange');
         const speedValue = document.getElementById('ttsSpeedValue');
         const autoRead = document.getElementById('ttsAutoRead');
+        const companionRead = document.getElementById('ttsCompanionRead');
 
         const savedVoice = localStorage.getItem('tts_voice');
         if (savedVoice && voiceSelect) voiceSelect.value = savedVoice;
@@ -488,6 +489,7 @@ const App = (function() {
         if (speedRange) speedRange.value = savedSpeed;
         if (speedValue) speedValue.textContent = savedSpeed.toFixed(1);
         if (autoRead) autoRead.checked = localStorage.getItem('tts_auto_read') === 'true';
+        if (companionRead) companionRead.checked = localStorage.getItem('tts_companion_enabled') === 'true';
 
         if (speedRange) speedRange.addEventListener('input', function() {
             const v = parseFloat(speedRange.value).toFixed(1);
@@ -497,9 +499,105 @@ const App = (function() {
         if (autoRead) autoRead.addEventListener('change', function() {
             localStorage.setItem('tts_auto_read', autoRead.checked ? 'true' : 'false');
         });
+        if (companionRead) companionRead.addEventListener('change', function() {
+            localStorage.setItem('tts_companion_enabled', companionRead.checked ? 'true' : 'false');
+        });
         if (voiceSelect) voiceSelect.addEventListener('change', function() {
             localStorage.setItem('tts_voice', voiceSelect.value);
         });
+
+        const fragRange = document.getElementById('ttsFragRange');
+        const fragValue = document.getElementById('ttsFragValue');
+        const topK = document.getElementById('ttsTopK');
+        const splitSelect = document.getElementById('ttsSplitSelect');
+        const seedInput = document.getElementById('ttsSeed');
+        const cudaGraph = document.getElementById('ttsCudaGraph');
+        const parallelInfer = document.getElementById('ttsParallelInfer');
+
+        let savedFrag = Number(localStorage.getItem('tts_fragment_interval') || '0.5');
+        if (!Number.isFinite(savedFrag) || savedFrag < 0 || savedFrag > 3) savedFrag = 0.5;
+        if (fragRange) fragRange.value = savedFrag;
+        if (fragValue) fragValue.textContent = savedFrag.toFixed(1);
+        if (topK) topK.value = localStorage.getItem('tts_top_k') || '15';
+        if (splitSelect) splitSelect.value = localStorage.getItem('tts_text_split_method') || 'cut0';
+        if (seedInput) seedInput.value = localStorage.getItem('tts_seed') || '-1';
+        if (cudaGraph) cudaGraph.checked = localStorage.getItem('tts_cuda_graph') === 'true';
+        if (parallelInfer) parallelInfer.checked = localStorage.getItem('tts_parallel_infer') === 'true';
+
+        if (fragRange) fragRange.addEventListener('input', function() {
+            const v = parseFloat(fragRange.value).toFixed(1);
+            localStorage.setItem('tts_fragment_interval', v);
+            if (fragValue) fragValue.textContent = v;
+        });
+        if (topK) topK.addEventListener('change', function() {
+            let v = parseInt(topK.value, 10);
+            if (!Number.isFinite(v)) v = 15;
+            v = Math.max(1, Math.min(100, v));
+            topK.value = v;
+            localStorage.setItem('tts_top_k', String(v));
+        });
+        if (splitSelect) splitSelect.addEventListener('change', function() {
+            localStorage.setItem('tts_text_split_method', splitSelect.value);
+        });
+        if (seedInput) seedInput.addEventListener('change', function() {
+            let v = parseInt(seedInput.value, 10);
+            if (!Number.isFinite(v)) v = -1;
+            seedInput.value = v;
+            localStorage.setItem('tts_seed', String(v));
+        });
+        if (cudaGraph) cudaGraph.addEventListener('change', function() {
+            localStorage.setItem('tts_cuda_graph', cudaGraph.checked ? 'true' : 'false');
+        });
+        if (parallelInfer) parallelInfer.addEventListener('change', function() {
+            localStorage.setItem('tts_parallel_infer', parallelInfer.checked ? 'true' : 'false');
+        });
+
+        const modelDrop = document.getElementById('ttsModelDrop');
+        const modelDropStatus = document.getElementById('ttsModelDropStatus');
+        function ttsModelKind(name) {
+            const n = (name || '').toLowerCase();
+            if (n.endsWith('.ckpt')) return 'ckpt';
+            if (n.endsWith('.pth')) return 'pth';
+            if (n.endsWith('.index')) return 'index';
+            return '';
+        }
+        function setModelDropStatus(text) {
+            if (modelDropStatus) modelDropStatus.textContent = text || '';
+        }
+        async function uploadTTSModel(file, voice) {
+            const kind = ttsModelKind(file.name);
+            if (!kind) { setModelDropStatus('不支持的模型文件：' + file.name); return; }
+            try {
+                const buf = await file.arrayBuffer();
+                const resp = await fetch('/api/tts/import-model?voice=' + encodeURIComponent(voice) + '&kind=' + kind + '&name=' + encodeURIComponent(file.name), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream', 'X-Requested-With': 'XMLHttpRequest' },
+                    body: buf
+                });
+                const data = await resp.json().catch(function() { return {}; });
+                if (!resp.ok || data.error) throw new Error(data.error || ('导入失败：' + resp.status));
+                setModelDropStatus('已导入 ' + file.name + '（' + voice + '）');
+                try { await TTS.refresh(); } catch (e) {}
+            } catch (err) {
+                setModelDropStatus('导入失败 ' + file.name + '：' + err.message);
+            }
+        }
+        if (modelDrop && !modelDrop.dataset.ttsDropReady) {
+            modelDrop.dataset.ttsDropReady = 'true';
+            ['dragenter', 'dragover'].forEach(function(type) {
+                modelDrop.addEventListener(type, function(e) { e.preventDefault(); modelDrop.classList.add('dragging'); });
+            });
+            ['dragleave', 'drop'].forEach(function(type) {
+                modelDrop.addEventListener(type, function(e) { e.preventDefault(); modelDrop.classList.remove('dragging'); });
+            });
+            modelDrop.addEventListener('drop', function(e) {
+                const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
+                if (!files.length) return;
+                const voice = (voiceSelect && voiceSelect.value) || localStorage.getItem('tts_voice') || 'sakiko';
+                setModelDropStatus('正在导入 ' + files.length + ' 个文件...');
+                files.forEach(function(file) { uploadTTSModel(file, voice); });
+            });
+        }
 
         function renderStatus() {
             if (!statusEl) return;

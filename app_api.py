@@ -185,6 +185,8 @@ class LocalApiMixin:
             # 会触发 CORS 预检并被同源策略拦截）
             if self.headers.get("X-Requested-With") != "XMLHttpRequest":
                 return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
+            if path == "/api/tts/import-model":
+                return self._import_tts_model(parsed)
             try:
                 body = self._read_json_body()
             except (json.JSONDecodeError, ValueError):
@@ -229,6 +231,12 @@ class LocalApiMixin:
                         voice=body.get("voice"),
                         language=body.get("language"),
                         speed=body.get("speed"),
+                        top_k=body.get("top_k"),
+                        fragment_interval=body.get("fragment_interval"),
+                        text_split_method=body.get("text_split_method"),
+                        seed=body.get("seed"),
+                        use_cuda_graph=body.get("use_cuda_graph"),
+                        parallel_infer=body.get("parallel_infer"),
                     )
                     return self._send_json(200, {
                         "ok": True,
@@ -359,6 +367,33 @@ class LocalApiMixin:
         except Exception as e:
             traceback.print_exc()
             return self._send_json(500, {"error": str(e)})
+
+    def _import_tts_model(self, parsed):
+        """接收一个 GPT-SoVITS 模型文件的原始字节并写入对应音色目录。
+
+        query 参数：voice（音色名）、kind（ckpt/pth/index）、name（原始文件名）。
+        """
+        query = parse_qs(parsed.query)
+        voice = (query.get("voice") or [""])[0]
+        kind = (query.get("kind") or [""])[0].lower()
+        name = (query.get("name") or [""])[0]
+        if not voice or len(voice) > 64:
+            return self._send_json(400, {"error": "缺少有效的 voice 参数"})
+        if kind not in ("ckpt", "pth", "index"):
+            return self._send_json(400, {"error": "kind 必须是 ckpt/pth/index"})
+        length = self._safe_content_length()
+        data = self.rfile.read(length) if length > 0 else b""
+        if not data:
+            return self._send_json(400, {"error": "文件为空"})
+        try:
+            import tts
+            written = tts.import_model_file(TTS_PACK_DIR, voice, kind, data)
+            return self._send_json(200, {"ok": True, "voice": voice, "kind": kind, "name": name, "written": written})
+        except tts.TTSException as exc:
+            return self._send_json(400, {"error": str(exc)})
+        except Exception as exc:
+            traceback.print_exc()
+            return self._send_json(500, {"error": str(exc)})
 
     # ===================== /api/* DELETE =====================
     def _handle_api_delete(self, path, parsed):

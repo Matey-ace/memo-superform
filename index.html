@@ -345,10 +345,56 @@
                         <input type="range" id="ttsSpeedRange" min="0.5" max="1.5" step="0.1" value="1.0">
                     </div>
                     <div class="setting-item">
+                        <label>句间停顿：<span id="ttsFragValue">0.5</span> 秒</label>
+                        <input type="range" id="ttsFragRange" min="0" max="3" step="0.1" value="0.5">
+                        <p class="hint">句子之间的停顿，参考 D_sakiko；语调生硬时可适当调大。</p>
+                    </div>
+                    <div class="setting-item">
+                        <label>采样度数 top_k</label>
+                        <input type="number" id="ttsTopK" min="1" max="100" step="1" value="15">
+                        <p class="hint">候选音色多样性，越小越稳定，适合角色人设凝固。</p>
+                    </div>
+                    <div class="setting-item">
+                        <label>文本切分方式</label>
+                        <select id="ttsSplitSelect">
+                            <option value="cut0">cut0（按句）</option>
+                            <option value="cut1">cut1（按标点）</option>
+                            <option value="cut2">cut2（按标点+词）</option>
+                            <option value="cut5">cut5（按字符）</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label>随机种子（-1 随机）</label>
+                        <input type="number" id="ttsSeed" min="-1" step="1" value="-1">
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="ttsCudaGraph">
+                            <span>GPU 加速（CUDA graph，仅在 N 卡且启用了 CUDA 时生效）</span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="ttsParallelInfer">
+                            <span>并行推理（可加速长句生成，纯 CPU 时请关闭）</span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
                         <label class="checkbox-label">
                             <input type="checkbox" id="ttsAutoRead">
                             <span>自动朗读 AI 结果（推荐/分类摘要）</span>
                         </label>
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="ttsCompanionRead">
+                            <span>陪伴模式语音朗读（让 Live2D 角色说的话朗读出来）</span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label>模型文件</label>
+                        <div id="ttsModelDrop" class="tts-model-drop">把 GPT-SoVITS 模型文件拖到这里<br><small>支持 *.ckpt + *.pth（可选 *.index），会自动放入当前音色目录</small></div>
+                        <p id="ttsModelDropStatus" class="hint"></p>
                     </div>
                     <button id="ttsEnableBtn" class="test-btn">开启语音</button>
                     <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载模型</button>

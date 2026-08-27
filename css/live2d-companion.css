@@ -54,6 +54,9 @@
 .live2d-persona-actions { display: flex; gap: 7px; }
 .live2d-persona-actions .danger-btn { padding: 5px 9px; font-size: 11px; }
 .notebook-mode .live2d-persona-settings textarea, .notebook-mode .live2d-persona-settings input { border-color: #eadbc9; background: #fffdf7; color: #6b5642; font-family: var(--serif, serif); }
+.tts-model-drop { display: grid; place-items: center; gap: 3px; padding: 18px 12px; border: 1px dashed var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--card-bg) 55%, transparent); color: var(--text-secondary); font-size: 12px; text-align: center; transition: border-color .15s, background .15s; user-select: none; }
+.tts-model-drop.dragging { border-color: #d4576b; background: color-mix(in srgb, #d4576b 12%, var(--card-bg)); color: #d4576b; }
+.notebook-mode .tts-model-drop { border-color: #e6c5ba; background: #fffdf7; color: #8b7355; }
 .notebook-mode .companion-mode-btn { border-color: #ecd8ca; background: #fffdf7; color: #8b7355; font-family: var(--serif, serif); }
 .notebook-mode .companion-mode-btn:hover { color: #d4576b; border-color: #e9b9c2; }
 .notebook-mode .companion-study { background: #fffdf8; background-image: linear-gradient(rgba(164,198,229,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(164,198,229,.1) 1px, transparent 1px); background-size: 22px 22px; }

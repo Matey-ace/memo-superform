@@ -45,6 +45,22 @@ var TTS = (function() {
         audio.currentTime = 0;
     }
 
+    function numSetting(key, fallback, min, max) {
+        const raw = localStorage.getItem(key);
+        if (raw === null || raw === '') return fallback;
+        const n = Number(raw);
+        if (!Number.isFinite(n)) return fallback;
+        if (min !== undefined && n < min) return fallback;
+        if (max !== undefined && n > max) return fallback;
+        return n;
+    }
+
+    function boolSetting(key, fallback) {
+        const raw = localStorage.getItem(key);
+        if (raw === null) return fallback;
+        return raw === 'true';
+    }
+
     async function speak(text) {
         if (!text || !isReady()) return false;
         const controller = new AbortController();
@@ -57,7 +73,13 @@ var TTS = (function() {
                 body: JSON.stringify({
                     text: text,
                     voice: localStorage.getItem('tts_voice') || undefined,
-                    speed: parseFloat(localStorage.getItem('tts_speed') || '1.0')
+                    speed: parseFloat(localStorage.getItem('tts_speed') || '1.0'),
+                    top_k: numSetting('tts_top_k', 15, 1, 100),
+                    fragment_interval: numSetting('tts_fragment_interval', 0.5, 0, 5),
+                    text_split_method: localStorage.getItem('tts_text_split_method') || 'cut0',
+                    seed: numSetting('tts_seed', -1),
+                    use_cuda_graph: boolSetting('tts_cuda_graph', false),
+                    parallel_infer: boolSetting('tts_parallel_infer', false)
                 })
             });
             const data = await resp.json();

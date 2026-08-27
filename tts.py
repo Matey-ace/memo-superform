@@ -153,6 +153,51 @@ def _coerce_str(value, default):
     return value if isinstance(value, str) and value.strip() else default
 
 
+_TEXT_SPLIT_METHODS = {"cut0", "cut1", "cut2", "cut5"}
+
+
+def _coerce_num(value, default, low=None, high=None):
+    """把任意类型的数值归一化为可选范围内的 float，非法时返回 default。"""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except (TypeError, ValueError):
+            return default
+    else:
+        return default
+    if not math.isfinite(number):
+        return default
+    if low is not None and number < low:
+        return default
+    if high is not None and number > high:
+        return default
+    return number
+
+
+def _coerce_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off"):
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_split_method(value):
+    method = value if isinstance(value, str) else ""
+    method = method.strip().lower()
+    return method if method in _TEXT_SPLIT_METHODS else "cut0"
+
+
 def _load_state(data_dir):
     state = _read_json(_state_path(data_dir)) or {}
     return {
@@ -325,6 +370,41 @@ def clean_text(text):
     if not cleaned or re.fullmatch(r"[\W_]+", cleaned):
         raise TTSException("文本为空或无法合成语音")
     return cleaned
+
+
+_MODEL_FILE_KINDS = {
+    "ckpt": (".ckpt", "gpt.ckpt"),
+    "pth": (".pth", "sovits.pth"),
+    "index": (".index", "ref.index"),
+}
+
+
+def import_model_file(pack_dir, voice_name, kind, data):
+    """把一个 GPT-SoVITS 模型文件写入对应音色的模型目录。
+
+    kind 为 ckpt/pth/index；data 为该文件的原始字节。返回写入路径。
+    """
+    if kind not in _MODEL_FILE_KINDS:
+        raise TTSException("未知模型文件类型: %s" % kind)
+    if not data:
+        raise TTSException("文件内容为空")
+    pack = _pack_meta(pack_dir)
+    if not pack:
+        raise TTSException("语音资源包未就绪（缺少 pack.json）")
+    voice = next((v for v in (pack.get("voices") or []) if v.get("name") == voice_name), None)
+    if voice is None:
+        raise TTSException("未找到音色: %s" % voice_name)
+    folder = str(voice.get("folder") or "")
+    model_dir = os.path.join(pack_dir, folder, voice.get("model_dir", "GPT-SoVITS_models"))
+    os.makedirs(model_dir, exist_ok=True)
+    _, target_name = _MODEL_FILE_KINDS[kind]
+    target = os.path.join(model_dir, target_name)
+    tmp = target + ".tmp"
+    with open(tmp, "wb") as out:
+        out.write(data)
+        out.flush()
+    os.replace(tmp, target)
+    return target
 
 
 class TTSManager:
@@ -513,7 +593,9 @@ class TTSManager:
 
     # ---------- 对外操作 ----------
 
-    def synthesize(self, text, voice_name, language="中文", speed=1.0):
+    def synthesize(self, text, voice_name, language="中文", speed=1.0, *,
+                   top_k=15, fragment_interval=0.5, text_split_method="cut0",
+                   seed=-1, use_cuda_graph=False, parallel_infer=False):
         voice = self._resolve_voice_config(voice_name)
         payload = {
             "text": text,
@@ -523,12 +605,12 @@ class TTSManager:
             "ref_language": voice["ref_language"],
             "output_dir": os.path.join(self.data_dir, "generated_audios"),
             "speed_factor": float(speed),
-            "fragment_interval": 0.5,
-            "text_split_method": "cut0",
-            "top_k": 15,
-            "seed": -1,
-            "use_cuda_graph": False,
-            "parallel_infer": False,
+            "fragment_interval": _coerce_num(fragment_interval, 0.5, low=0.0, high=5.0),
+            "text_split_method": _coerce_split_method(text_split_method),
+            "top_k": int(_coerce_num(top_k, 15, low=1, high=100)),
+            "seed": int(_coerce_num(seed, -1)),
+            "use_cuda_graph": _coerce_bool(use_cuda_graph, False),
+            "parallel_infer": _coerce_bool(parallel_infer, False),
         }
         self._busy = True
         try:
@@ -713,7 +795,9 @@ def set_enabled(pack_dir, data_dir, enabled):
     return state
 
 
-def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None):
+def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None, *,
+          top_k=None, fragment_interval=None, text_split_method=None,
+          seed=None, use_cuda_graph=None, parallel_infer=None):
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
@@ -730,7 +814,18 @@ def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None):
     manager = _get_manager(pack_dir, data_dir)
     if manager.is_busy:
         raise TTSException("正在合成中，请稍候")
-    wav_path = manager.synthesize(cleaned, voice_name, language, speed)
+    wav_path = manager.synthesize(
+        cleaned,
+        voice_name,
+        language,
+        speed,
+        top_k=top_k if top_k is not None else 15,
+        fragment_interval=fragment_interval if fragment_interval is not None else 0.5,
+        text_split_method=text_split_method if text_split_method is not None else "cut0",
+        seed=seed if seed is not None else -1,
+        use_cuda_graph=use_cuda_graph if use_cuda_graph is not None else False,
+        parallel_infer=parallel_infer if parallel_infer is not None else False,
+    )
     return wav_path
 
 

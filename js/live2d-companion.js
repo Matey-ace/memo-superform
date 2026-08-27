@@ -347,7 +347,7 @@ const CompanionSession = (function() {
 })();
 
 const Live2DCompanion = (function() {
-    let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false;
+    let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '';
     let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
     const LOCAL_LINES = {
         started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
@@ -364,18 +364,37 @@ const Live2DCompanion = (function() {
         const state = document.getElementById('companionMood');
         if (state) state.textContent = MOOD_LABELS[mood] || mood || '待机';
     }
-    function setMessage(text, mood) {
+    function maybeSpeakCompanion(text) {
+        if (typeof localStorage === 'undefined' || localStorage.getItem('tts_companion_enabled') !== 'true') return;
+        if (!window.TTS || !TTS.isReady()) return;
+        const normalized = String(text || '').trim();
+        if (!normalized) return;
+        if (normalized === '待机' || normalized.indexOf('模型暂时无法预览') === 0) return;
+        if (normalized === lastSpokenCompanion) return;
+        lastSpokenCompanion = normalized;
+        TTS.speak(normalized);
+    }
+    function showCompanionReaction(text, mood, speak) {
         const bubble = document.getElementById('companionBubble');
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
         playMood(mood || 'idle');
+        if (speak) maybeSpeakCompanion(text);
+    }
+    function setMessage(text, mood) {
+        showCompanionReaction(text, mood, true);
     }
     function setReply(text, mood) {
         const bubble = document.getElementById('companionBubble');
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
+        maybeSpeakCompanion(text);
     }
     function randomLine(kind) { const lines = LOCAL_LINES[kind] || LOCAL_LINES.state; return lines[Math.floor(Math.random() * lines.length)]; }
+    function meaningfulCjk(text) {
+        const matches = String(text || '').match(/[\u4e00-\u9fa5]/g);
+        return matches ? matches.length : 0;
+    }
     function updateSummary(summary) {
         const target = document.getElementById('companionSummary');
         if (!target) return;
@@ -391,7 +410,7 @@ const Live2DCompanion = (function() {
         try {
         const config = AIAPI.getConfig();
         const persona = getActivePersona();
-        const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句 36 字以内的中文鼓励，不过分打扰学习，并仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
+        const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句 8~36 个汉字的完整中文鼓励，自然成句，不要只说单个语气词，不过分打扰学习；仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
         const prompt = '本轮已答 ' + summary.count + ' 个；正确 ' + summary.correct + ' 个；需要巩固 ' + summary.weak + ' 个；正确率 ' + summary.accuracy + '%；已学习 ' + summary.elapsed_minutes + ' 分钟；当前单词为 "' + (summary.current_word || '未知') + '"；最近判断为 ' + (summary.last_action || '无') + '。';
             const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.7, response_format: { type: 'json_object' } } }) });
             const data = await response.json().catch(function() { return {}; });
@@ -399,7 +418,8 @@ const Live2DCompanion = (function() {
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
             const moods = ['idle', 'thinking', 'cheer', 'comfort', 'celebrate'];
-            setMessage(String(parsed.text || randomLine(kind)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer');
+            const replyText = String(parsed.text || '').trim();
+            setMessage((meaningfulCjk(replyText) >= 4 ? replyText : randomLine(kind)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer');
         } catch (error) { setMessage(randomLine(kind), kind === 'needs-help' ? 'comfort' : 'cheer'); }
         finally { if (button) button.disabled = false; }
     }
@@ -511,15 +531,20 @@ const Live2DCompanion = (function() {
     }
     async function askTouchAI(region) {
         const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
-        // React immediately so the touch always lands, then ask the AI to enrich the reply.
-        setMessage(randomTouchLine(region), reaction.mood);
-        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) return;
+        // React physically immediately (mood/motion) so the touch still lands,
+        // but don't paint a local text bubble -- the AI reply is the single response.
+        setMoodLabel(reaction.mood);
+        playMood(reaction.mood);
+        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) {
+            setMessage(randomTouchLine(region), reaction.mood);
+            return;
+        }
         if (Date.now() - lastTouchAIAt < 1800) return;
         lastTouchAIAt = Date.now();
         try {
             const config = AIAPI.getConfig();
             const persona = getActivePersona();
-            const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句不超过 36 字的中文即时回应，说出此刻心情，并仅输出 JSON：{"text":"...","mood":"..."}，mood 只能是 idle|thinking|cheer|shy|firm|comfort|celebrate。';
+            const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句 8~36 个汉字的完整中文即时回应，说出此刻心情，自然成句，不要只说单个语气词（如嗯/啊）；仅输出 JSON：{"text":"...","mood":"..."}，mood 只能是 idle|thinking|cheer|shy|firm|comfort|celebrate。';
             const summary = session && session.summary ? session.summary() : null;
             const word = summary && summary.current_word ? summary.current_word : '';
             const prompt = '触摸部位：' + reaction.part + '；当前情绪：' + reaction.state + '；当前单词：' + (word || '未知') + '。';
@@ -528,9 +553,11 @@ const Live2DCompanion = (function() {
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
-            setReply(String(parsed.text || randomTouchLine(region)).slice(0, 80), reaction.mood);
+            const replyText = String(parsed.text || '').trim();
+            setReply((meaningfulCjk(replyText) >= 4 ? replyText : randomTouchLine(region)).slice(0, 80), reaction.mood);
         } catch (error) {
-            // Keep the local line already shown so the touch still lands with a reaction.
+            // If the AI call failed, fall back to a single local reaction line.
+            setMessage(randomTouchLine(region), reaction.mood);
         }
     }
     function showTouchFeedback(event, label) {
