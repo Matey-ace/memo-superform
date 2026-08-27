@@ -5,8 +5,8 @@ from urllib.parse import unquote
 FORBIDDEN_STATIC_FILES = frozenset({
     'server.py', 'db.py', 'tts.py', 'recommender.py', 'launcher.py', 'app.py',
     'app_api.py', 'memo_proxy.py', 'memo_injection.py', 'static_security.py',
-    'schema.sql', 'release.ps1', 'build_linux.sh', 'launcher-linux.sh',
-    'requirements-linux.txt', 'requirements.txt', 'MemoSuperform.spec',
+    'schema.sql', 'release.ps1',
+    'requirements.txt', 'MemoSuperform.spec',
     '_backup_pre-rewrite.bundle',
 })
 

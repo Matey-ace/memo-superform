@@ -76,27 +76,8 @@ Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏
 
 ## Linux 支持
 
-项目核心为纯 Python，**Web 模式在 Linux 上开箱即用**；桌面模式需要安装图形后端。
-
-### 方式三：Linux
-
-```bash
-# 1) 依赖（桌面模式需要；仅用 Web 模式可跳过）
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-linux.txt
-
-# 2) 启动（推荐用脚本）
-chmod +x launcher-linux.sh
-./launcher-linux.sh web        # 网页模式：自动打开浏览器
-./launcher-linux.sh desktop    # 桌面模式：pywebview 原生窗口
-```
-
-- 桌面模式（pywebview + Qt 后端）需要系统库：`libnss3 libxkbcommon libxcomposite libxdamage libasound2` 等（Ubuntu/Debian 通常 `sudo apt install libnss3 libxkbcommon0 libxcomposite1 libxdamage1 libasound2`）；`python3-tk` 仅无参数启动时的模式选择窗口需要（不装也能用 `./launcher-linux.sh web|desktop` 直接指定模式）。
-- 若在无桌面环境的服务器上运行，请用 Web 模式。
-- SQLite 主库使用 Python 标准库，Linux 无需安装数据库驱动。仅在导入旧 SQL Server 时才需要 Microsoft ODBC Driver 18 与可选的 `pyodbc`。
-- 旧库只读连接可用 `MEMO_DB_SERVER`、`MEMO_DB_DRIVER`、`MEMO_DB_USER` / `MEMO_DB_PASSWORD` 覆盖；未安装驱动不影响程序启动。
-- 语音（GPT-SoVITS 资源包）在 Linux 上要求资源包使用 `.venv311/bin/python` 结构（已在 tts.py 中按平台自动适配）。
-- 打包：`bash build_linux.sh` 生成单个 `dist/MemoSuperform` 可执行文件（与 Windows 版一致，启动时可选桌面/网页模式）。
+> **已停止维护。** Linux 相关的构建/运行支持已归档到 `codex/linux-archived` 分支，不再随本分支更新；
+> 如需 Linux 版本，请切换到该分支查看。
 
 ## 图表
 
@@ -263,27 +244,8 @@ Runs as a native window (no browser needed); closing the window exits the app.
 
 ## Linux Support
 
-The core is pure Python, so **web mode works out of the box on Linux**; desktop mode needs a GUI backend.
-
-### Option 3: Linux
-
-```bash
-# 1) Dependencies (desktop mode only; skip if you only use web mode)
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-linux.txt
-
-# 2) Launch (prefer the script)
-chmod +x launcher-linux.sh
-./launcher-linux.sh web        # Web mode: opens the browser automatically
-./launcher-linux.sh desktop    # Desktop mode: native pywebview window
-```
-
-- Desktop mode (pywebview + Qt backend) needs system libraries such as `libnss3`, `libxkbcommon`, `libxcomposite`, `libxdamage`, and `libasound2` (Ubuntu/Debian: `sudo apt install libnss3 libxkbcommon0 libxcomposite1 libxdamage1 libasound2`); `python3-tk` is only needed for the mode-selection window when launching without arguments (you can still use `./launcher-linux.sh web|desktop` without it).
-- On a headless server, use web mode.
-- SQLite uses Python's standard library. Microsoft ODBC Driver 18 and `pyodbc` are needed only for the optional read-only legacy import.
-- Legacy connection settings can be overridden with `MEMO_DB_SERVER`, `MEMO_DB_DRIVER`, `MEMO_DB_USER`, and `MEMO_DB_PASSWORD`; missing drivers never block startup.
-- Voice (GPT-SoVITS pack) on Linux requires the pack's `.venv311/bin/python` layout (tts.py already adapts to the platform).
-- Packaging: run `bash build_linux.sh` to produce a single `dist/MemoSuperform` executable (same as the Windows version; choose desktop/web mode at launch).
+> **No longer maintained.** Linux build/run support has been archived to the `codex/linux-archived` branch
+> and is no longer updated here. For a Linux build, switch to that branch.
 
 ## Charts
 

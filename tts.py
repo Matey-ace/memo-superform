@@ -221,17 +221,15 @@ def _install_meta(pack_dir):
 
 
 def _venv_python(pack_dir):
-    # Windows venv 解释器在 Scripts/python.exe，Linux/macOS 在 bin/python
-    if os.name == "nt":
-        return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
-    return os.path.join(pack_dir, ".venv311", "bin", "python")
+    # 仅支持 Windows（Linux 支持已归档到 codex/linux-archived，不再维护）
+    return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
 
 
 def _write_install_meta(pack_dir, source="ModelScope"):
     """重建 install.json（与 setup.ps1 写入的内容保持一致）。"""
     pack = _pack_meta(pack_dir) or {}
-    # Windows 下是 ffmpeg.exe，Linux/macOS 下是 ffmpeg
-    ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    # 仅支持 Windows（Linux 支持已归档到 codex/linux-archived，不再维护）
+    ffmpeg_name = "ffmpeg.exe"
     ffmpeg_exe = os.path.join(pack_dir, "ffmpeg", "bin", ffmpeg_name)
     data = {
         "installed": True,
@@ -256,9 +254,9 @@ def _engine_ready(pack_dir):
             _write_install_meta(pack_dir)
             meta = _install_meta(pack_dir)
         else:
-            return False, "资源包尚未安装，请先运行安装脚本（Windows: setup.bat / Linux: setup.sh）完成安装"
+            return False, "资源包尚未安装，请先运行安装脚本（Windows: setup.bat）完成安装"
     if not os.path.exists(_venv_python(pack_dir)):
-        return False, "未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat / Linux: setup.sh）"
+        return False, "未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat）"
     if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
         return False, "资源包缺少 tts_engine/worker_main.py，资源包不完整"
     return True, ""
@@ -441,16 +439,36 @@ class TTSManager:
     def _spawn(self):
         venv_py, worker_main = self._worker_paths()
         if not os.path.exists(venv_py):
-            raise TTSException("未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat / Linux: setup.sh）")
+            raise TTSException("未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat）")
         if not os.path.exists(worker_main):
             raise TTSException("资源包缺少 tts_engine/worker_main.py")
+
+        # 便携包：若包内自带 CPython 运行时，就把 venv 的 home 指向它，
+        # 这样整个包无论解压到哪都能找到解释器（否则 pyvenv.cfg 里是打包机器的绝对方路径）。
+        bundled_py = os.path.join(self.pack_dir, "python")
+        if os.path.exists(os.path.join(bundled_py, "python.exe")):
+            try:
+                cfg_path = os.path.join(self.pack_dir, ".venv311", "pyvenv.cfg")
+                if os.path.exists(cfg_path):
+                    lines = []
+                    for line in open(cfg_path, "r", encoding="utf-8").read().splitlines():
+                        if line.lower().startswith("home ="):
+                            lines.append("home = " + bundled_py)
+                        else:
+                            lines.append(line)
+                    with open(cfg_path, "w", encoding="utf-8") as cfg_file:
+                        cfg_file.write("\n".join(lines) + "\n")
+            except Exception:
+                pass
 
         env = os.environ.copy()
         # 子进程 stdin/stdout 统一使用 UTF-8，避免中文 Windows(GBK) 环境下 JSON 乱码
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
-        install = _install_meta(self.pack_dir) or {}
-        ffmpeg_dir = install.get("ffmpeg_dir") or ""
+        ffmpeg_dir = os.path.join(self.pack_dir, "ffmpeg", "bin")
+        if not os.path.isdir(ffmpeg_dir):
+            install = _install_meta(self.pack_dir) or {}
+            ffmpeg_dir = install.get("ffmpeg_dir") or ""
         if ffmpeg_dir and os.path.isdir(ffmpeg_dir):
             env["PATH"] = ffmpeg_dir + os.pathsep + env.get("PATH", "")
 
