@@ -1,9 +1,10 @@
 'use strict';
 const fs = require('fs');
 const assert = require('assert');
+const vm = require('vm');
 const read = p => fs.readFileSync(p, 'utf8');
 const index = read('index.html');
-const files = ['js/ui-style.js','js/api.js','js/tts.js','js/dashboard-core.js','js/charts.js','js/layout.js','js/study-shortcuts.js','js/study-lifecycle.js','js/study-web.js','js/study-sync-ui.js','js/app.js'];
+const files = ['js/ui-style.js','js/api.js','js/tts.js','js/dashboard-core.js','js/charts.js','js/layout.js','js/study-shortcuts.js','js/study-lifecycle.js','js/study-web.js','js/live2d-companion.js','js/study-sync-ui.js','js/app.js'];
 for (const file of files) assert(index.includes(file), `missing script load: ${file}`);
 const study = read('js/study-shortcuts.js');
 const actions = ['FAMILIAR','VAGUE','FORGET','WELL_FAMILIAR','START_SPELLING','SHOW_ANSWER','PREVIOUS_WORD','EXIT_SPELLING','CLEAR_INPUT','PLAY_AUDIO','TTS_PHRASE_1','TTS_PHRASE_2','TTS_PHRASE_3','SEARCH'];
@@ -28,4 +29,21 @@ assert(studyWeb.includes('studyAddWordOverlayOpen'), 'missing add-word overlay s
 assert(studyWeb.includes("actions.classList.toggle('is-add-word-overlay'"), 'actions are not hidden for add-word overlay');
 const studyCss = read('css/study-web.css') + read('css/study-web-standard.css') + read('css/study-web-notebook.css');
 assert(studyCss.includes('.study-web-actions.is-add-word-overlay'), 'missing add-word overlay hide style');
+const companion = read('js/live2d-companion.js');
+for (const name of ['Live2DCompanion','CompanionSession','Live2DModelManager']) assert(new RegExp(`const\\s+${name}\\s*=`).test(companion), `missing ${name}`);
+for (const name of ['Live2DCompanion','CompanionSession','Live2DModelManager']) assert(companion.includes(`window.${name} = ${name}`), `${name} is not exposed to App.init`);
+const companionNodes = {};
+for (const id of ['companionModeBtn','exitCompanionModeBtn','companionAskBtn','closeCompanionBirthdayCard']) {
+  companionNodes[id] = { dataset: {}, handlers: {}, addEventListener(type, handler) { this.handlers[type] = handler; } };
+}
+const companionContext = { window: { addEventListener() {} }, document: { getElementById(id) { return companionNodes[id] || null; } }, setInterval() {}, console };
+vm.createContext(companionContext);
+vm.runInContext(companion, companionContext);
+companionContext.window.Live2DCompanion.init();
+assert.strictEqual(typeof companionNodes.companionModeBtn.handlers.click, 'function', 'companion entry click handler is not bound');
+for (const contract of ['rendererGeneration', 'fitLiveModel', 'scheduleRendererReload', "webglcontextlost", 'if (rendererLoading)']) {
+  assert(companion.includes(contract), `missing fullscreen renderer contract ${contract}`);
+}
+assert(index.includes('companionModeBtn'), 'missing companion learning entry');
+assert(read('live2d_service.py').includes('MAX_MODEL_BYTES'), 'missing model size limit');
 console.log('JS_CONTRACTS_PASS: scripts, 14 shortcuts, and public globals are preserved');

@@ -1,0 +1,69 @@
+/* Live2D companion learning mode.  Loaded in both visual styles; all rules are
+   scoped to the new feature, so existing dashboard and study controls retain
+   their dimensions and behavior. */
+.companion-mode .topbar { box-shadow: var(--shadow-md); }
+.companion-mode-btn { margin-left: 9px; border: 1px solid var(--border-color); border-radius: 10px; padding: 7px 10px; background: var(--card-bg); color: var(--text-primary); font: inherit; font-size: 12px; cursor: pointer; }
+.companion-mode-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+.companion-study { height: calc(100vh - 56px); padding: 14px; background: var(--bg-color); }
+.companion-study-shell { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(580px, 1.85fr) minmax(315px, .85fr); gap: 14px; }
+.companion-study-main, .companion-study-aside { min-width: 0; min-height: 0; border-radius: var(--radius); background: var(--card-bg); box-shadow: var(--shadow-sm); overflow: hidden; }
+.companion-study-main { position: relative; }
+.companion-study-main > div { width: 100%; height: 100%; }
+.companion-study-aside { display: flex; flex-direction: column; position: relative; }
+.companion-aside-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border-color); }
+.companion-aside-head h2 { font-size: 15px; margin: 0; }
+.companion-exit { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 13px; }
+.companion-live2d-host { min-height: 260px; flex: 1 1 auto; position: relative; overflow: hidden; background: radial-gradient(circle at 50% 20%, rgba(24,119,255,.12), transparent 52%), linear-gradient(180deg, rgba(24,119,255,.045), transparent); }
+.companion-live2d-host canvas { width: 100%; height: 100%; display: block; }
+.companion-gif-fallback { position: absolute; inset: 0; display: grid; place-items: center; }
+.companion-gif-fallback img { width: min(72%, 250px); aspect-ratio: 1; object-fit: cover; border-radius: 26px; box-shadow: var(--shadow-md); }
+.companion-model-name { position: absolute; top: 10px; left: 12px; font-size: 12px; color: var(--text-secondary); background: color-mix(in srgb, var(--card-bg) 86%, transparent); padding: 4px 7px; border-radius: 999px; z-index: 2; }
+.companion-birthday-badge { position: absolute; right: 12px; top: 10px; color: #d4576b; font-size: 12px; background: #fff2f5; padding: 4px 7px; border-radius: 999px; z-index: 2; }
+.companion-dialogue { flex: 0 0 auto; border-top: 1px solid var(--border-color); padding: 12px; }
+.companion-mood { color: var(--accent-blue); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.companion-bubble { line-height: 1.55; min-height: 48px; padding: 10px 12px; color: var(--text-primary); background: var(--bg-color); border-radius: 12px; font-size: 13px; }
+.companion-current-word { margin: 9px 2px 7px; color: var(--text-secondary); font-size: 12px; min-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.companion-summary { display: flex; gap: 7px; flex-wrap: wrap; color: var(--text-secondary); font-size: 12px; }
+.companion-summary span { background: var(--bg-color); padding: 5px 7px; border-radius: 8px; }
+.companion-summary b { color: var(--text-primary); }
+.companion-ask { width: 100%; margin-top: 10px; }
+.companion-birthday-card { position: absolute; z-index: 8; left: 14px; right: 14px; bottom: 14px; padding: 15px 18px; border: 1px solid #f0bbc6; border-radius: 14px; background: linear-gradient(135deg,#fff9ee,#fff0f4); box-shadow: var(--shadow-lg); color: #96596a; font-size: 12px; line-height: 1.55; animation: companion-card-in .28s ease-out both; }
+.companion-birthday-card strong { display: block; letter-spacing: 1px; color: #d4576b; margin-bottom: 4px; }
+.companion-birthday-card p { margin: 0; padding-right: 8px; }
+.companion-birthday-card button { position: absolute; right: 8px; top: 7px; border: 0; background: transparent; color: #b87a87; font-size: 17px; cursor: pointer; }
+@keyframes companion-card-in { from { opacity: 0; transform: translateY(10px) rotate(-1deg); } to { opacity: 1; transform: translateY(0) rotate(0); } }
+.live2d-settings .setting-item { align-items: flex-start; }
+.live2d-model-controls { width: 100%; display: grid; gap: 9px; }
+.live2d-search-row, .live2d-import-row { display: flex; gap: 7px; }
+.live2d-search-row input, .live2d-import-row input { min-width: 0; flex: 1; }
+.live2d-catalog-results, .live2d-installed-models { max-height: 190px; overflow: auto; border: 1px solid var(--border-color); border-radius: 9px; background: var(--bg-color); }
+.live2d-catalog-row, .live2d-installed-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 9px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.live2d-catalog-row:last-child, .live2d-installed-row:last-child { border-bottom: 0; }
+.live2d-catalog-row span, .live2d-installed-row span:first-child { min-width: 0; display: grid; }
+.live2d-catalog-row small, .live2d-installed-row small { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
+.live2d-installed-row.active { background: rgba(24,119,255,.08); }
+.live2d-installed-row span:last-child { display: flex; gap: 5px; flex: none; }
+.live2d-installed-row .danger-btn { padding: 5px 7px; font-size: 11px; }
+.live2d-download-status, #live2dModelStatus { font-size: 12px; color: var(--text-secondary); }
+#live2dModelStatus.error { color: #d4380d; }
+.notebook-mode .companion-mode-btn { border-color: #ecd8ca; background: #fffdf7; color: #8b7355; font-family: var(--serif, serif); }
+.notebook-mode .companion-mode-btn:hover { color: #d4576b; border-color: #e9b9c2; }
+.notebook-mode .companion-study { background: #fffdf8; background-image: linear-gradient(rgba(164,198,229,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(164,198,229,.1) 1px, transparent 1px); background-size: 22px 22px; }
+.notebook-mode .companion-study-main, .notebook-mode .companion-study-aside { border: 1px solid #eadbc9; box-shadow: 0 6px 20px rgba(137,105,81,.11); }
+.notebook-mode .companion-aside-head { border-bottom-color: #eadbc9; }
+.notebook-mode .companion-live2d-host { background: radial-gradient(circle at 50% 18%, rgba(159,208,232,.30), transparent 55%), linear-gradient(180deg,#fff9ef, #fffdf9); }
+.notebook-mode .companion-bubble { border: 1px dashed #e6c5ba; background: #fffdf7; font-family: var(--serif, serif); }
+.notebook-mode .companion-birthday-badge { background: #fff0f2; color: #c86678; }
+@media (max-width: 960px), (max-height: 650px) {
+  .companion-study { padding: 8px; }
+  .companion-study-shell { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .companion-study-aside { position: absolute; z-index: 30; right: 12px; bottom: 12px; width: min(360px, calc(100vw - 24px)); height: min(470px, 58vh); box-shadow: var(--shadow-lg); }
+  .companion-study-main { height: 100%; }
+  .companion-live2d-host { min-height: 180px; }
+}
+@media (max-width: 620px) {
+  .companion-mode-btn { padding: 6px 7px; font-size: 0; }
+  .companion-mode-btn::after { content: '陪'; font-size: 12px; }
+  .companion-study-aside { height: 52vh; }
+  .companion-summary span { font-size: 11px; }
+}

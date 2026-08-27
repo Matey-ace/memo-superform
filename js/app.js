@@ -28,6 +28,7 @@ const App = (function() {
         setupAIClassifyButton();
         setupTheme();
         LayoutManager.init();
+        if (typeof Live2DCompanion !== 'undefined') Live2DCompanion.init();
         window.addEventListener('memo-study-sync-status', updateCountdown);
         StudySyncUI.init({ onRecordsChanged: handleStudyRecordsChanged });
         setupAutoRefresh();

@@ -28,12 +28,14 @@
         css('css/fonts.css', 'memo-notebook-fonts');
         css('css/style-anon.css', 'memo-dashboard-theme');
         css('css/study-web-notebook.css', 'memo-study-theme');
+        css('css/live2d-companion.css', 'memo-live2d-companion');
     } else {
         css('css/style.css', 'memo-dashboard-theme');
         css('css/ai-toolbar.css', 'memo-ai-toolbar');
         css('css/drag.css', 'memo-drag');
         css('css/study-web.css', 'memo-study-core');
         css('css/study-web-standard.css', 'memo-study-theme');
+        css('css/live2d-companion.css', 'memo-live2d-companion');
     }
 
     function applyBody(body) {

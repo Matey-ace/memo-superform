@@ -17,9 +17,11 @@ const StudyWeb = (function() {
     var updateShortcutLabels = StudyShortcuts.updateShortcutLabels;
     var sendKey = StudyShortcuts.sendKey;
 
-    function render(containerId) {
+    function render(containerId, options) {
         var container = document.getElementById(containerId);
         if (!container) return null;
+        options = options || {};
+        var reportStudyEvent = typeof options.onStudyEvent === 'function' ? options.onStudyEvent : function() {};
 
         var shortcutMap = loadShortcuts();
 
@@ -79,6 +81,26 @@ const StudyWeb = (function() {
         var studyControlsActive = false;
         var studyAddWordOverlayOpen = false;
         var studyHomeFallbackPending = false;
+
+        // Companion mode receives only the current word and answer category.
+        // Its callback is inert for the normal dashboard study tile.
+        function currentStudyWord() {
+            try {
+                var idoc = iframe.contentDocument;
+                var activePage = idoc && getActiveTaroPage(idoc);
+                var scope = activePage || idoc;
+                if (!scope) return '';
+                var node = scope.querySelector('.phrase-spelling, .phrase-word, .rev-word, [data-word], .phrase-title');
+                var text = node && (node.getAttribute('data-word') || node.innerText || node.textContent);
+                text = (text || '').replace(/\s+/g, ' ').trim();
+                return /^[A-Za-z][A-Za-z' -]{0,80}$/.test(text) ? text : '';
+            } catch(e) { return ''; }
+        }
+
+        function reportAnswer(action) {
+            if (!studyControlsActive || studyAddWordOverlayOpen) return;
+            reportStudyEvent({ type: 'answer', action: action, word: currentStudyWord() });
+        }
 
         // URL 只能说明墨墨 SPA 已加载，公测说明、词书和设置页也共用
         // /webstudy/app。只有学习页的语义根节点实际挂载后才显示操作栏，
@@ -149,6 +171,7 @@ const StudyWeb = (function() {
         }
 
         function setStudyControlsActive(active) {
+            var changed = studyControlsActive !== !!active;
             studyControlsActive = !!active;
             var hideForAddWordOverlay = studyControlsActive && studyAddWordOverlayOpen;
             actions.hidden = !studyControlsActive;
@@ -159,6 +182,7 @@ const StudyWeb = (function() {
             container.dataset.studyScreenActive = studyControlsActive ? 'true' : 'false';
             container.dataset.studyAddWordOverlay = hideForAddWordOverlay ? 'true' : 'false';
             if (!studyControlsActive || hideForAddWordOverlay) setShortcutPanelOpen(false);
+            if (changed) reportStudyEvent({ type: 'screen', active: studyControlsActive });
         }
 
         var studyWatch = StudyLifecycle.create(iframe, isActualStudyScreen, setStudyControlsActive);
@@ -221,8 +245,10 @@ const StudyWeb = (function() {
         updateShortcutLabels(container, shortcutMap);
             container.querySelectorAll('.study-web-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
-                    var shortcut = shortcutMap[btn.getAttribute('data-action') || actionForDefault(btn.getAttribute('data-key'))];
+                    var action = btn.getAttribute('data-action') || actionForDefault(btn.getAttribute('data-key'));
+                    var shortcut = shortcutMap[action];
                     sendKey(iframe, shortcut);
+                    reportAnswer(action);
                     btn.style.transform = 'translateY(1px) scale(0.94)';
                     setTimeout(function() { btn.style.transform = ''; }, 150);
                 });
@@ -267,6 +293,7 @@ const StudyWeb = (function() {
             document.removeEventListener('keydown', handleShortcutKeydown);
             window.removeEventListener('message', handleStudyNavigationMessage);
             stopStudyScreenWatch();
+            reportStudyEvent({ type: 'screen', active: false });
         });
 
         function handleShortcutKeydown(e) {
@@ -277,6 +304,7 @@ const StudyWeb = (function() {
             if (!action) return;
             e.preventDefault();
             sendKey(iframe, shortcutMap[action]);
+            reportAnswer(action);
             var activeButton = container.querySelector('.study-web-btn[data-action="' + action + '"]');
             if (activeButton) {
                 activeButton.classList.add('is-key-active');

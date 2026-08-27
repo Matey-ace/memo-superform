@@ -37,6 +37,7 @@
                     <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="3" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>
                 </button>
             </div>
+            <button id="companionModeBtn" type="button" class="companion-mode-btn" title="左侧背词、右侧 Live2D 陪伴">✦ 陪伴学习</button>
         </div>
         <div class="topbar-right">
             <span id="serverStatus" class="server-status checking">● 检查代理服务...</span>
@@ -187,6 +188,30 @@
         </div>
     </main>
 
+    <!-- 独立陪伴学习模式：不会改变仪表盘的原有磁贴布局。 -->
+    <section id="companionStudy" class="companion-study" hidden aria-label="陪伴学习模式">
+        <div class="companion-study-shell">
+            <div class="companion-study-main"><div id="companionStudyFrame"></div></div>
+            <aside class="companion-study-aside">
+                <div class="companion-aside-head"><h2>✦ Anon 陪伴学习</h2><button id="exitCompanionModeBtn" class="companion-exit" type="button">退出陪伴模式</button></div>
+                <div id="companionLive2DHost" class="companion-live2d-host">
+                    <span id="companionModelName" class="companion-model-name">尚未选择模型</span>
+                    <span id="companionBirthdayBadge" class="companion-birthday-badge" hidden>9.06 Birthday</span>
+                    <canvas id="companionLive2DCanvas" aria-label="Live2D 角色"></canvas>
+                    <div id="companionGifFallback" class="companion-gif-fallback"><img src="img/gifs/anon-think.gif" alt="Anon 陪伴"></div>
+                </div>
+                <div class="companion-dialogue">
+                    <div id="companionMood" class="companion-mood">待机</div>
+                    <p id="companionBubble" class="companion-bubble">选择模型后，进入背词学习页就可以开始陪伴学习。</p>
+                    <p id="companionCurrentWord" class="companion-current-word">等待进入学习页</p>
+                    <div id="companionSummary" class="companion-summary"><span>本轮 <b>0</b> 词</span><span>正确率 <b>0%</b></span><span>专注 <b>0</b> 分钟</span></div>
+                    <button id="companionAskBtn" class="test-btn companion-ask" type="button">让爱音看看这一轮</button>
+                </div>
+                <section id="companionBirthdayCard" class="companion-birthday-card" hidden aria-label="Anon 生日纪念卡"><button id="closeCompanionBirthdayCard" type="button" aria-label="关闭生日纪念卡">×</button><strong>9.06 · Birthday Memo</strong><p>今天的第一个学习里程碑完成！这份认真就当作送给爱音的小礼物吧。</p></section>
+            </aside>
+        </div>
+    </section>
+
     <!-- 设置面板 -->
     <div id="settingsPanel" class="settings-panel">
         <div class="settings-overlay"></div>
@@ -329,6 +354,14 @@
                     <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载模型</button>
                     <span id="ttsActionStatus" class="status-text"></span>
                 </div>
+
+                <div class="setting-group live2d-settings">
+                    <h3>Live2D 模型衣柜</h3>
+                    <div class="setting-item"><label>在线模型</label><div class="live2d-model-controls"><div class="live2d-search-row"><input id="live2dCatalogSearch" type="search" placeholder="搜索角色或模型名，例如 爱音 / Anon / 037"><button id="live2dCatalogRefreshBtn" type="button" class="test-btn">刷新目录</button></div><div id="live2dCatalogResults" class="live2d-catalog-results"><p class="hint">输入角色名即可检索 Bestdori 模型与服装。</p></div><p id="live2dDownloadStatus" class="live2d-download-status"></p><button id="live2dCancelDownloadBtn" type="button" class="danger-btn" hidden>取消当前下载</button></div></div>
+                    <div class="setting-item"><label>本地导入</label><div class="live2d-model-controls"><div class="live2d-import-row"><input id="live2dImportPath" type="text" placeholder="粘贴包含 model.json / model3.json 的文件夹路径"><button id="live2dImportBtn" type="button" class="test-btn">导入并校验</button></div><p class="hint">导入后会复制到本地 data/live2d/models，不依赖原目录。</p></div></div>
+                    <div class="setting-item"><label>已安装模型</label><div id="live2dInstalledModels" class="live2d-installed-models"><p class="hint">正在读取模型衣柜...</p></div></div>
+                    <p id="live2dModelStatus" class="hint"></p>
+                </div>
             </div>
             <div class="settings-footer">
                 <button id="saveSettingsBtn" class="save-btn">保存设置</button>
@@ -361,6 +394,10 @@
     </div>
 
     <script>window.MemoUIStyle.activate(document);</script>
+    <script src="vendor/live2d/live2d-2.1.min.js?v=072"></script>
+    <script src="vendor/live2d/live2dcubismcore.min.js?v=072"></script>
+    <script src="vendor/live2d/pixi-6.5.10.min.js?v=072"></script>
+    <script src="vendor/live2d/pixi-live2d-display-0.4.0.min.js?v=072"></script>
     <script src="js/api.js?v=20260826-v070-sync"></script>
     <script src="js/tts.js?v=40"></script>
     <script src="js/dashboard-core.js?v=20260825-unified-ui"></script>
@@ -369,6 +406,7 @@
     <script src="js/study-shortcuts.js?v=20260825-unified-ui"></script>
     <script src="js/study-lifecycle.js?v=20260825-unified-ui"></script>
     <script src="js/study-web.js?v=20260825-unified-ui"></script>
+    <script src="js/live2d-companion.js?v=20260827-live2d-fix1"></script>
     <script src="js/study-sync-ui.js?v=20260826-sqlite-sync"></script>
     <script>
         if (window.MemoUIStyle.isNotebook) {

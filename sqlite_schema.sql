@@ -181,6 +181,32 @@ CREATE TABLE IF NOT EXISTS legacy_imports (
     error_text TEXT
 );
 
+-- Model bytes are stored only under data/live2d/models. SQLite stores the
+-- verified registry and the selected model for each profile.
+CREATE TABLE IF NOT EXISTS live2d_models (
+    model_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    character_id TEXT,
+    display_name TEXT NOT NULL,
+    catalog_name TEXT,
+    model_format TEXT NOT NULL CHECK (model_format IN ('cubism2', 'cubism3')),
+    relative_path TEXT NOT NULL UNIQUE,
+    entry_file TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    complete INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live2d_preferences (
+    profile_id INTEGER PRIMARY KEY,
+    active_model_id TEXT,
+    companion_enabled INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_records_due
     ON study_records(profile_id, is_active, next_study_date);
 CREATE INDEX IF NOT EXISTS idx_records_last_study
@@ -193,3 +219,5 @@ CREATE INDEX IF NOT EXISTS idx_sync_runs_profile
     ON sync_runs(profile_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sync_segments_run
     ON sync_segments(profile_id, source, complete, start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_live2d_models_character
+    ON live2d_models(character_id, complete, updated_at DESC);

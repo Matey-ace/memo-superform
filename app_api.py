@@ -61,6 +61,46 @@ class LocalApiMixin:
         if path == "/api/codex/status":
             return self._send_json(200, CODEX_OAUTH.status())
 
+        live2d = globals().get("LIVE2D_SERVICE")
+        if path.startswith("/api/live2d/assets/"):
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            parts = path.split("/")
+            if len(parts) < 6:
+                return self._send_json(404, {"error": "模型资源不存在"})
+            try:
+                asset = live2d.asset_path(parts[4], "/".join(parts[5:]))
+                self.send_response(200)
+                self.send_header("Content-Type", live2d.asset_content_type(asset))
+                self.send_header("Content-Length", str(asset.stat().st_size))
+                self.send_header("Cache-Control", "private, max-age=3600")
+                self.end_headers()
+                with open(asset, "rb") as handle:
+                    while chunk := handle.read(64 * 1024):
+                        self.wfile.write(chunk)
+                return
+            except Exception as exc:
+                return self._send_json(404, {"error": str(exc)})
+
+        if path == "/api/live2d/catalog":
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            query = parse_qs(parsed.query)
+            try:
+                return self._send_json(200, live2d.catalog(query.get("q", [""])[0], query.get("refresh", ["0"])[0] == "1"))
+            except Exception as exc:
+                return self._send_json(502, {"error": str(exc)})
+
+        if path == "/api/live2d/models":
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            return self._send_json(200, live2d.list_models(self._profile_id(required=False)))
+
+        if path.startswith("/api/live2d/downloads/"):
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            return self._send_json(200, live2d.download_status(path.rsplit("/", 1)[-1]))
+
         known_db_paths = {
             "/api/recommendations/today",
             "/api/stats/history",
@@ -224,6 +264,29 @@ class LocalApiMixin:
                 tts.shutdown(TTS_PACK_DIR, DATA_DIR)
                 return self._send_json(200, {"ok": True})
 
+            live2d = globals().get("LIVE2D_SERVICE")
+            if path == "/api/live2d/download":
+                if not live2d:
+                    return self._send_json(503, {"error": "Live2D 服务未就绪"})
+                model_name = str(body.get("catalog_name") or "")
+                if not model_name:
+                    return self._send_json(400, {"error": "缺少 catalog_name"})
+                return self._send_json(202, live2d.start_download(model_name, self._profile_id(required=False)))
+
+            if path == "/api/live2d/import":
+                if not live2d:
+                    return self._send_json(503, {"error": "Live2D 服务未就绪"})
+                return self._send_json(200, live2d.import_directory(str(body.get("source_path") or ""), self._profile_id(required=False)))
+
+            if path == "/api/live2d/active":
+                if not live2d:
+                    return self._send_json(503, {"error": "Live2D 服务未就绪"})
+                model_id = body.get("model_id")
+                enabled = body.get("companion_enabled")
+                if enabled is not None and not isinstance(enabled, bool):
+                    return self._send_json(400, {"error": "companion_enabled 必须是布尔值"})
+                return self._send_json(200, live2d.set_active(self._profile_id(required=False), model_id, enabled))
+
             if path == "/api/study-sync":
                 if not DB_READY or not STUDY_SYNC_MANAGER:
                     return self._send_json(503, {"error": "同步服务未就绪"})
@@ -302,6 +365,19 @@ class LocalApiMixin:
     def _handle_api_delete(self, path, parsed):
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
+        live2d = globals().get("LIVE2D_SERVICE")
+        if path.startswith("/api/live2d/downloads/"):
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            return self._send_json(200, live2d.cancel_download(path.rsplit("/", 1)[-1]))
+        if path.startswith("/api/live2d/models/"):
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            try:
+                deleted = live2d.delete_model(path.rsplit("/", 1)[-1])
+                return self._send_json(200 if deleted else 404, {"ok": deleted})
+            except Exception as exc:
+                return self._send_json(400, {"error": str(exc)})
         if path != "/api/study-sync/current":
             return self._send_json(404, {"error": "未知接口"})
         if not STUDY_SYNC_MANAGER:

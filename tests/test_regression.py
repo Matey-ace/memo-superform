@@ -130,6 +130,18 @@ class RepositoryContracts(unittest.TestCase):
         self.assertIn("actions.toggleAttribute('inert'", study)
         self.assertIn(".study-web-actions.is-add-word-overlay", css)
 
+    def test_live2d_companion_contract_is_isolated_from_existing_study_ui(self):
+        companion = self.read("js/live2d-companion.js")
+        service = self.read("live2d_service.py")
+        html = self.read("index.html")
+        self.assertIn("Live2DCompanion", companion)
+        self.assertIn("CompanionSession", companion)
+        self.assertIn("Live2DModelManager", companion)
+        self.assertIn("window.Live2DCompanion = Live2DCompanion", companion)
+        self.assertIn("companionModeBtn", html)
+        self.assertIn("/api/live2d/assets/", service)
+        self.assertIn("MAX_MODEL_BYTES", service)
+
     def test_v071_changelog_documents_anon_overlay_fix(self):
         changelog = self.read("CHANGELOG.md")
         for phrase in ("## 0.71", "Anon的笔记本", "加入复习", "四个判断按钮"):

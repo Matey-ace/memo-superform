@@ -29,6 +29,7 @@ import traceback
 from urllib.parse import urlparse, parse_qs, unquote
 
 import codex_auth
+from live2d_service import Live2DService
 from app_api import LocalApiMixin, configure_local_api
 from static_security import is_forbidden_static_path
 
@@ -66,6 +67,7 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
         pass
 
 CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
+LIVE2D_SERVICE = Live2DService(DATA_DIR)
 
 from memo_proxy import MAIMEMO_BASE, TC_APIS_BASE, resolve_web_route
 
@@ -816,6 +818,7 @@ configure_local_api(
     CODEX_OAUTH=CODEX_OAUTH, DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
     DB_READY=DB_READY, db=globals().get("db"), recommender=globals().get("recommender"),
     STUDY_SYNC_SERVICE=STUDY_SYNC_SERVICE, STUDY_SYNC_MANAGER=STUDY_SYNC_MANAGER,
+    LIVE2D_SERVICE=LIVE2D_SERVICE,
     _current_mode=_current_mode, _write_launcher_config=_write_launcher_config,
     _relaunch_app=_relaunch_app,
 )

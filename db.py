@@ -77,6 +77,8 @@ def init_db(data_dir: Optional[str] = None) -> str:
             now = _utc_now()
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(1,?,?)",
                          ("v0.70 sqlite data centre", now))
+            conn.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES(2,?,?)",
+                         ("v0.72 Live2D companion registry", now))
             conn.execute("INSERT OR IGNORE INTO profiles(token_hash,display_name,created_at,updated_at) VALUES(?,?,?,?)",
                          (DEFAULT_PROFILE_HASH, "legacy-default", now, now))
             check = conn.execute("PRAGMA quick_check").fetchone()[0]
@@ -563,6 +565,99 @@ def set_setting(key: str, value: Any) -> None:
         conn.execute("""INSERT INTO settings(key_name,value_text,updated_at) VALUES(?,?,?)
             ON CONFLICT(key_name) DO UPDATE SET value_text=excluded.value_text,updated_at=excluded.updated_at""",
                      (str(key), str(value), now))
+
+
+# ===================== Live2D companion registry =====================
+
+def upsert_live2d_model(metadata: Mapping[str, Any]) -> None:
+    """Register a validated local model while keeping model bytes on disk."""
+    now = _utc_now()
+    fields = {
+        "model_id": str(metadata["model_id"]),
+        "source": str(metadata.get("source") or "import"),
+        "character_id": str(metadata.get("character_id") or ""),
+        "display_name": str(metadata.get("display_name") or metadata["model_id"]),
+        "catalog_name": str(metadata.get("catalog_name") or ""),
+        "model_format": str(metadata.get("model_format") or "cubism2"),
+        "relative_path": str(metadata["relative_path"]),
+        "entry_file": str(metadata["entry_file"]),
+        "manifest_json": json.dumps(metadata.get("manifest") or {}, ensure_ascii=False, sort_keys=True),
+        "byte_size": int(metadata.get("byte_size") or 0),
+        "complete": 1 if metadata.get("complete", True) else 0,
+    }
+    with _write_connection() as conn:
+        conn.execute(
+            "INSERT INTO live2d_models(model_id,source,character_id,display_name,catalog_name,model_format,relative_path,entry_file,manifest_json,byte_size,complete,created_at,updated_at) "
+            "VALUES(:model_id,:source,:character_id,:display_name,:catalog_name,:model_format,:relative_path,:entry_file,:manifest_json,:byte_size,:complete,:now,:now) "
+            "ON CONFLICT(model_id) DO UPDATE SET source=excluded.source,character_id=excluded.character_id,display_name=excluded.display_name,catalog_name=excluded.catalog_name,model_format=excluded.model_format,relative_path=excluded.relative_path,entry_file=excluded.entry_file,manifest_json=excluded.manifest_json,byte_size=excluded.byte_size,complete=excluded.complete,updated_at=excluded.updated_at",
+            dict(fields, now=now),
+        )
+
+
+def _live2d_row(row: Any) -> Optional[dict[str, Any]]:
+    if not row:
+        return None
+    item = {key: _json_safe(row[key]) for key in row.keys()}
+    try:
+        item["manifest"] = json.loads(item.pop("manifest_json") or "{}")
+    except json.JSONDecodeError:
+        item["manifest"] = {}
+    item["complete"] = bool(item.get("complete"))
+    return item
+
+
+def list_live2d_models() -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM live2d_models ORDER BY updated_at DESC, display_name COLLATE NOCASE").fetchall()
+        return [_live2d_row(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_live2d_model(model_id: str) -> Optional[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return _live2d_row(conn.execute("SELECT * FROM live2d_models WHERE model_id=?", (str(model_id),)).fetchone())
+    finally:
+        conn.close()
+
+
+def remove_live2d_model(model_id: str) -> bool:
+    with _write_connection() as conn:
+        result = conn.execute("DELETE FROM live2d_models WHERE model_id=?", (str(model_id),))
+        conn.execute("UPDATE live2d_preferences SET active_model_id=NULL, updated_at=? WHERE active_model_id=?", (_utc_now(), str(model_id)))
+        return result.rowcount > 0
+
+
+def set_live2d_preference(profile_id: Any, *, active_model_id: Optional[str] = None,
+                          companion_enabled: Optional[bool] = None) -> dict[str, Any]:
+    profile_pk, now = _profile_pk(profile_id), _utc_now()
+    with _write_connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO live2d_preferences(profile_id,updated_at) VALUES(?,?)", (profile_pk, now))
+        changes, values = [], []
+        if active_model_id is not None:
+            changes.append("active_model_id=?")
+            values.append(str(active_model_id) if active_model_id else None)
+        if companion_enabled is not None:
+            changes.append("companion_enabled=?")
+            values.append(1 if companion_enabled else 0)
+        if changes:
+            values.extend([now, profile_pk])
+            conn.execute("UPDATE live2d_preferences SET " + ", ".join(changes) + ", updated_at=? WHERE profile_id=?", values)
+    return get_live2d_preference(profile_id)
+
+
+def get_live2d_preference(profile_id: Any = None) -> dict[str, Any]:
+    profile_pk = _profile_pk(profile_id)
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT active_model_id,companion_enabled,updated_at FROM live2d_preferences WHERE profile_id=?", (profile_pk,)).fetchone()
+        if not row:
+            return {"active_model_id": None, "companion_enabled": False}
+        return {"active_model_id": row["active_model_id"], "companion_enabled": bool(row["companion_enabled"]), "updated_at": row["updated_at"]}
+    finally:
+        conn.close()
 
 
 def try_import_legacy_sqlserver(profile_id: Any = None) -> dict[str, Any]:

@@ -1,0 +1,4 @@
+Bundled renderer dependencies
+- pixi.js 6.5.10 (MIT)
+- pixi-live2d-display 0.4.0 (MIT, see pixi-live2d-display-LICENSE)
+- Live2D Cubism Core runtime and the legacy Cubism 2 runtime are used only to render user-selected local models. No character model is bundled by Memo Superform.
