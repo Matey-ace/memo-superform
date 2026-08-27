@@ -32,7 +32,6 @@ import logging
 import os
 import sys
 import threading
-import time
 from ctypes import wintypes
 from typing import Callable, Optional
 

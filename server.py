@@ -15,7 +15,6 @@ import socketserver
 import socket
 import ssl
 import select
-import subprocess
 import urllib.request
 import urllib.error
 import json
@@ -26,7 +25,7 @@ import io
 import webbrowser
 import threading
 import traceback
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse
 
 import codex_auth
 from live2d_service import Live2DService
@@ -69,7 +68,7 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
 CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
 LIVE2D_SERVICE = Live2DService(DATA_DIR)
 
-from memo_proxy import MAIMEMO_BASE, TC_APIS_BASE, resolve_web_route
+from memo_proxy import MAIMEMO_BASE, resolve_web_route
 
 from memo_injection import (
     INTERCEPTOR_JS, MEMO_DARK_CSS, MEMO_DARK_JS, MEMO_STUDY_THEME,

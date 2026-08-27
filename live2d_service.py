@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
 import re
 import shutil
 import threading
@@ -20,7 +19,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -74,7 +73,7 @@ class Live2DService:
     # ---------------- catalog ----------------
     @staticmethod
     def _fetch_json(url: str, timeout: int = 20) -> Any:
-        request = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 MemoSuperform/0.72"})
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 MemoSuperform/0.73"})
         with urlopen(request, timeout=timeout) as response:  # nosec B310 -- fixed Bestdori hosts
             if response.status != 200:
                 raise Live2DError("目录请求失败: HTTP %s" % response.status)
@@ -177,7 +176,7 @@ class Live2DService:
     def _download_file(self, bundle: str, file_name: str, target: Path, job: DownloadJob, optional: bool = False) -> bool:
         bundle, file_name = self._safe_relative(bundle), self._safe_relative(file_name)
         url = "%s/%s_rip/%s" % (ASSETS_BASE, quote(bundle), quote(file_name))
-        request = Request(url, headers={"User-Agent": "MemoSuperform/0.72"})
+        request = Request(url, headers={"User-Agent": "MemoSuperform/0.73"})
         try:
             with urlopen(request, timeout=30) as response:  # nosec B310 -- fixed Bestdori path
                 if response.status != 200:

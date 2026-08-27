@@ -32,7 +32,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequence
 
 
 MAIMEMO_OPEN_API = "https://open.maimemo.com/open/api/v1/memo/study/query_study_records"

@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import traceback
-import urllib.error
 import threading
 from urllib.parse import parse_qs
 

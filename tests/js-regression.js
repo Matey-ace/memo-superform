@@ -44,6 +44,17 @@ assert.strictEqual(typeof companionNodes.companionModeBtn.handlers.click, 'funct
 for (const contract of ['rendererGeneration', 'fitLiveModel', 'scheduleRendererReload', "webglcontextlost", 'if (rendererLoading)']) {
   assert(companion.includes(contract), `missing fullscreen renderer contract ${contract}`);
 }
+for (const contract of ['TOUCH_REACTIONS', 'touchRegionFor', 'handleCharacterTouch', "addEventListener('pointerup'", 'companion-touch-feedback']) {
+  assert(companion.includes(contract) || studyCss.includes(contract), `missing touch interaction contract ${contract}`);
+}
+for (const contract of ['typeof AIAPI', 'typeof MaimemoAPI', 'typeof LayoutManager', 'typeof ChartManager']) {
+  assert(companion.includes(contract), `missing safe global reference contract ${contract}`);
+}
+for (const broken of ['window.AIAPI', 'window.MaimemoAPI', 'window.LayoutManager', 'window.ChartManager']) {
+  assert(!companion.includes(broken), `live2d-companion still uses broken global reference ${broken}`);
+}
+assert(!read('js/study-sync-ui.js').includes('window.LayoutManager'), 'study-sync-ui still uses broken window.LayoutManager');
+assert(!read('js/app.js').includes('window.StudySyncUI'), 'app still uses broken window.StudySyncUI');
 assert(index.includes('companionModeBtn'), 'missing companion learning entry');
 assert(read('live2d_service.py').includes('MAX_MODEL_BYTES'), 'missing model size limit');
 console.log('JS_CONTRACTS_PASS: scripts, 14 shortcuts, and public globals are preserved');

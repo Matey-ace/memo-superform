@@ -9,7 +9,7 @@ const Live2DModelManager = (function() {
 
     function headers(json) {
         const result = { 'X-Requested-With': 'XMLHttpRequest' };
-        const token = window.MaimemoAPI && MaimemoAPI.getToken ? MaimemoAPI.getToken() : '';
+        const token = (typeof MaimemoAPI !== 'undefined' && MaimemoAPI.getToken) ? MaimemoAPI.getToken() : '';
         if (token) result.Authorization = 'Bearer ' + token;
         if (json) result['Content-Type'] = 'application/json';
         return result;
@@ -186,17 +186,32 @@ const CompanionSession = (function() {
 
 const Live2DCompanion = (function() {
     let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false;
-    let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false;
+    let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
     const LOCAL_LINES = {
         started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
         'needs-help': ['没关系，先把容易混淆的地方记下来。', '卡住也正常，我们调整一下节奏。'], 'focus-time': ['已经专心学习一会儿了，喝口水再继续吧。'], finish: ['这一轮辛苦了，今天的积累很扎实。'], 'manual-empty': ['先进入背词学习页，我就能看到这一轮的进度。']
     };
+    const MOOD_LABELS = { idle: '待机', thinking: '思考', cheer: '开心', comfort: '安慰', shy: '害羞', firm: '生气', celebrate: '庆祝' };
+    const TOUCH_REACTIONS = {
+        head: { label: '摸头', mood: 'cheer', part: '头部', state: '被摸头后很开心、很有精神', lines: ['嘿嘿，摸头会让我更有精神！下一题也一起拿下吧。', '收到鼓励！这题我们稳稳地记住。'] },
+        hand: { label: '击掌', mood: 'celebrate', part: '手部', state: '被击掌后干劲十足', lines: ['击掌！保持这个节奏继续冲。', '配合得不错，下一题继续。'] },
+        body: { label: '害羞', mood: 'shy', part: '胸部和腹部', state: '被碰到后有点害羞', lines: ['呀……被碰到会有点害羞，先专心看下一个单词啦。', '别、别盯着看……我们把这一题背完再说。'] },
+        lower: { label: '住手！', mood: 'firm', part: '下体位置', state: '被碰到后有些不高兴、想让你专心背词', lines: ['喂！那里不能乱碰，专心背词！', '生气啦！先把这一题背完再闹。'] }
+    };
+    function setMoodLabel(mood) {
+        const state = document.getElementById('companionMood');
+        if (state) state.textContent = MOOD_LABELS[mood] || mood || '待机';
+    }
     function setMessage(text, mood) {
         const bubble = document.getElementById('companionBubble');
-        const state = document.getElementById('companionMood');
         if (bubble) bubble.textContent = text;
-        if (state) state.textContent = mood || '待机';
+        setMoodLabel(mood);
         playMood(mood || 'idle');
+    }
+    function setReply(text, mood) {
+        const bubble = document.getElementById('companionBubble');
+        if (bubble) bubble.textContent = text;
+        setMoodLabel(mood);
     }
     function randomLine(kind) { const lines = LOCAL_LINES[kind] || LOCAL_LINES.state; return lines[Math.floor(Math.random() * lines.length)]; }
     function updateSummary(summary) {
@@ -208,7 +223,7 @@ const Live2DCompanion = (function() {
     }
     async function askAI(kind, summary) {
         updateSummary(summary);
-        if (!window.AIAPI || !AIAPI.hasConfig()) { setMessage(randomLine(kind), kind === 'needs-help' ? '安慰' : '鼓励'); return; }
+        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) { setMessage(randomLine(kind), kind === 'needs-help' ? '安慰' : '鼓励'); return; }
         const button = document.getElementById('companionAskBtn');
         if (button) button.disabled = true;
         try {
@@ -323,14 +338,81 @@ const Live2DCompanion = (function() {
     }
     function playMood(mood) {
         if (!liveModel || !liveModel.motion) return;
-        const candidates = { idle: ['idle', 'nf', 'nnf'], thinking: ['thinking', 'serious'], cheer: ['smile', 'wink', 'kime'], comfort: ['sad', 'shame', 'cry'], celebrate: ['kandou', 'smile', 'gacha'] }[mood] || ['idle'];
+        const candidates = { idle: ['idle', 'nf', 'nnf'], thinking: ['thinking', 'serious'], cheer: ['smile', 'wink', 'kime'], comfort: ['sad', 'shame', 'cry'], shy: ['shame', 'sad', 'cry'], firm: ['angry', 'serious'], celebrate: ['kandou', 'smile', 'gacha'] }[mood] || ['idle'];
         candidates.some(function(name) { try { liveModel.motion(name); return true; } catch (e) { return false; } });
+    }
+    function randomTouchLine(region) {
+        const lines = (TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower).lines;
+        return lines[Math.floor(Math.random() * lines.length)];
+    }
+    async function askTouchAI(region) {
+        const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
+        // React immediately so the touch always lands, then ask the AI to enrich the reply.
+        setMessage(randomTouchLine(region), reaction.mood);
+        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) return;
+        if (Date.now() - lastTouchAIAt < 1800) return;
+        lastTouchAIAt = Date.now();
+        try {
+            const config = AIAPI.getConfig();
+            const summary = session && session.summary ? session.summary() : null;
+            const word = summary && summary.current_word ? summary.current_word : '';
+            const prompt = '你是在背词陪伴模式里可爱的 Live2D 角色。用户刚刚触摸了你的' + reaction.part + '，' + reaction.state
+                + '。' + (word ? ('当前正在背的单词是 \'' + word + '\'。') : '') + '请用活泼、真诚、不过分打扰学习的中文写一句不超过 36 字的即时回应，说出你此刻的心情。仅输出 JSON：{"text":"...","mood":"..."}，mood 只能是 idle|thinking|cheer|shy|firm|comfort|celebrate。';
+            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: '你是专注于陪伴学习的角色。只输出约定 JSON。' }, { role: 'user', content: prompt }], temperature: 0.8, response_format: { type: 'json_object' } } }) });
+            const data = await response.json().catch(function() { return {}; });
+            if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
+            const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
+            const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
+            setReply(String(parsed.text || randomTouchLine(region)).slice(0, 80), reaction.mood);
+        } catch (error) {
+            // Keep the local line already shown so the touch still lands with a reaction.
+        }
+    }
+    function showTouchFeedback(event, label) {
+        const host = document.getElementById('companionLive2DHost');
+        if (!host) return;
+        const rect = host.getBoundingClientRect();
+        const note = document.createElement('span');
+        note.className = 'companion-touch-feedback';
+        note.textContent = label;
+        note.style.left = Math.max(8, Math.min(rect.width - 62, event.clientX - rect.left - 24)) + 'px';
+        note.style.top = Math.max(8, Math.min(rect.height - 32, event.clientY - rect.top - 14)) + 'px';
+        host.appendChild(note);
+        setTimeout(function() { note.remove(); }, 560);
+    }
+    function touchRegionFor(event) {
+        const canvas = document.getElementById('companionLive2DCanvas');
+        if (!canvas || !liveModel || !pixiApp || !liveModel.width || !liveModel.height) return null;
+        const canvasRect = canvas.getBoundingClientRect();
+        if (!canvasRect.width || !canvasRect.height) return null;
+        const stageWidth = (pixiApp.renderer && pixiApp.renderer.screen ? pixiApp.renderer.screen.width : canvasRect.width);
+        const stageHeight = (pixiApp.renderer && pixiApp.renderer.screen ? pixiApp.renderer.screen.height : canvasRect.height);
+        const stageX = (event.clientX - canvasRect.left) * stageWidth / canvasRect.width;
+        const stageY = (event.clientY - canvasRect.top) * stageHeight / canvasRect.height;
+        const left = liveModel.x - liveModel.width / 2;
+        const top = liveModel.y - liveModel.height;
+        const x = (stageX - left) / liveModel.width;
+        const y = (stageY - top) / liveModel.height;
+        if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+        if (y < 0.26) return 'head';
+        if (y < 0.74 && (x < 0.24 || x > 0.76)) return 'hand';
+        if (y > 0.74) return 'lower';
+        return 'body';
+    }
+    function handleCharacterTouch(event) {
+        if (!open || !liveModel || Date.now() - lastTouchAt < 560) return;
+        const region = touchRegionFor(event);
+        if (!region) return;
+        lastTouchAt = Date.now();
+        const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
+        showTouchFeedback(event, reaction.label);
+        askTouchAI(region);
     }
     async function enter() {
         if (open) return;
         open = true;
-        savedLayout = window.LayoutManager ? LayoutManager.getCurrentLayout() : 'single';
-        if (window.ChartManager) ChartManager.disposeAll();
+        savedLayout = (typeof LayoutManager !== 'undefined' && LayoutManager) ? LayoutManager.getCurrentLayout() : 'single';
+        if (typeof ChartManager !== 'undefined' && ChartManager) ChartManager.disposeAll();
         document.getElementById('dashboard').hidden = true;
         const root = document.getElementById('companionStudy'); root.hidden = false; document.body.classList.add('companion-mode');
         document.getElementById('companionBirthdayCard').hidden = true;
@@ -352,8 +434,8 @@ const Live2DCompanion = (function() {
         document.getElementById('dashboard').hidden = false;
         document.body.classList.remove('companion-mode');
         open = false;
-        if (window.LayoutManager) LayoutManager.switchLayout(savedLayout);
-        if (window.ChartManager) ChartManager.renderAll();
+        if (typeof LayoutManager !== 'undefined' && LayoutManager) LayoutManager.switchLayout(savedLayout);
+        if (typeof ChartManager !== 'undefined' && ChartManager) ChartManager.renderAll();
     }
     function isAnonBirthday() {
         const model = Live2DModelManager.current(); const now = new Date();
@@ -382,6 +464,7 @@ const Live2DCompanion = (function() {
         document.getElementById('closeCompanionBirthdayCard').addEventListener('click', function() { document.getElementById('companionBirthdayCard').hidden = true; });
         window.addEventListener('resize', function() { if (open) scheduleRendererReload(180); });
         const companionCanvas = document.getElementById('companionLive2DCanvas');
+        if (companionCanvas) companionCanvas.addEventListener('pointerup', handleCharacterTouch);
         if (companionCanvas) companionCanvas.addEventListener('webglcontextlost', function(event) {
             event.preventDefault();
             document.getElementById('companionGifFallback').hidden = false;

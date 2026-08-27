@@ -300,7 +300,7 @@ const App = (function() {
     
     function openSettings() {
         document.getElementById('settingsPanel').classList.add('show');
-        if (window.StudySyncUI) StudySyncUI.refreshStatus();
+        if (typeof StudySyncUI !== 'undefined' && StudySyncUI) StudySyncUI.refreshStatus();
     }
     function closeSettings() { document.getElementById('settingsPanel').classList.remove('show'); }
     

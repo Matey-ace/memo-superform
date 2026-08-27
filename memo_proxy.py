@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Declarative route resolution for the Maimemo reverse proxy."""
 from dataclasses import dataclass
-from typing import Optional
 
 MAIMEMO_BASE = "https://open.maimemo.com/open"
 TC_APIS_BASE = "https://tc-apis.maimemo.com"

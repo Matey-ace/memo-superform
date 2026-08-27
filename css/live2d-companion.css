@@ -14,7 +14,9 @@
 .companion-aside-head h2 { font-size: 15px; margin: 0; }
 .companion-exit { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 13px; }
 .companion-live2d-host { min-height: 260px; flex: 1 1 auto; position: relative; overflow: hidden; background: radial-gradient(circle at 50% 20%, rgba(24,119,255,.12), transparent 52%), linear-gradient(180deg, rgba(24,119,255,.045), transparent); }
-.companion-live2d-host canvas { width: 100%; height: 100%; display: block; }
+.companion-live2d-host canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
+.companion-touch-feedback { position: absolute; z-index: 4; pointer-events: none; color: #fff; background: rgba(82,119,155,.82); border-radius: 999px; padding: 4px 8px; font-size: 12px; box-shadow: 0 3px 10px rgba(45,72,104,.18); animation: companion-touch-pop .56s ease-out both; }
+@keyframes companion-touch-pop { from { opacity: 0; transform: translateY(8px) scale(.88); } 30% { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-12px) scale(1.03); } }
 .companion-gif-fallback { position: absolute; inset: 0; display: grid; place-items: center; }
 .companion-gif-fallback img { width: min(72%, 250px); aspect-ratio: 1; object-fit: cover; border-radius: 26px; box-shadow: var(--shadow-md); }
 .companion-model-name { position: absolute; top: 10px; left: 12px; font-size: 12px; color: var(--text-secondary); background: color-mix(in srgb, var(--card-bg) 86%, transparent); padding: 4px 7px; border-radius: 999px; z-index: 2; }
@@ -52,6 +54,7 @@
 .notebook-mode .companion-study-main, .notebook-mode .companion-study-aside { border: 1px solid #eadbc9; box-shadow: 0 6px 20px rgba(137,105,81,.11); }
 .notebook-mode .companion-aside-head { border-bottom-color: #eadbc9; }
 .notebook-mode .companion-live2d-host { background: radial-gradient(circle at 50% 18%, rgba(159,208,232,.30), transparent 55%), linear-gradient(180deg,#fff9ef, #fffdf9); }
+.notebook-mode .companion-touch-feedback { background: rgba(209,126,151,.82); }
 .notebook-mode .companion-bubble { border: 1px dashed #e6c5ba; background: #fffdf7; font-family: var(--serif, serif); }
 .notebook-mode .companion-birthday-badge { background: #fff0f2; color: #c86678; }
 @media (max-width: 960px), (max-height: 650px) {

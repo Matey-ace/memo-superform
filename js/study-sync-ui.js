@@ -254,7 +254,7 @@ const StudySyncUI = (function() {
     // 挂载时写入 data-study-screen-active，设置页和全屏图表也不算空闲状态。
     function dashboardIsIdleForWeeklyCheck() {
         if (document.visibilityState && document.visibilityState !== 'visible') return false;
-        if (window.LayoutManager && LayoutManager.isDragging && LayoutManager.isDragging()) return false;
+        if (typeof LayoutManager !== 'undefined' && LayoutManager.isDragging && LayoutManager.isDragging()) return false;
         if (document.querySelector('#settingsPanel.show, .fullscreen-modal.show')) return false;
         return !document.querySelector('.study-web-container[data-study-screen-active="true"]');
     }
