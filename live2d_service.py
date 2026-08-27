@@ -16,6 +16,7 @@ import re
 import shutil
 import threading
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,7 +74,7 @@ class Live2DService:
     # ---------------- catalog ----------------
     @staticmethod
     def _fetch_json(url: str, timeout: int = 20) -> Any:
-        request = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 MemoSuperform/0.73"})
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 MemoSuperform/0.74"})
         with urlopen(request, timeout=timeout) as response:  # nosec B310 -- fixed Bestdori hosts
             if response.status != 200:
                 raise Live2DError("目录请求失败: HTTP %s" % response.status)
@@ -98,8 +99,35 @@ class Live2DService:
             names = item.get("characterName") or item.get("character_name") or []
             if isinstance(names, str): names = [names]
             values = [str(value) for value in names if value]
+            for field_name in ("firstName", "lastName", "nickname"):
+                candidates = item.get(field_name) or []
+                if isinstance(candidates, str): candidates = [candidates]
+                values.extend(str(value) for value in candidates if value)
             result[str(key).zfill(3)] = values or [str(key)]
         return result
+
+    @staticmethod
+    def _search_normalize(value: Any) -> str:
+        text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+        return re.sub(r"\s+", "", text)
+
+    @classmethod
+    def _matches_catalog_query(cls, item: dict[str, Any], query: str) -> bool:
+        values = [item["display_name"], item["catalog_name"], str(item.get("character_id") or "")]
+        values.extend(item.get("aliases") or [])
+        normalized_query = cls._search_normalize(query)
+        normalized_values = [cls._search_normalize(value) for value in values]
+        normalized_values.extend(
+            cls._search_normalize(part)
+            for value in values
+            for part in re.split(r"[\s·_\-]+", str(value))
+            if part
+        )
+        if normalized_query in normalized_values:
+            return True
+        if any(ord(char) > 127 for char in normalized_query):
+            return any(normalized_query in value for value in normalized_values)
+        return any(normalized_query in value for value in normalized_values)
 
     def _fetch_catalog(self) -> dict[str, Any]:
         assets, characters = self._fetch_json(ASSETS_INDEX), self._fetch_json(CHARACTERS_INDEX)
@@ -137,7 +165,7 @@ class Live2DService:
         text = str(query or "").strip().lower()
         rows = payload.get("models") or []
         if text:
-            rows = [item for item in rows if text in (item["display_name"] + " " + item["catalog_name"] + " " + " ".join(item.get("aliases") or [])).lower()]
+            rows = [item for item in rows if self._matches_catalog_query(item, text)]
         return {"models": rows, "count": len(rows), "cached_at": payload.get("fetched_at")}
 
     # ---------------- model descriptors ----------------
@@ -176,7 +204,7 @@ class Live2DService:
     def _download_file(self, bundle: str, file_name: str, target: Path, job: DownloadJob, optional: bool = False) -> bool:
         bundle, file_name = self._safe_relative(bundle), self._safe_relative(file_name)
         url = "%s/%s_rip/%s" % (ASSETS_BASE, quote(bundle), quote(file_name))
-        request = Request(url, headers={"User-Agent": "MemoSuperform/0.73"})
+        request = Request(url, headers={"User-Agent": "MemoSuperform/0.74"})
         try:
             with urlopen(request, timeout=30) as response:  # nosec B310 -- fixed Bestdori path
                 if response.status != 200:

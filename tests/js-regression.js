@@ -53,6 +53,16 @@ for (const contract of ['typeof AIAPI', 'typeof MaimemoAPI', 'typeof LayoutManag
 for (const broken of ['window.AIAPI', 'window.MaimemoAPI', 'window.LayoutManager', 'window.ChartManager']) {
   assert(!companion.includes(broken), `live2d-companion still uses broken global reference ${broken}`);
 }
+for (const contract of ['DEFAULT_PERSONAS', 'getActivePersona', 'memo_live2d_personas']) {
+  assert(new RegExp(`(?:const|function)\\s+${contract}\\s*[=(]`).test(companion) || companion.includes(contract), `missing persona contract ${contract}`);
+}
+assert(/function personaSystemPrompt\(persona\)[\s\S]*persona\.name[\s\S]*persona\.background/.test(companion), 'persona prompt does not include name and background');
+for (const fn of ['askAI', 'askTouchAI']) {
+  const start = companion.indexOf(`async function ${fn}`);
+  const end = companion.indexOf('\n    function ', start + 1);
+  const body = companion.slice(start, end > start ? end : undefined);
+  assert(body.includes('getActivePersona()') && body.includes('personaSystemPrompt(persona)'), `${fn} does not inject the active persona`);
+}
 assert(!read('js/study-sync-ui.js').includes('window.LayoutManager'), 'study-sync-ui still uses broken window.LayoutManager');
 assert(!read('js/app.js').includes('window.StudySyncUI'), 'app still uses broken window.StudySyncUI');
 assert(index.includes('companionModeBtn'), 'missing companion learning entry');

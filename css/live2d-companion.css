@@ -48,6 +48,12 @@
 .live2d-installed-row .danger-btn { padding: 5px 7px; font-size: 11px; }
 .live2d-download-status, #live2dModelStatus { font-size: 12px; color: var(--text-secondary); }
 #live2dModelStatus.error { color: #d4380d; }
+.live2d-persona-settings { display: grid; gap: 10px; }
+.live2d-persona-settings .setting-item { margin-bottom: 0; }
+.live2d-persona-settings textarea, .live2d-persona-settings input { width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); color: var(--text-primary); font: inherit; font-size: 12px; line-height: 1.5; resize: vertical; }
+.live2d-persona-actions { display: flex; gap: 7px; }
+.live2d-persona-actions .danger-btn { padding: 5px 9px; font-size: 11px; }
+.notebook-mode .live2d-persona-settings textarea, .notebook-mode .live2d-persona-settings input { border-color: #eadbc9; background: #fffdf7; color: #6b5642; font-family: var(--serif, serif); }
 .notebook-mode .companion-mode-btn { border-color: #ecd8ca; background: #fffdf7; color: #8b7355; font-family: var(--serif, serif); }
 .notebook-mode .companion-mode-btn:hover { color: #d4576b; border-color: #e9b9c2; }
 .notebook-mode .companion-study { background: #fffdf8; background-image: linear-gradient(rgba(164,198,229,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(164,198,229,.1) 1px, transparent 1px); background-size: 22px 22px; }

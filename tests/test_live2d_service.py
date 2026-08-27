@@ -69,6 +69,19 @@ class Live2DServiceTests(unittest.TestCase):
         self.assertEqual(self.service.download_status(job.job_id)["status"], "completed")
         self.assertEqual(db.get_live2d_model(job.model_id)["entry_file"], "memo.model.json")
 
+    def test_catalog_search_matches_english_name_and_character_id(self):
+        def fetch(url):
+            if url.endswith("/characters/all.5.json"):
+                return {
+                    "36": {"characterName": ["高松 灯", "Tomori Takamatsu"]},
+                    "37": {"characterName": ["千早 爱音", "Anon Chihaya"]},
+                }
+            return {"live2d": {"chara": {"036_general": 1, "036_casual": 1, "037_general": 1, "037_casual": 1}}}
+        self.service._fetch_json = fetch
+        self.assertEqual([m["catalog_name"] for m in self.service.catalog("Anon")["models"]], ["037_casual"])
+        self.assertEqual([m["catalog_name"] for m in self.service.catalog("Tomori")["models"]], ["036_casual"])
+        self.assertEqual(len(self.service.catalog("037")["models"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

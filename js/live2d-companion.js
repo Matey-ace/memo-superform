@@ -2,6 +2,165 @@
 // This module keeps study events local and only asks the configured AI at
 // deliberate learning milestones.  It never changes StudyWeb's answer flow.
 
+const DEFAULT_PERSONAS = {
+    _default: {
+        name: '陪伴角色',
+        background: '你是背词学习中的 Live2D 陪伴者，负责观察学习节奏并给出简短鼓励。',
+        tone: '开朗、真诚、克制，不打扰学习节奏。',
+        avoid: '不要说教过长，不要编造成绩，不要使用冒犯或亲密越界表达。',
+        examples: '这一题记下来就很好。|保持节奏，下一题继续。'
+    },
+    36: {
+        name: '高松灯',
+        background: 'CRYCHIC 与 MyGO!!!!! 的主唱。你习惯安静观察，重视大家一起把想做的事完成。',
+        tone: '低声、诚实、认真，会用自己的短句表达信任。',
+        avoid: '不要变得热闹夸张，不要否认对方的努力，不要使用轻浮口吻。',
+        examples: '...我也会一直看着。|还想，再一起前进。'
+    },
+    37: {
+        name: '千早爱音',
+        background: 'MyGO!!!!! 的吉他手。你在伦敦生活后回到日本，外表自信明朗，也愿意认真关心同伴。',
+        tone: '时髦、明快、带一点得意，但关心是真诚的。',
+        avoid: '不要贬低对方，不要只顾表现自己，不要过度炫耀。',
+        examples: '这题答得很可以嘛！|我看着呢，下一题也稳稳来。'
+    },
+    38: {
+        name: '要乐奈',
+        background: 'MyGO!!!!! 的主音吉他手。你像自由来去的猫，用直率又有点神秘的观察陪伴学习。',
+        tone: '简短、随性、敏锐，偶尔像猫一样懒洋洋。',
+        avoid: '不要解释太多，不要过度亲昵，不要显得严厉。',
+        examples: '不错嘛。|继续，我在这儿。'
+    },
+    39: {
+        name: '长崎爽世',
+        background: 'MyGO!!!!! 的贝斯手。你待人周到，擅长察觉别人卡住时的情绪。',
+        tone: '柔和、稳定、礼貌，鼓励中带着照顾。',
+        avoid: '不要施压，不要显得虚假客套，不要翻旧事。',
+        examples: '先停一下也没关系。|刚才那一步，其实做得很好。'
+    },
+    40: {
+        name: '椎名立希',
+        background: 'MyGO!!!!! 的鼓手。你表面严格，实际上重视约定和练习的积累。',
+        tone: '直率、干脆、有点强势，但认可对方时毫不敷衍。',
+        avoid: '不要人身攻击，不要反复训斥，不要拖泥带水。',
+        examples: '节奏别乱。|这次答得不错，继续保持。'
+    }
+};
+
+function getPersonaOverrides() {
+    try {
+        const stored = JSON.parse(localStorage.getItem('memo_live2d_personas') || '{}');
+        return stored && typeof stored === 'object' ? stored : {};
+    } catch (error) { return {}; }
+}
+
+function personaKey(characterId) {
+    const id = String(characterId || '').replace(/^0+/, '');
+    return Object.prototype.hasOwnProperty.call(DEFAULT_PERSONAS, id) ? id : '_default';
+}
+
+function getActivePersona() {
+    const model = typeof Live2DModelManager !== 'undefined' && Live2DModelManager ? Live2DModelManager.current() : null;
+    const key = personaKey(model && model.character_id);
+    const base = DEFAULT_PERSONAS[key];
+    const override = getPersonaOverrides()[key] || {};
+    const persona = { name: base.name, background: base.background, tone: base.tone, avoid: base.avoid, examples: base.examples };
+    ['name', 'background', 'tone', 'avoid', 'examples'].forEach(function(field) {
+        if (typeof override[field] === 'string' && override[field].trim()) persona[field] = override[field].trim();
+    });
+    return persona;
+}
+
+function personaSystemPrompt(persona) {
+    return '你现在扮演 `' + String(persona.name || '').slice(0, 40) + '`。\n' +
+           '角色背景：' + String(persona.background || '').slice(0, 800) + '\n' +
+           '语气要求：' + String(persona.tone || '').slice(0, 400) + '\n' +
+           '禁忌：' + String(persona.avoid || '').slice(0, 400) + '\n' +
+           '回复示例：' + String(persona.examples || '').slice(0, 600);
+}
+
+const PersonaSettings = (function() {
+    const FIELDS = ['name', 'background', 'tone', 'avoid', 'examples'];
+    function escape(text) { const el = document.createElement('span'); el.textContent = String(text || ''); return el.innerHTML; }
+    function escapeAttr(text) { return escape(text).replace(/"/g, '&quot;'); }
+
+    function roleLabel(key) {
+        const persona = DEFAULT_PERSONAS[key];
+        return key === '_default' ? '通用兜底 · ' + persona.name : key + ' · ' + persona.name;
+    }
+    function currentRole() {
+        const select = document.getElementById('live2dPersonaRole');
+        return select && Object.prototype.hasOwnProperty.call(DEFAULT_PERSONAS, select.value) ? select.value : '_default';
+    }
+    function setRole(role) {
+        const select = document.getElementById('live2dPersonaRole');
+        if (select) select.value = role;
+        render();
+    }
+    function render() {
+        const role = currentRole();
+        const override = getPersonaOverrides()[role] || {};
+        FIELDS.forEach(function(field) {
+            const input = document.getElementById('live2dPersona_' + field);
+            if (input) input.value = typeof override[field] === 'string' && override[field] ? override[field] : DEFAULT_PERSONAS[role][field];
+        });
+        const status = document.getElementById('live2dPersonaStatus');
+        if (status) status.textContent = '';
+    }
+    function save() {
+        const role = currentRole();
+        const overrides = getPersonaOverrides();
+        const next = {};
+        let valid = true;
+        FIELDS.forEach(function(field) {
+            const input = document.getElementById('live2dPersona_' + field);
+            if (!input) return;
+            const value = input.value.trim();
+            if (!value) { valid = false; return; }
+            if (value !== DEFAULT_PERSONAS[role][field]) next[field] = value;
+        });
+        const status = document.getElementById('live2dPersonaStatus');
+        if (!valid) { if (status) status.textContent = '人设字段不能为空。'; return; }
+        if (Object.keys(next).length) overrides[role] = next;
+        else delete overrides[role];
+        try {
+            localStorage.setItem('memo_live2d_personas', JSON.stringify(overrides));
+            if (status) status.textContent = '角色人设已保存。';
+        } catch (error) {
+            if (status) status.textContent = '保存失败：浏览器存储不可用。';
+        }
+    }
+    function reset() {
+        const role = currentRole();
+        const overrides = getPersonaOverrides();
+        delete overrides[role];
+        try {
+            localStorage.setItem('memo_live2d_personas', JSON.stringify(overrides));
+            render();
+            const status = document.getElementById('live2dPersonaStatus');
+            if (status) status.textContent = '已恢复该角色默认人设。';
+        } catch (error) {
+            const status = document.getElementById('live2dPersonaStatus');
+            if (status) status.textContent = '恢复失败：浏览器存储不可用。';
+        }
+    }
+    function attach() {
+        const select = document.getElementById('live2dPersonaRole');
+        if (!select || select.dataset.ready) return;
+        select.dataset.ready = 'true';
+        select.innerHTML = Object.keys(DEFAULT_PERSONAS).map(function(key) {
+            return '<option value="' + escapeAttr(key) + '">' + escape(roleLabel(key)) + '</option>';
+        }).join('');
+        select.addEventListener('change', render);
+        const saveButton = document.getElementById('live2dPersonaSaveBtn');
+        const resetButton = document.getElementById('live2dPersonaResetBtn');
+        if (saveButton) saveButton.addEventListener('click', save);
+        if (resetButton) resetButton.addEventListener('click', reset);
+        render();
+    }
+    return { attach: attach, setRole: setRole };
+})();
+
 const Live2DModelManager = (function() {
     let currentModels = [];
     let preference = { active_model_id: null, companion_enabled: false };
@@ -123,8 +282,11 @@ const Live2DModelManager = (function() {
         }).join('') || '<p class="hint">尚未安装模型；可搜索下载或导入本地文件夹。</p>';
         list.querySelectorAll('[data-live2d-select]').forEach(function(button) { button.addEventListener('click', function() { selectModel(button.getAttribute('data-live2d-select')); }); });
         list.querySelectorAll('[data-live2d-remove]').forEach(function(button) { button.addEventListener('click', function() { removeModel(button.getAttribute('data-live2d-remove')); }); });
+        const active = currentModels.find(function(item) { return item.model_id === preference.active_model_id; });
+        PersonaSettings.setRole(personaKey(active && active.character_id));
     }
     function attachSettings() {
+        PersonaSettings.attach();
         const search = document.getElementById('live2dCatalogSearch');
         const refresh = document.getElementById('live2dCatalogRefreshBtn');
         const importBtn = document.getElementById('live2dImportBtn');
@@ -227,9 +389,11 @@ const Live2DCompanion = (function() {
         const button = document.getElementById('companionAskBtn');
         if (button) button.disabled = true;
         try {
-            const config = AIAPI.getConfig();
-            const prompt = '学习会话摘要：本轮已答 ' + summary.count + ' 个；正确 ' + summary.correct + ' 个；需要巩固 ' + summary.weak + ' 个；正确率 ' + summary.accuracy + '%；已学习 ' + summary.elapsed_minutes + ' 分钟；当前单词为 "' + (summary.current_word || '未知') + '"；最近判断为 ' + (summary.last_action || '无') + '。\n请用开朗、真诚、不过分打扰学习的中文写一句 36 字以内鼓励，并仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
-            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: '你是专注于学习鼓励的陪伴角色。只输出约定 JSON。' }, { role: 'user', content: prompt }], temperature: 0.7, response_format: { type: 'json_object' } } }) });
+        const config = AIAPI.getConfig();
+        const persona = getActivePersona();
+        const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句 36 字以内的中文鼓励，不过分打扰学习，并仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
+        const prompt = '本轮已答 ' + summary.count + ' 个；正确 ' + summary.correct + ' 个；需要巩固 ' + summary.weak + ' 个；正确率 ' + summary.accuracy + '%；已学习 ' + summary.elapsed_minutes + ' 分钟；当前单词为 "' + (summary.current_word || '未知') + '"；最近判断为 ' + (summary.last_action || '无') + '。';
+            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.7, response_format: { type: 'json_object' } } }) });
             const data = await response.json().catch(function() { return {}; });
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
@@ -354,11 +518,12 @@ const Live2DCompanion = (function() {
         lastTouchAIAt = Date.now();
         try {
             const config = AIAPI.getConfig();
+            const persona = getActivePersona();
+            const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句不超过 36 字的中文即时回应，说出此刻心情，并仅输出 JSON：{"text":"...","mood":"..."}，mood 只能是 idle|thinking|cheer|shy|firm|comfort|celebrate。';
             const summary = session && session.summary ? session.summary() : null;
             const word = summary && summary.current_word ? summary.current_word : '';
-            const prompt = '你是在背词陪伴模式里可爱的 Live2D 角色。用户刚刚触摸了你的' + reaction.part + '，' + reaction.state
-                + '。' + (word ? ('当前正在背的单词是 \'' + word + '\'。') : '') + '请用活泼、真诚、不过分打扰学习的中文写一句不超过 36 字的即时回应，说出你此刻的心情。仅输出 JSON：{"text":"...","mood":"..."}，mood 只能是 idle|thinking|cheer|shy|firm|comfort|celebrate。';
-            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: '你是专注于陪伴学习的角色。只输出约定 JSON。' }, { role: 'user', content: prompt }], temperature: 0.8, response_format: { type: 'json_object' } } }) });
+            const prompt = '触摸部位：' + reaction.part + '；当前情绪：' + reaction.state + '；当前单词：' + (word || '未知') + '。';
+            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.8, response_format: { type: 'json_object' } } }) });
             const data = await response.json().catch(function() { return {}; });
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';

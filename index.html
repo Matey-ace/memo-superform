@@ -362,6 +362,17 @@
                     <div class="setting-item"><label>已安装模型</label><div id="live2dInstalledModels" class="live2d-installed-models"><p class="hint">正在读取模型衣柜...</p></div></div>
                     <p id="live2dModelStatus" class="hint"></p>
                 </div>
+                <div class="setting-group live2d-settings live2d-persona-settings">
+                    <h3>角色人设</h3>
+                    <div class="setting-item"><label>选择角色</label><select id="live2dPersonaRole"><option value="_default">通用兜底</option></select></div>
+                    <div class="setting-item"><label>名字</label><input id="live2dPersona_name" type="text" maxlength="40"></div>
+                    <div class="setting-item"><label>背景</label><textarea id="live2dPersona_background" rows="3" maxlength="800"></textarea></div>
+                    <div class="setting-item"><label>语气</label><textarea id="live2dPersona_tone" rows="2" maxlength="400"></textarea></div>
+                    <div class="setting-item"><label>禁忌</label><textarea id="live2dPersona_avoid" rows="2" maxlength="400"></textarea></div>
+                    <div class="setting-item"><label>示例（用 | 分隔）</label><textarea id="live2dPersona_examples" rows="3" maxlength="600"></textarea></div>
+                    <div class="live2d-persona-actions"><button id="live2dPersonaSaveBtn" type="button" class="test-btn">保存人设</button><button id="live2dPersonaResetBtn" type="button" class="danger-btn">恢复默认</button></div>
+                    <p id="live2dPersonaStatus" class="hint"></p>
+                </div>
             </div>
             <div class="settings-footer">
                 <button id="saveSettingsBtn" class="save-btn">保存设置</button>
