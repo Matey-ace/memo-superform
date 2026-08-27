@@ -335,10 +335,24 @@
                         <span id="ttsStatusText" class="hint">检测中...</span>
                     </div>
                     <div class="setting-item">
-                        <label>音色</label>
+                        <label>当前角色</label>
                         <select id="ttsVoiceSelect">
-                            <option value="sakiko">祥子</option>
+                            <option value="">正在读取角色...</option>
                         </select>
+                    </div>
+                    <div class="setting-item tts-role-manager">
+                        <label>角色资料包</label>
+                        <div class="tts-role-toolbar"><button id="ttsRoleNewBtn" type="button" class="test-btn">添加角色</button><button id="ttsRoleEditBtn" type="button" class="test-btn">编辑当前角色</button><button id="ttsRoleActivateBtn" type="button" class="test-btn">启用当前角色</button><button id="ttsRoleDeleteBtn" type="button" class="danger-btn">删除当前角色</button></div>
+                        <div id="ttsRoleEditor" class="tts-role-editor" hidden>
+                            <input id="ttsRoleId" type="hidden">
+                            <label>角色名称<input id="ttsRoleName" type="text" maxlength="64" placeholder="例如：千早爱音"></label>
+                            <label>绑定 Live2D<select id="ttsRoleLive2D"><option value="">请选择已安装模型</option></select></label>
+                            <label>参考语言<select id="ttsRoleLanguage"><option value="">请选择语言</option><option value="中文">中文</option><option value="日文">日文</option><option value="英文">英文</option><option value="粤语">粤语</option><option value="韩文">韩文</option><option value="中英混合">中英混合</option><option value="日英混合">日英混合</option><option value="多语种混合">多语种混合</option></select></label>
+                            <label>参考音频对应文本<textarea id="ttsRoleReferenceText" rows="3" maxlength="1000" placeholder="必须逐字对应参考音频内容"></textarea></label>
+                            <div class="tts-role-files"><label>GPT 模型 (.ckpt)<input id="ttsRoleGptFile" type="file" accept=".ckpt"></label><label>SoVITS 模型 (.pth)<input id="ttsRoleSovitsFile" type="file" accept=".pth"></label><label>参考音频<input id="ttsRoleAudioFile" type="file" accept=".wav,.mp3,.flac,.ogg"></label></div>
+                            <div class="tts-role-toolbar"><button id="ttsRoleSaveBtn" type="button" class="test-btn">保存角色资料</button><button id="ttsRoleCancelBtn" type="button" class="test-btn">取消</button></div>
+                        </div>
+                        <p id="ttsRoleStatus" class="hint"></p>
                     </div>
                     <div class="setting-item">
                         <label>语速：<span id="ttsSpeedValue">1.0</span></label>

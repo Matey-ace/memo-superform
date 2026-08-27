@@ -57,6 +57,10 @@ class LocalApiMixin:
             import tts
             return self._send_json(200, tts.get_status(TTS_PACK_DIR, DATA_DIR))
 
+        if path == "/api/tts/roles":
+            import tts
+            return self._send_json(200, tts.list_roles(TTS_PACK_DIR))
+
         if path == "/api/codex/status":
             return self._send_json(200, CODEX_OAUTH.status())
 
@@ -187,6 +191,8 @@ class LocalApiMixin:
                 return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
             if path == "/api/tts/import-model":
                 return self._import_tts_model(parsed)
+            if path.startswith("/api/tts/roles/") and path.endswith("/upload"):
+                return self._upload_tts_role_file(path, parsed)
             try:
                 body = self._read_json_body()
             except (json.JSONDecodeError, ValueError):
@@ -221,6 +227,31 @@ class LocalApiMixin:
                 return self._send_json(200, {"ok": True})
 
             # 语音资源包接口（与数据库无关）
+            if path == "/api/tts/roles":
+                import tts
+                live2d_id = str(body.get("live2d_model_id") or "")
+                live2d = globals().get("LIVE2D_SERVICE")
+                if live2d_id:
+                    model = globals().get("db") and globals()["db"].get_live2d_model(live2d_id)
+                    if not model or not model.get("complete"):
+                        return self._send_json(400, {"error": "所选 Live2D 模型不可用"})
+                try:
+                    return self._send_json(200, {"ok": True, "role": tts.save_role(TTS_PACK_DIR, body)})
+                except tts.TTSException as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path.startswith("/api/tts/roles/") and path.endswith("/activate"):
+                import tts
+                role_id = path.split("/")[-2]
+                try:
+                    role = tts.activate_role(TTS_PACK_DIR, role_id)
+                    live2d = globals().get("LIVE2D_SERVICE")
+                    if role.get("live2d_model_id") and live2d:
+                        live2d.set_active(self._profile_id(required=False), role["live2d_model_id"], True)
+                    return self._send_json(200, {"ok": True, "role": role})
+                except tts.TTSException as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
             if path == "/api/tts/speak":
                 import tts
                 try:
@@ -395,11 +426,35 @@ class LocalApiMixin:
             traceback.print_exc()
             return self._send_json(500, {"error": str(exc)})
 
+    def _upload_tts_role_file(self, path, parsed):
+        """Write an uploaded role asset to its canonical, manifest-backed path."""
+        import tts
+        parts = path.strip("/").split("/")
+        if len(parts) != 5 or parts[:3] != ["api", "tts", "roles"] or parts[4] != "upload":
+            return self._send_json(404, {"error": "未知接口"})
+        query = parse_qs(parsed.query)
+        kind = (query.get("kind") or [""])[0]
+        name = (query.get("name") or [""])[0]
+        length = self._safe_content_length()
+        data = self.rfile.read(length) if length > 0 else b""
+        try:
+            role = tts.upload_role_file(TTS_PACK_DIR, parts[3], kind, name, data)
+            return self._send_json(200, {"ok": True, "role": role})
+        except tts.TTSException as exc:
+            return self._send_json(400, {"error": str(exc)})
+
     # ===================== /api/* DELETE =====================
     def _handle_api_delete(self, path, parsed):
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
         live2d = globals().get("LIVE2D_SERVICE")
+        if path.startswith("/api/tts/roles/"):
+            import tts
+            role_id = path.rsplit("/", 1)[-1]
+            try:
+                return self._send_json(200, {"ok": tts.delete_role(TTS_PACK_DIR, role_id)})
+            except tts.TTSException as exc:
+                return self._send_json(400, {"error": str(exc)})
         if path.startswith("/api/live2d/downloads/"):
             if not live2d:
                 return self._send_json(503, {"error": "Live2D 服务未就绪"})

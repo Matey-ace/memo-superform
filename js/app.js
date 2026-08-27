@@ -552,6 +552,114 @@ const App = (function() {
             localStorage.setItem('tts_parallel_infer', parallelInfer.checked ? 'true' : 'false');
         });
 
+        // ---- Explicit character role packages (TTS + reference + Live2D) ----
+        let roleList = [], activeRoleId = '';
+        const roleStatus = document.getElementById('ttsRoleStatus');
+        const roleEditor = document.getElementById('ttsRoleEditor');
+        const roleId = document.getElementById('ttsRoleId');
+        const roleName = document.getElementById('ttsRoleName');
+        const roleLive2D = document.getElementById('ttsRoleLive2D');
+        const roleLanguage = document.getElementById('ttsRoleLanguage');
+        const roleText = document.getElementById('ttsRoleReferenceText');
+        function roleHeaders(json) {
+            const out = { 'X-Requested-With': 'XMLHttpRequest' };
+            if (json) out['Content-Type'] = 'application/json';
+            const token = window.MaimemoAPI && MaimemoAPI.getToken ? MaimemoAPI.getToken() : '';
+            if (token) out.Authorization = 'Bearer ' + token;
+            return out;
+        }
+        function roleMessage(text, error) {
+            if (!roleStatus) return;
+            roleStatus.textContent = text || '';
+            roleStatus.className = error ? 'hint error' : 'hint';
+        }
+        async function loadRoleLive2DOptions(selected) {
+            if (!roleLive2D) return;
+            try {
+                const response = await fetch('/api/live2d/models', { headers: roleHeaders(false) });
+                const data = await response.json();
+                roleLive2D.innerHTML = '<option value="">请选择已安装模型</option>' + (data.models || []).map(function(model) {
+                    return '<option value="' + String(model.model_id).replace(/"/g, '&quot;') + '">' + String(model.display_name || model.model_id).replace(/</g, '&lt;') + '</option>';
+                }).join('');
+                roleLive2D.value = selected || '';
+            } catch (error) { roleMessage('读取 Live2D 模型失败：' + error.message, true); }
+        }
+        function selectedRole() { return roleList.find(function(role) { return role.role_id === (voiceSelect && voiceSelect.value); }) || null; }
+        function renderRoles(data) {
+            roleList = data.roles || [];
+            activeRoleId = data.active_role_id || '';
+            if (!voiceSelect) return;
+            const selected = voiceSelect.value || localStorage.getItem('tts_role_selected') || activeRoleId;
+            voiceSelect.innerHTML = roleList.map(function(role) {
+                return '<option value="' + role.role_id + '">' + role.name + (role.complete ? '' : '（资料未配齐）') + '</option>';
+            }).join('') || '<option value="">尚未创建角色</option>';
+            voiceSelect.value = roleList.some(function(role) { return role.role_id === selected; }) ? selected : (activeRoleId || (roleList[0] && roleList[0].role_id) || '');
+            localStorage.setItem('tts_role_selected', voiceSelect.value);
+            localStorage.setItem('tts_active_role_id', activeRoleId);
+            const role = selectedRole();
+            roleMessage(role ? (role.complete ? (role.role_id === activeRoleId ? '当前已启用。' : '资料完整，尚未启用。') : '缺少：' + role.missing.join('、')) : '请添加角色。', !!(role && !role.complete));
+        }
+        async function loadRoles() {
+            const response = await fetch('/api/tts/roles');
+            const data = await response.json();
+            if (!response.ok || data.error) throw new Error(data.error || '读取角色失败');
+            renderRoles(data);
+            return data;
+        }
+        async function openRoleEditor(role) {
+            if (!roleEditor) return;
+            roleEditor.hidden = false;
+            if (roleId) roleId.value = role ? role.role_id : '';
+            if (roleName) roleName.value = role ? role.name : '';
+            if (roleLanguage) roleLanguage.value = role ? (role.reference_language || '') : '';
+            if (roleText) roleText.value = role ? (role.reference_text || '') : '';
+            await loadRoleLive2DOptions(role && role.live2d_model_id);
+        }
+        function newRoleId(name) {
+            const ascii = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            return ascii || ('role-' + Date.now());
+        }
+        async function uploadRoleAsset(id, input, kind) {
+            const file = input && input.files && input.files[0];
+            if (!file) return;
+            const response = await fetch('/api/tts/roles/' + encodeURIComponent(id) + '/upload?kind=' + kind + '&name=' + encodeURIComponent(file.name), {
+                method: 'POST', headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/octet-stream' }), body: await file.arrayBuffer()
+            });
+            const data = await response.json().catch(function() { return {}; });
+            if (!response.ok || data.error) throw new Error(data.error || ('上传失败：' + file.name));
+        }
+        async function saveRoleEditor() {
+            const id = (roleId && roleId.value) || newRoleId(roleName && roleName.value);
+            const body = { role_id: id, name: roleName && roleName.value, reference_language: roleLanguage && roleLanguage.value,
+                reference_text: roleText && roleText.value, live2d_model_id: roleLive2D && roleLive2D.value };
+            const response = await fetch('/api/tts/roles', { method: 'POST', headers: roleHeaders(true), body: JSON.stringify(body) });
+            const data = await response.json();
+            if (!response.ok || data.error) throw new Error(data.error || '保存角色失败');
+            await uploadRoleAsset(id, document.getElementById('ttsRoleGptFile'), 'ckpt');
+            await uploadRoleAsset(id, document.getElementById('ttsRoleSovitsFile'), 'pth');
+            await uploadRoleAsset(id, document.getElementById('ttsRoleAudioFile'), 'audio');
+            await loadRoles();
+            if (voiceSelect) voiceSelect.value = id;
+            if (roleEditor) roleEditor.hidden = true;
+            roleMessage('角色资料已保存。');
+        }
+        document.getElementById('ttsRoleNewBtn').addEventListener('click', function() { openRoleEditor(null); });
+        document.getElementById('ttsRoleEditBtn').addEventListener('click', function() { const role = selectedRole(); if (role) openRoleEditor(role); });
+        document.getElementById('ttsRoleCancelBtn').addEventListener('click', function() { if (roleEditor) roleEditor.hidden = true; });
+        document.getElementById('ttsRoleSaveBtn').addEventListener('click', function() { saveRoleEditor().catch(function(error) { roleMessage(error.message, true); }); });
+        document.getElementById('ttsRoleActivateBtn').addEventListener('click', function() {
+            const role = selectedRole(); if (!role) return;
+            fetch('/api/tts/roles/' + encodeURIComponent(role.role_id) + '/activate', { method: 'POST', headers: roleHeaders(true), body: '{}' }).then(function(response) { return response.json().then(function(data) { if (!response.ok || data.error) throw new Error(data.error || '启用失败'); return data; }); }).then(async function() {
+                await loadRoles(); await TTS.refresh(); renderStatus(); if (window.Live2DCompanion) Live2DCompanion.reloadModel(); roleMessage('已启用 ' + role.name + '。');
+            }).catch(function(error) { roleMessage(error.message, true); });
+        });
+        document.getElementById('ttsRoleDeleteBtn').addEventListener('click', function() {
+            const role = selectedRole(); if (!role || !confirm('删除角色“' + role.name + '”及其 TTS 资料？')) return;
+            fetch('/api/tts/roles/' + encodeURIComponent(role.role_id), { method: 'DELETE', headers: roleHeaders(false) }).then(function(response) { return response.json().then(function(data) { if (!response.ok || data.error) throw new Error(data.error || '删除失败'); return data; }); }).then(loadRoles).catch(function(error) { roleMessage(error.message, true); });
+        });
+        if (voiceSelect) voiceSelect.addEventListener('change', function() { localStorage.setItem('tts_role_selected', voiceSelect.value); renderRoles({ roles: roleList, active_role_id: activeRoleId }); });
+        loadRoles().catch(function(error) { roleMessage(error.message, true); });
+
         const modelDrop = document.getElementById('ttsModelDrop');
         const modelDropStatus = document.getElementById('ttsModelDropStatus');
         function ttsModelKind(name) {
@@ -567,16 +675,19 @@ const App = (function() {
         async function uploadTTSModel(file, voice) {
             const kind = ttsModelKind(file.name);
             if (!kind) { setModelDropStatus('不支持的模型文件：' + file.name); return; }
+            const role = selectedRole();
+            if (!role) { setModelDropStatus('请先创建并选择角色。'); return; }
             try {
                 const buf = await file.arrayBuffer();
-                const resp = await fetch('/api/tts/import-model?voice=' + encodeURIComponent(voice) + '&kind=' + kind + '&name=' + encodeURIComponent(file.name), {
+                const resp = await fetch('/api/tts/roles/' + encodeURIComponent(role.role_id) + '/upload?kind=' + kind + '&name=' + encodeURIComponent(file.name), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/octet-stream', 'X-Requested-With': 'XMLHttpRequest' },
                     body: buf
                 });
                 const data = await resp.json().catch(function() { return {}; });
                 if (!resp.ok || data.error) throw new Error(data.error || ('导入失败：' + resp.status));
-                setModelDropStatus('已导入 ' + file.name + '（' + voice + '）');
+                setModelDropStatus('已导入 ' + file.name + '（' + role.name + '）');
+                await loadRoles();
                 try { await TTS.refresh(); } catch (e) {}
             } catch (err) {
                 setModelDropStatus('导入失败 ' + file.name + '：' + err.message);
@@ -593,7 +704,7 @@ const App = (function() {
             modelDrop.addEventListener('drop', function(e) {
                 const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
                 if (!files.length) return;
-                const voice = (voiceSelect && voiceSelect.value) || localStorage.getItem('tts_voice') || 'sakiko';
+                const voice = (voiceSelect && voiceSelect.value) || localStorage.getItem('tts_role_selected') || '';
                 setModelDropStatus('正在导入 ' + files.length + ' 个文件...');
                 files.forEach(function(file) { uploadTTSModel(file, voice); });
             });

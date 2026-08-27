@@ -56,6 +56,12 @@
 .notebook-mode .live2d-persona-settings textarea, .notebook-mode .live2d-persona-settings input { border-color: #eadbc9; background: #fffdf7; color: #6b5642; font-family: var(--serif, serif); }
 .tts-model-drop { display: grid; place-items: center; gap: 3px; padding: 18px 12px; border: 1px dashed var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--card-bg) 55%, transparent); color: var(--text-secondary); font-size: 12px; text-align: center; transition: border-color .15s, background .15s; user-select: none; }
 .tts-model-drop.dragging { border-color: #d4576b; background: color-mix(in srgb, #d4576b 12%, var(--card-bg)); color: #d4576b; }
+.tts-role-manager { align-items: start; }
+.tts-role-toolbar, .tts-role-files { display: flex; flex-wrap: wrap; gap: 8px; }
+.tts-role-editor { width: min(100%, 680px); display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--card-bg) 84%, transparent); }
+.tts-role-editor > label { display: grid; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.tts-role-editor input[type="text"], .tts-role-editor select, .tts-role-editor textarea { width: 100%; box-sizing: border-box; }
+.tts-role-files label { display: grid; gap: 4px; font-size: 12px; color: var(--text-secondary); }
 .notebook-mode .tts-model-drop { border-color: #e6c5ba; background: #fffdf7; color: #8b7355; }
 .notebook-mode .companion-mode-btn { border-color: #ecd8ca; background: #fffdf7; color: #8b7355; font-family: var(--serif, serif); }
 .notebook-mode .companion-mode-btn:hover { color: #d4576b; border-color: #e9b9c2; }

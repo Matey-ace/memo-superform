@@ -72,7 +72,10 @@ var TTS = (function() {
                 signal: controller.signal,
                 body: JSON.stringify({
                     text: text,
-                    voice: localStorage.getItem('tts_voice') || undefined,
+                    // The backend resolves an explicit role package; do not let
+                    // a dropdown accidentally combine another role's model and
+                    // reference audio.
+                    voice: localStorage.getItem('tts_active_role_id') || undefined,
                     speed: parseFloat(localStorage.getItem('tts_speed') || '1.0'),
                     top_k: numSetting('tts_top_k', 15, 1, 100),
                     fragment_interval: numSetting('tts_fragment_interval', 0.5, 0, 5),

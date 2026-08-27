@@ -68,7 +68,7 @@ assert(companion.includes("localStorage.getItem('tts_companion_enabled')"), 'com
 assert(index.includes('ttsCompanionRead'), 'missing companion voice toggle in settings');
 assert(read('js/app.js').includes('ttsCompanionRead'), 'companion voice toggle is not bound in app');
 assert(index.includes('ttsModelDrop'), 'missing TTS model drop zone');
-assert(read('js/app.js').includes('/api/tts/import-model'), 'TTS model drop does not upload to import endpoint');
+assert(read('js/app.js').includes('/api/tts/roles/') && read('js/app.js').includes('/upload?kind='), 'TTS model drop does not upload into the selected role package');
 assert(read('js/app.js').includes('ttsModelKind'), 'TTS model drop does not classify dropped model files');
 const ttsJs = read('js/tts.js');
 for (const contract of ['tts_top_k', 'tts_fragment_interval', 'tts_text_split_method', 'tts_seed', 'use_cuda_graph', 'tts_cuda_graph', 'parallel_infer', 'tts_parallel_infer']) {
@@ -80,6 +80,9 @@ for (const id of ['ttsFragRange', 'ttsTopK', 'ttsSplitSelect', 'ttsSeed', 'ttsCu
 const appJs = read('js/app.js');
 for (const key of ['tts_fragment_interval', 'tts_top_k', 'tts_text_split_method', 'tts_seed', 'tts_cuda_graph', 'tts_parallel_infer']) {
   assert(appJs.includes(key), `TTS tuning control not persisted in app: ${key}`);
+}
+for (const id of ['ttsRoleNewBtn', 'ttsRoleEditBtn', 'ttsRoleActivateBtn', 'ttsRoleGptFile', 'ttsRoleAudioFile']) {
+  assert(index.includes(id), `missing role package control ${id}`);
 }
 assert(!read('js/study-sync-ui.js').includes('window.LayoutManager'), 'study-sync-ui still uses broken window.LayoutManager');
 assert(!read('js/app.js').includes('window.StudySyncUI'), 'app still uses broken window.StudySyncUI');
