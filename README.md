@@ -74,7 +74,7 @@ Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏
 
 > SQLite 主库会在 `data/memo-superform.db` 自动建立，无需安装数据库。已有 SQL Server 数据库只会通过可选的只读迁移器导入，原库不会被修改。
 
-## Linux 支持
+## Linux 支持(不再维护)
 
 项目核心为纯 Python，**Web 模式在 Linux 上开箱即用**；桌面模式需要安装图形后端。
 
@@ -261,7 +261,7 @@ Runs as a native window (no browser needed); closing the window exits the app.
 
 > The SQLite database is created automatically at `data/memo-superform.db`. A legacy SQL Server installation is optional and is opened read-only for migration only.
 
-## Linux Support
+## Linux Support( No longer maintained )
 
 The core is pure Python, so **web mode works out of the box on Linux**; desktop mode needs a GUI backend.
 
