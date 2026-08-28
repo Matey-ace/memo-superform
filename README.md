@@ -332,6 +332,19 @@ Double-click `dist/MemoSuperform.exe` to run. The exe bundles ECharts and SQLite
 
 This project is open-sourced under [AGPL v3](LICENSE). You are free to use, modify, and distribute it, but any derivative work (including services provided over a network) must be open-sourced under the same license.
 
+## 致谢 / Acknowledgements
+
+### D_sakiko 与 GPT-SoVITS 语音资源
+
+Memo Superform 的本地 TTS 资源包接入并适配了 [D_sakiko](https://github.com/MacchaPafe/D_sakiko) 的 GPT-SoVITS 推理相关内容，实际使用范围如下：
+
+- `data/tts_pack/tts_engine/` 中的 GPT-SoVITS 推理运行时：模型加载、参考音频与逐字参考文本的条件输入、音频合成调用链，以及其所需的推理依赖约束（包括 `inference_cli.py`、`TTS_infer_pack/` 及相关运行时模块）。
+- D_sakiko 发布资源中的丰川祥子 GPT / SoVITS 音色模型、日文参考音频和逐字参考文本，作为历史资料迁移的来源。这些模型与音频只由用户保存在本地 `data/tts_pack/` 中，不提交至本仓库，也不包含在发布的 EXE 内。
+
+Memo Superform 自行实现了角色资料包、Web/API 集成、触摸与陪伴逻辑、Live2D 绑定、语音队列及前端设置；D_sakiko 的桌面 UI、聊天/LLM、角色配置和 Live2D 程序均未纳入本项目。
+
+D_sakiko 按 GPL-3.0 发布；其所使用的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 推理本体按上游许可证发布。涉及这些内容的部分保留原项目的版权和许可声明；如需再分发音色模型或参考音频，请自行确认相应音色、素材与角色的版权。
+
 ---
 
 <div align="right">
