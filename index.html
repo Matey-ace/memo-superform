@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
-    <script src="js/ui-style.js?v=20260825-unified-ui"></script>
+    <script src="js/ui-style.js?v=20260828-role-runtime"></script>
     <script src="vendor/echarts.min.js?v=40"></script>
 </head>
 <body>
@@ -193,19 +193,19 @@
         <div class="companion-study-shell">
             <div class="companion-study-main"><div id="companionStudyFrame"></div></div>
             <aside class="companion-study-aside">
-                <div class="companion-aside-head"><h2>✦ Anon 陪伴学习</h2><button id="exitCompanionModeBtn" class="companion-exit" type="button">退出陪伴模式</button></div>
+                <div class="companion-aside-head"><h2 id="companionTitle">✦ 角色陪伴学习</h2><button id="exitCompanionModeBtn" class="companion-exit" type="button">退出陪伴模式</button></div>
                 <div id="companionLive2DHost" class="companion-live2d-host">
                     <span id="companionModelName" class="companion-model-name">尚未选择模型</span>
                     <span id="companionBirthdayBadge" class="companion-birthday-badge" hidden>9.06 Birthday</span>
                     <canvas id="companionLive2DCanvas" aria-label="Live2D 角色"></canvas>
-                    <div id="companionGifFallback" class="companion-gif-fallback"><img src="img/gifs/anon-think.gif" alt="Anon 陪伴"></div>
+                    <div id="companionGifFallback" class="companion-gif-fallback"><img src="img/gifs/anon-think.gif" alt="角色陪伴备用图"></div>
                 </div>
                 <div class="companion-dialogue">
                     <div id="companionMood" class="companion-mood">待机</div>
-                    <p id="companionBubble" class="companion-bubble">选择模型后，进入背词学习页就可以开始陪伴学习。</p>
+                    <p id="companionBubble" class="companion-bubble">选择并启用资料完整的角色后，进入背词学习页即可开始陪伴学习。</p>
                     <p id="companionCurrentWord" class="companion-current-word">等待进入学习页</p>
                     <div id="companionSummary" class="companion-summary"><span>本轮 <b>0</b> 词</span><span>正确率 <b>0%</b></span><span>专注 <b>0</b> 分钟</span></div>
-                    <button id="companionAskBtn" class="test-btn companion-ask" type="button">让爱音看看这一轮</button>
+                    <button id="companionAskBtn" class="test-btn companion-ask" type="button">看看这一轮学习情况</button>
                 </div>
                 <section id="companionBirthdayCard" class="companion-birthday-card" hidden aria-label="Anon 生日纪念卡"><button id="closeCompanionBirthdayCard" type="button" aria-label="关闭生日纪念卡">×</button><strong>9.06 · Birthday Memo</strong><p>今天的第一个学习里程碑完成！这份认真就当作送给爱音的小礼物吧。</p></section>
             </aside>
@@ -335,21 +335,25 @@
                         <span id="ttsStatusText" class="hint">检测中...</span>
                     </div>
                     <div class="setting-item">
-                        <label>当前角色</label>
+                        <label>选中角色（编辑 / 上传目标）</label>
                         <select id="ttsVoiceSelect">
                             <option value="">正在读取角色...</option>
                         </select>
+                        <p id="ttsRoleSelectionHint" class="hint">正在读取角色状态...</p>
                     </div>
                     <div class="setting-item tts-role-manager">
                         <label>角色资料包</label>
-                        <div class="tts-role-toolbar"><button id="ttsRoleNewBtn" type="button" class="test-btn">添加角色</button><button id="ttsRoleEditBtn" type="button" class="test-btn">编辑当前角色</button><button id="ttsRoleActivateBtn" type="button" class="test-btn">启用当前角色</button><button id="ttsRoleDeleteBtn" type="button" class="danger-btn">删除当前角色</button></div>
+                        <div class="tts-role-toolbar"><button id="ttsRoleNewBtn" type="button" class="test-btn">添加角色</button><button id="ttsRoleEditBtn" type="button" class="test-btn">编辑选中角色</button><button id="ttsRoleActivateBtn" type="button" class="test-btn">启用选中角色</button><button id="ttsRoleDeleteBtn" type="button" class="danger-btn">删除选中角色</button></div>
                         <div id="ttsRoleEditor" class="tts-role-editor" hidden>
                             <input id="ttsRoleId" type="hidden">
+                            <p id="ttsRoleEditorContext" class="hint" role="status"></p>
                             <label>角色名称<input id="ttsRoleName" type="text" maxlength="64" placeholder="例如：千早爱音"></label>
                             <label>绑定 Live2D<select id="ttsRoleLive2D"><option value="">请选择已安装模型</option></select></label>
                             <label>参考语言<select id="ttsRoleLanguage"><option value="">请选择语言</option><option value="中文">中文</option><option value="日文">日文</option><option value="英文">英文</option><option value="粤语">粤语</option><option value="韩文">韩文</option><option value="中英混合">中英混合</option><option value="日英混合">日英混合</option><option value="多语种混合">多语种混合</option></select></label>
                             <label>参考音频对应文本<textarea id="ttsRoleReferenceText" rows="3" maxlength="1000" placeholder="必须逐字对应参考音频内容"></textarea></label>
-                            <div class="tts-role-files"><label>GPT 模型 (.ckpt)<input id="ttsRoleGptFile" type="file" accept=".ckpt"></label><label>SoVITS 模型 (.pth)<input id="ttsRoleSovitsFile" type="file" accept=".pth"></label><label>参考音频<input id="ttsRoleAudioFile" type="file" accept=".wav,.mp3,.flac,.ogg"></label></div>
+                            <p id="ttsRoleFileStatus" class="hint">不选择新文件时，会保留此角色已有资料。</p>
+                            <div class="tts-role-files"><label>GPT 模型 (.ckpt)<input id="ttsRoleGptFile" type="file" accept=".ckpt"></label><label>SoVITS 模型 (.pth)<input id="ttsRoleSovitsFile" type="file" accept=".pth"></label><label>兼容索引（可选 .index，当前引擎不参与合成）<input id="ttsRoleIndexFile" type="file" accept=".index"></label><label>参考音频<input id="ttsRoleAudioFile" type="file" accept=".wav,.mp3,.flac,.ogg"></label></div>
+                            <p class="hint">选择新文件只会替换正在编辑角色的同类资料；其他角色不受影响。若它当前已启用，下一次合成会使用新资料。</p>
                             <div class="tts-role-toolbar"><button id="ttsRoleSaveBtn" type="button" class="test-btn">保存角色资料</button><button id="ttsRoleCancelBtn" type="button" class="test-btn">取消</button></div>
                         </div>
                         <p id="ttsRoleStatus" class="hint"></p>
@@ -405,26 +409,25 @@
                             <span>陪伴模式语音朗读（让 Live2D 角色说的话朗读出来）</span>
                         </label>
                     </div>
-                    <div class="setting-item">
-                        <label>模型文件</label>
-                        <div id="ttsModelDrop" class="tts-model-drop">把 GPT-SoVITS 模型文件拖到这里<br><small>支持 *.ckpt + *.pth（可选 *.index），会自动放入当前音色目录</small></div>
-                        <p id="ttsModelDropStatus" class="hint"></p>
-                    </div>
                     <button id="ttsEnableBtn" class="test-btn">开启语音</button>
-                    <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载模型</button>
+                    <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载已启用角色模型</button>
+                    <button id="ttsRepairBtn" class="test-btn" style="display:none">修复语音环境</button>
                     <span id="ttsActionStatus" class="status-text"></span>
                 </div>
 
                 <div class="setting-group live2d-settings">
-                    <h3>Live2D 模型衣柜</h3>
+                    <h3>Live2D 模型库</h3>
+                    <p class="hint">模型库只负责下载、导入和删除；请在角色资料包中绑定模型，启用角色后会同时切换陪伴形象与语音。</p>
                     <div class="setting-item"><label>在线模型</label><div class="live2d-model-controls"><div class="live2d-search-row"><input id="live2dCatalogSearch" type="search" placeholder="搜索角色或模型名，例如 爱音 / Anon / 037"><button id="live2dCatalogRefreshBtn" type="button" class="test-btn">刷新目录</button></div><div id="live2dCatalogResults" class="live2d-catalog-results"><p class="hint">输入角色名即可检索 Bestdori 模型与服装。</p></div><p id="live2dDownloadStatus" class="live2d-download-status"></p><button id="live2dCancelDownloadBtn" type="button" class="danger-btn" hidden>取消当前下载</button></div></div>
                     <div class="setting-item"><label>本地导入</label><div class="live2d-model-controls"><div class="live2d-import-row"><input id="live2dImportPath" type="text" placeholder="粘贴包含 model.json / model3.json 的文件夹路径"><button id="live2dImportBtn" type="button" class="test-btn">导入并校验</button></div><p class="hint">导入后会复制到本地 data/live2d/models，不依赖原目录。</p></div></div>
-                    <div class="setting-item"><label>已安装模型</label><div id="live2dInstalledModels" class="live2d-installed-models"><p class="hint">正在读取模型衣柜...</p></div></div>
+                    <div class="setting-item"><label>已安装模型</label><div id="live2dInstalledModels" class="live2d-installed-models"><p class="hint">正在读取模型库...</p></div></div>
+                    <p id="live2dRoleBindingHint" class="hint"></p>
                     <p id="live2dModelStatus" class="hint"></p>
                 </div>
                 <div class="setting-group live2d-settings live2d-persona-settings">
-                    <h3>角色人设</h3>
-                    <div class="setting-item"><label>选择角色</label><select id="live2dPersonaRole"><option value="_default">通用兜底</option></select></div>
+                    <h3>角色人设（随角色资料包切换）</h3>
+                    <p class="hint">人设保存到角色资料包；即使两位角色绑定同一个 Live2D 模型，也会保留各自的陪伴语气。</p>
+                    <div class="setting-item"><label>选择角色资料包</label><select id="live2dPersonaRole"></select></div>
                     <div class="setting-item"><label>名字</label><input id="live2dPersona_name" type="text" maxlength="40"></div>
                     <div class="setting-item"><label>背景</label><textarea id="live2dPersona_background" rows="3" maxlength="800"></textarea></div>
                     <div class="setting-item"><label>语气</label><textarea id="live2dPersona_tone" rows="2" maxlength="400"></textarea></div>
@@ -470,20 +473,20 @@
     <script src="vendor/live2d/pixi-6.5.10.min.js?v=072"></script>
     <script src="vendor/live2d/pixi-live2d-display-0.4.0.min.js?v=072"></script>
     <script src="js/api.js?v=20260826-v070-sync"></script>
-    <script src="js/tts.js?v=40"></script>
+    <script src="js/tts.js?v=20260828-v077-runtime"></script>
     <script src="js/dashboard-core.js?v=20260825-unified-ui"></script>
     <script src="js/charts.js?v=44"></script>
     <script src="js/layout.js?v=20260825-unified-ui"></script>
     <script src="js/study-shortcuts.js?v=20260825-unified-ui"></script>
     <script src="js/study-lifecycle.js?v=20260825-unified-ui"></script>
     <script src="js/study-web.js?v=20260825-unified-ui"></script>
-    <script src="js/live2d-companion.js?v=20260827-live2d-touch3"></script>
+    <script src="js/live2d-companion.js?v=20260828-v077-role-persona"></script>
     <script src="js/study-sync-ui.js?v=20260827-global-fix"></script>
     <script>
         if (window.MemoUIStyle.isNotebook) {
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260827-global-fix"></script>
+    <script src="js/app.js?v=20260828-v077-role-runtime"></script>
 </body>
 </html>

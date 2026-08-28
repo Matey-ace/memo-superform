@@ -5,7 +5,7 @@
     'use strict';
 
     var STORAGE_KEY = 'memo_ui_style';
-    var VERSION = '20260825-unified-ui';
+    var VERSION = '20260828-renderer-diagnostics';
     var value = 'standard';
     try {
         var saved = localStorage.getItem(STORAGE_KEY);

@@ -12,6 +12,10 @@ import study_sync
 
 _legacy_attempted = set()
 _legacy_lock = threading.Lock()
+# Role manifests and the Live2D preference are stored by different services.
+# Serialize their coupled changes in the HTTP process so two rapid activate/
+# edit requests cannot commit TTS role A with renderer preference B.
+_role_live2d_lock = threading.RLock()
 
 
 def configure_local_api(**values):
@@ -32,6 +36,54 @@ class LocalApiMixin:
     def _profile_id(self, required=False):
         token = self._memo_token(required=required)
         return study_sync.token_profile_id(token) if token else None
+
+    def _active_role_live2d_binding(self, live2d):
+        """Expose the active role as the only Live2D runtime source.
+
+        ``live2d_preferences.active_model_id`` predates role packages and can
+        still contain a stale manually selected model.  Keep it as a storage
+        detail for compatibility, but never let it override the enabled role
+        while rendering the companion.
+        """
+        result = {
+            "enforced": True,
+            "ready": False,
+            "active_role_id": "",
+            "active_role_name": "",
+            "configured_model_id": "",
+            "active_model_id": None,
+            "model_character_id": "",
+            "persona": {},
+            "reason": "尚未启用资料完整的角色",
+        }
+        try:
+            import tts
+            library = tts.list_roles(TTS_PACK_DIR)
+            role_id = str(library.get("active_role_id") or "")
+            result["active_role_id"] = role_id
+            role = next((item for item in library.get("roles") or [] if item.get("role_id") == role_id), None)
+            if not role:
+                return result
+            result["active_role_name"] = str(role.get("name") or role_id)
+            result["configured_model_id"] = str(role.get("live2d_model_id") or "")
+            result["persona"] = role.get("persona") if isinstance(role.get("persona"), dict) else {}
+            if not role.get("complete"):
+                missing = "、".join(role.get("missing") or [])
+                result["reason"] = "当前角色资料未配齐" + ("：" + missing if missing else "")
+                return result
+            if not result["configured_model_id"]:
+                result["reason"] = "当前角色未绑定 Live2D 模型"
+                return result
+            model = live2d.validate_model(result["configured_model_id"])
+            result.update({
+                "ready": True,
+                "active_model_id": result["configured_model_id"],
+                "model_character_id": str(model.get("character_id") or ""),
+                "reason": "",
+            })
+        except Exception as exc:
+            result["reason"] = "角色绑定的 Live2D 模型不可用：%s" % exc
+        return result
 
     def _start_legacy_import_once(self, profile_id):
         if not profile_id or not DB_READY:
@@ -55,11 +107,39 @@ class LocalApiMixin:
 
         if path == "/api/tts/status":
             import tts
-            return self._send_json(200, tts.get_status(TTS_PACK_DIR, DATA_DIR))
+            status = tts.get_status(TTS_PACK_DIR, DATA_DIR)
+            live2d = globals().get("LIVE2D_SERVICE")
+            if live2d and status.get("active_role_id"):
+                binding = self._active_role_live2d_binding(live2d)
+                status["live2d_role_ready"] = bool(binding.get("ready"))
+                if not binding.get("ready"):
+                    status["role_ready"] = False
+                    status["role_error"] = binding.get("reason") or "当前角色绑定的 Live2D 模型不可用"
+            return self._send_json(200, status)
 
         if path == "/api/tts/roles":
             import tts
-            return self._send_json(200, tts.list_roles(TTS_PACK_DIR))
+            library = tts.list_roles(TTS_PACK_DIR)
+            live2d = globals().get("LIVE2D_SERVICE")
+            if live2d:
+                for role in library.get("roles") or []:
+                    model_id = str(role.get("live2d_model_id") or "")
+                    if not model_id:
+                        continue
+                    try:
+                        model = live2d.validate_model(model_id)
+                        # This read-only annotation lets the browser migrate
+                        # legacy character-id personas into distinct role
+                        # manifests without letting a Live2D model define the
+                        # active persona at runtime.
+                        role["live2d_character_id"] = str(model.get("character_id") or "")
+                    except Exception:
+                        missing = list(role.get("missing") or [])
+                        if "Live2D 模型（不可用）" not in missing:
+                            missing.append("Live2D 模型（不可用）")
+                        role["missing"] = missing
+                        role["complete"] = False
+            return self._send_json(200, library)
 
         if path == "/api/codex/status":
             return self._send_json(200, CODEX_OAUTH.status())
@@ -97,7 +177,9 @@ class LocalApiMixin:
         if path == "/api/live2d/models":
             if not live2d:
                 return self._send_json(503, {"error": "Live2D 服务未就绪"})
-            return self._send_json(200, live2d.list_models(self._profile_id(required=False)))
+            data = live2d.list_models(self._profile_id(required=False))
+            data["role_binding"] = self._active_role_live2d_binding(live2d)
+            return self._send_json(200, data)
 
         if path.startswith("/api/live2d/downloads/"):
             if not live2d:
@@ -190,13 +272,86 @@ class LocalApiMixin:
             if self.headers.get("X-Requested-With") != "XMLHttpRequest":
                 return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
             if path == "/api/tts/import-model":
-                return self._import_tts_model(parsed)
+                # Pre-role-package clients could write to an arbitrary
+                # pack.json voice directory here.  Keeping that endpoint alive
+                # would reintroduce model/reference-audio cross-contamination.
+                return self._send_json(410, {
+                    "error": "旧模型上传入口已移除；请在角色编辑器中上传模型文件",
+                    "migration": "使用 /api/tts/roles/<role_id>/upload",
+                })
+            if path == "/api/tts/repair":
+                import tts
+                try:
+                    return self._send_json(200, tts.repair_environment(TTS_PACK_DIR, DATA_DIR))
+                except tts.TTSException as exc:
+                    return self._send_json(400, {"error": str(exc)})
             if path.startswith("/api/tts/roles/") and path.endswith("/upload"):
                 return self._upload_tts_role_file(path, parsed)
             try:
                 body = self._read_json_body()
             except (json.JSONDecodeError, ValueError):
                 return self._send_json(400, {"error": "Invalid JSON body"})
+
+            if path.startswith("/api/tts/roles/") and path.endswith("/persona"):
+                import tts
+                role_id = path.split("/")[-2]
+                try:
+                    role = tts.update_role_persona(TTS_PACK_DIR, role_id, body.get("persona"))
+                    return self._send_json(200, {"ok": True, "role": role})
+                except tts.TTSException as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path.startswith("/api/tts/roles/") and path.endswith("/begin-update"):
+                import tts
+                role_id = path.split("/")[-2]
+                try:
+                    return self._send_json(200, {"ok": True, "batch_id": tts.begin_role_update(TTS_PACK_DIR, role_id)})
+                except tts.TTSException as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path.startswith("/api/tts/roles/") and path.endswith("/discard-update"):
+                import tts
+                role_id = path.split("/")[-2]
+                try:
+                    return self._send_json(200, {
+                        "ok": tts.discard_role_update(TTS_PACK_DIR, role_id, body.get("batch_id")),
+                    })
+                except tts.TTSException as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path.startswith("/api/tts/roles/") and path.endswith("/commit-update"):
+                import tts
+                role_id = path.split("/")[-2]
+                live2d = globals().get("LIVE2D_SERVICE")
+                try:
+                    with _role_live2d_lock:
+                        active_id = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
+                        is_active = role_id == active_id
+                        live2d_id = str(body.get("live2d_model_id") or "")
+                        if live2d_id:
+                            if not live2d:
+                                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+                            live2d.validate_model(live2d_id)
+                        if is_active and not live2d_id:
+                            return self._send_json(400, {"error": "当前已启用角色必须绑定可用的 Live2D 模型"})
+
+                        def sync_live2d(role):
+                            # This callback runs under both the coordinator and
+                            # tts.py's role lock.  It therefore observes the
+                            # exact manifest being committed, not a stale
+                            # active-role snapshot from a concurrent request.
+                            committed_active = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
+                            if role["role_id"] == committed_active:
+                                if not live2d:
+                                    raise RuntimeError("Live2D 服务未就绪")
+                                live2d.set_active(self._profile_id(required=False), role["live2d_model_id"], True)
+
+                        role = tts.commit_role_update(
+                            TTS_PACK_DIR, role_id, body.get("batch_id"), body, after_commit=sync_live2d
+                        )
+                    return self._send_json(200, {"ok": True, "role": role})
+                except Exception as exc:
+                    return self._send_json(400, {"error": str(exc)})
 
             # 运行模式设置（与数据库无关）
             if path == "/api/app/set-default-mode":
@@ -231,35 +386,74 @@ class LocalApiMixin:
                 import tts
                 live2d_id = str(body.get("live2d_model_id") or "")
                 live2d = globals().get("LIVE2D_SERVICE")
-                if live2d_id:
-                    model = globals().get("db") and globals()["db"].get_live2d_model(live2d_id)
-                    if not model or not model.get("complete"):
-                        return self._send_json(400, {"error": "所选 Live2D 模型不可用"})
                 try:
-                    return self._send_json(200, {"ok": True, "role": tts.save_role(TTS_PACK_DIR, body)})
-                except tts.TTSException as exc:
+                    with _role_live2d_lock:
+                        # Validate both halves before changing either one.  This is
+                        # especially important for editing the active role, which
+                        # must keep its TTS and Live2D bindings in lockstep.
+                        preview = tts.preview_role_save(TTS_PACK_DIR, body)
+                        active_id = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
+                        is_active = preview["role_id"] == active_id
+                        if live2d_id:
+                            if not live2d:
+                                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+                            live2d.validate_model(live2d_id)
+
+                        def sync_live2d(role):
+                            if role["role_id"] != (tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""):
+                                return
+                            if not live2d:
+                                raise RuntimeError("Live2D 服务未就绪")
+                            live2d.set_active(self._profile_id(required=False), role["live2d_model_id"], True)
+
+                        role = tts.save_role(TTS_PACK_DIR, body, after_commit=sync_live2d if is_active else None)
+                    return self._send_json(200, {"ok": True, "role": role})
+                except Exception as exc:
+                    # This route is validation-driven; retain an actionable 4xx
+                    # response for unavailable/stale model bindings rather than
+                    # presenting a generic server failure to the role editor.
                     return self._send_json(400, {"error": str(exc)})
 
             if path.startswith("/api/tts/roles/") and path.endswith("/activate"):
                 import tts
                 role_id = path.split("/")[-2]
                 try:
-                    role = tts.activate_role(TTS_PACK_DIR, role_id)
-                    live2d = globals().get("LIVE2D_SERVICE")
-                    if role.get("live2d_model_id") and live2d:
-                        live2d.set_active(self._profile_id(required=False), role["live2d_model_id"], True)
+                    with _role_live2d_lock:
+                        candidate = tts.get_role(TTS_PACK_DIR, role_id, require_complete=True)
+                        live2d = globals().get("LIVE2D_SERVICE")
+                        if not live2d:
+                            return self._send_json(503, {"error": "Live2D 服务未就绪"})
+                        # Validate before committing.  ``after_commit`` runs
+                        # under tts.py's role lock and rolls the manifest back
+                        # if the renderer preference write fails.
+                        live2d.validate_model(candidate["live2d_model_id"])
+                        role = tts.activate_role(
+                            TTS_PACK_DIR,
+                            role_id,
+                            after_commit=lambda activated: live2d.set_active(
+                                self._profile_id(required=False), activated["live2d_model_id"], True
+                            ),
+                        )
                     return self._send_json(200, {"ok": True, "role": role})
-                except tts.TTSException as exc:
+                except Exception as exc:
                     return self._send_json(400, {"error": str(exc)})
 
             if path == "/api/tts/speak":
                 import tts
                 try:
+                    live2d = globals().get("LIVE2D_SERVICE")
+                    if live2d:
+                        binding = self._active_role_live2d_binding(live2d)
+                        if not binding.get("ready"):
+                            return self._send_json(409, {"error": binding.get("reason") or "当前角色的 Live2D 模型不可用"})
                     wav_path = tts.speak(
                         TTS_PACK_DIR,
                         DATA_DIR,
                         body.get("text", ""),
-                        voice=body.get("voice"),
+                        # The active role is the only permitted synthesis
+                        # source.  Ignore a stale legacy client's `voice`
+                        # field instead of allowing it to select a pack.
+                        voice=None,
                         language=body.get("language"),
                         speed=body.get("speed"),
                         top_k=body.get("top_k"),
@@ -279,8 +473,17 @@ class LocalApiMixin:
             if path == "/api/tts/enable":
                 import tts
                 try:
+                    live2d = globals().get("LIVE2D_SERVICE")
+                    if live2d:
+                        binding = self._active_role_live2d_binding(live2d)
+                        if not binding.get("ready"):
+                            return self._send_json(400, {"error": binding.get("reason") or "请先修复当前角色的 Live2D 模型绑定"})
                     state = tts.set_enabled(TTS_PACK_DIR, DATA_DIR, True)
-                    return self._send_json(200, {"ok": True, "enabled": True, "voice": state.get("voice")})
+                    return self._send_json(200, {
+                        "ok": True,
+                        "enabled": True,
+                        "active_role_id": tts.list_roles(TTS_PACK_DIR).get("active_role_id") or "",
+                    })
                 except tts.TTSException as e:
                     return self._send_json(400, {"error": str(e)})
 
@@ -292,7 +495,12 @@ class LocalApiMixin:
             if path == "/api/tts/preload":
                 import tts
                 try:
-                    tts.preload(TTS_PACK_DIR, DATA_DIR, voice=body.get("voice"))
+                    live2d = globals().get("LIVE2D_SERVICE")
+                    if live2d:
+                        binding = self._active_role_live2d_binding(live2d)
+                        if not binding.get("ready"):
+                            return self._send_json(409, {"error": binding.get("reason") or "当前角色的 Live2D 模型不可用"})
+                    tts.preload(TTS_PACK_DIR, DATA_DIR, voice=None)
                     return self._send_json(200, {"ok": True})
                 except tts.TTSException as e:
                     return self._send_json(400, {"error": str(e)})
@@ -319,11 +527,24 @@ class LocalApiMixin:
             if path == "/api/live2d/active":
                 if not live2d:
                     return self._send_json(503, {"error": "Live2D 服务未就绪"})
-                model_id = body.get("model_id")
-                enabled = body.get("companion_enabled")
-                if enabled is not None and not isinstance(enabled, bool):
-                    return self._send_json(400, {"error": "companion_enabled 必须是布尔值"})
-                return self._send_json(200, live2d.set_active(self._profile_id(required=False), model_id, enabled))
+                with _role_live2d_lock:
+                    enabled = body.get("companion_enabled")
+                    if enabled is not None and not isinstance(enabled, bool):
+                        return self._send_json(400, {"error": "companion_enabled 必须是布尔值"})
+                    binding = self._active_role_live2d_binding(live2d)
+                    if not binding.get("ready"):
+                        return self._send_json(409, {"error": binding.get("reason") or "请先启用资料完整的角色"})
+                    requested_id = str(body.get("model_id") or "").strip()
+                    if requested_id and requested_id != binding["active_model_id"]:
+                        return self._send_json(409, {
+                            "error": "Live2D 由当前已启用角色绑定；请在角色编辑器中更换模型后再启用角色",
+                        })
+                    # Legacy clients may still use this route to open/close the
+                    # companion.  Keep that toggle, but always normalize the
+                    # stored preference back to the active role's model.
+                    return self._send_json(200, live2d.set_active(
+                        self._profile_id(required=False), binding["active_model_id"], enabled
+                    ))
 
             if path == "/api/study-sync":
                 if not DB_READY or not STUDY_SYNC_MANAGER:
@@ -399,33 +620,6 @@ class LocalApiMixin:
             traceback.print_exc()
             return self._send_json(500, {"error": str(e)})
 
-    def _import_tts_model(self, parsed):
-        """接收一个 GPT-SoVITS 模型文件的原始字节并写入对应音色目录。
-
-        query 参数：voice（音色名）、kind（ckpt/pth/index）、name（原始文件名）。
-        """
-        query = parse_qs(parsed.query)
-        voice = (query.get("voice") or [""])[0]
-        kind = (query.get("kind") or [""])[0].lower()
-        name = (query.get("name") or [""])[0]
-        if not voice or len(voice) > 64:
-            return self._send_json(400, {"error": "缺少有效的 voice 参数"})
-        if kind not in ("ckpt", "pth", "index"):
-            return self._send_json(400, {"error": "kind 必须是 ckpt/pth/index"})
-        length = self._safe_content_length()
-        data = self.rfile.read(length) if length > 0 else b""
-        if not data:
-            return self._send_json(400, {"error": "文件为空"})
-        try:
-            import tts
-            written = tts.import_model_file(TTS_PACK_DIR, voice, kind, data)
-            return self._send_json(200, {"ok": True, "voice": voice, "kind": kind, "name": name, "written": written})
-        except tts.TTSException as exc:
-            return self._send_json(400, {"error": str(exc)})
-        except Exception as exc:
-            traceback.print_exc()
-            return self._send_json(500, {"error": str(exc)})
-
     def _upload_tts_role_file(self, path, parsed):
         """Write an uploaded role asset to its canonical, manifest-backed path."""
         import tts
@@ -435,9 +629,18 @@ class LocalApiMixin:
         query = parse_qs(parsed.query)
         kind = (query.get("kind") or [""])[0]
         name = (query.get("name") or [""])[0]
+        batch_id = (query.get("batch") or [""])[0]
         length = self._safe_content_length()
         data = self.rfile.read(length) if length > 0 else b""
         try:
+            if batch_id:
+                staged = tts.stage_role_file(TTS_PACK_DIR, parts[3], batch_id, kind, name, data)
+                return self._send_json(200, {"ok": True, "staged": staged})
+            active_id = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
+            if parts[3] == active_id:
+                return self._send_json(409, {
+                    "error": "当前已启用角色必须通过一次性角色更新保存，避免模型与参考资料半更新",
+                })
             role = tts.upload_role_file(TTS_PACK_DIR, parts[3], kind, name, data)
             return self._send_json(200, {"ok": True, "role": role})
         except tts.TTSException as exc:
@@ -463,7 +666,11 @@ class LocalApiMixin:
             if not live2d:
                 return self._send_json(503, {"error": "Live2D 服务未就绪"})
             try:
-                deleted = live2d.delete_model(path.rsplit("/", 1)[-1])
+                # A role can bind a model while this request is in flight;
+                # coordinate deletion with all role/renderer transitions so
+                # validation and reference checks observe one consistent view.
+                with _role_live2d_lock:
+                    deleted = live2d.delete_model(path.rsplit("/", 1)[-1])
                 return self._send_json(200 if deleted else 404, {"ok": deleted})
             except Exception as exc:
                 return self._send_json(400, {"error": str(exc)})

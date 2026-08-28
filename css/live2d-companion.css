@@ -17,13 +17,16 @@
 .companion-live2d-host canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
 .companion-touch-feedback { position: absolute; z-index: 4; pointer-events: none; color: #fff; background: rgba(82,119,155,.82); border-radius: 999px; padding: 4px 8px; font-size: 12px; box-shadow: 0 3px 10px rgba(45,72,104,.18); animation: companion-touch-pop .56s ease-out both; }
 @keyframes companion-touch-pop { from { opacity: 0; transform: translateY(8px) scale(.88); } 30% { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-12px) scale(1.03); } }
-.companion-gif-fallback { position: absolute; inset: 0; display: grid; place-items: center; }
-.companion-gif-fallback img { width: min(72%, 250px); aspect-ratio: 1; object-fit: cover; border-radius: 26px; box-shadow: var(--shadow-md); }
-.companion-model-name { position: absolute; top: 10px; left: 12px; font-size: 12px; color: var(--text-secondary); background: color-mix(in srgb, var(--card-bg) 86%, transparent); padding: 4px 7px; border-radius: 999px; z-index: 2; }
+.companion-gif-fallback { position: absolute; inset: 0; display: grid; place-items: center; cursor: pointer; touch-action: manipulation; }
+.companion-gif-fallback img { width: min(72%, 250px); aspect-ratio: 1; object-fit: cover; border-radius: 26px; box-shadow: var(--shadow-md); pointer-events: none; }
+.companion-model-name { position: absolute; top: 10px; left: 12px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-secondary); background: color-mix(in srgb, var(--card-bg) 86%, transparent); padding: 4px 7px; border-radius: 999px; z-index: 2; }
+.companion-model-name.has-renderer-diagnostic { color: #b42318; background: rgba(255, 237, 235, .94); box-shadow: 0 0 0 1px rgba(180, 35, 24, .18); cursor: copy; }
+.companion-model-name.has-renderer-diagnostic:focus-visible { outline: 2px solid #d4576b; outline-offset: 2px; }
 .companion-birthday-badge { position: absolute; right: 12px; top: 10px; color: #d4576b; font-size: 12px; background: #fff2f5; padding: 4px 7px; border-radius: 999px; z-index: 2; }
 .companion-dialogue { flex: 0 0 auto; border-top: 1px solid var(--border-color); padding: 12px; }
 .companion-mood { color: var(--accent-blue); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
 .companion-bubble { line-height: 1.55; min-height: 48px; padding: 10px 12px; color: var(--text-primary); background: var(--bg-color); border-radius: 12px; font-size: 13px; }
+.companion-bubble.has-renderer-diagnostic { max-height: 186px; overflow: auto; white-space: pre-line; user-select: text; color: #8a251b; border: 1px solid rgba(180, 35, 24, .28); background: rgba(255, 248, 246, .96); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .companion-current-word { margin: 9px 2px 7px; color: var(--text-secondary); font-size: 12px; min-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .companion-summary { display: flex; gap: 7px; flex-wrap: wrap; color: var(--text-secondary); font-size: 12px; }
 .companion-summary span { background: var(--bg-color); padding: 5px 7px; border-radius: 8px; }
@@ -48,21 +51,19 @@
 .live2d-installed-row .danger-btn { padding: 5px 7px; font-size: 11px; }
 .live2d-download-status, #live2dModelStatus { font-size: 12px; color: var(--text-secondary); }
 #live2dModelStatus.error { color: #d4380d; }
+#live2dRoleBindingHint.error { color: #d4380d; }
 .live2d-persona-settings { display: grid; gap: 10px; }
 .live2d-persona-settings .setting-item { margin-bottom: 0; }
 .live2d-persona-settings textarea, .live2d-persona-settings input { width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); color: var(--text-primary); font: inherit; font-size: 12px; line-height: 1.5; resize: vertical; }
 .live2d-persona-actions { display: flex; gap: 7px; }
 .live2d-persona-actions .danger-btn { padding: 5px 9px; font-size: 11px; }
 .notebook-mode .live2d-persona-settings textarea, .notebook-mode .live2d-persona-settings input { border-color: #eadbc9; background: #fffdf7; color: #6b5642; font-family: var(--serif, serif); }
-.tts-model-drop { display: grid; place-items: center; gap: 3px; padding: 18px 12px; border: 1px dashed var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--card-bg) 55%, transparent); color: var(--text-secondary); font-size: 12px; text-align: center; transition: border-color .15s, background .15s; user-select: none; }
-.tts-model-drop.dragging { border-color: #d4576b; background: color-mix(in srgb, #d4576b 12%, var(--card-bg)); color: #d4576b; }
 .tts-role-manager { align-items: start; }
 .tts-role-toolbar, .tts-role-files { display: flex; flex-wrap: wrap; gap: 8px; }
 .tts-role-editor { width: min(100%, 680px); display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--card-bg) 84%, transparent); }
 .tts-role-editor > label { display: grid; gap: 5px; font-size: 12px; color: var(--text-secondary); }
 .tts-role-editor input[type="text"], .tts-role-editor select, .tts-role-editor textarea { width: 100%; box-sizing: border-box; }
 .tts-role-files label { display: grid; gap: 4px; font-size: 12px; color: var(--text-secondary); }
-.notebook-mode .tts-model-drop { border-color: #e6c5ba; background: #fffdf7; color: #8b7355; }
 .notebook-mode .companion-mode-btn { border-color: #ecd8ca; background: #fffdf7; color: #8b7355; font-family: var(--serif, serif); }
 .notebook-mode .companion-mode-btn:hover { color: #d4576b; border-color: #e9b9c2; }
 .notebook-mode .companion-study { background: #fffdf8; background-image: linear-gradient(rgba(164,198,229,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(164,198,229,.1) 1px, transparent 1px); background-size: 22px 22px; }

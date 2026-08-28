@@ -67,17 +67,41 @@ assert(companion.includes('maybeSpeakCompanion'), 'missing companion voice speak
 assert(companion.includes("localStorage.getItem('tts_companion_enabled')"), 'companion voice is not gated by a setting');
 assert(index.includes('ttsCompanionRead'), 'missing companion voice toggle in settings');
 assert(read('js/app.js').includes('ttsCompanionRead'), 'companion voice toggle is not bound in app');
-assert(index.includes('ttsModelDrop'), 'missing TTS model drop zone');
-assert(read('js/app.js').includes('/api/tts/roles/') && read('js/app.js').includes('/upload?kind='), 'TTS model drop does not upload into the selected role package');
-assert(read('js/app.js').includes('ttsModelKind'), 'TTS model drop does not classify dropped model files');
+assert(!index.includes('ttsModelDrop'), 'legacy duplicate TTS model drop zone must stay removed');
+assert(index.includes('ttsRoleIndexFile'), 'role editor is missing optional model index upload');
+const appJs = read('js/app.js');
+assert(appJs.includes('/api/tts/roles/') && appJs.includes("'/upload' + query"), 'role editor does not upload into its role package');
+for (const endpoint of ["'/begin-update'", "'/commit-update'", "'/discard-update'"]) {
+  assert(appJs.includes(endpoint), `role editor is missing staged update endpoint ${endpoint}`);
+}
+assert(appJs.includes("'&batch=' + encodeURIComponent(batchId)"), 'staged role uploads must carry the server batch id');
+assert(appJs.includes('setRoleEditorSelectionLock(roleEditorOpen || !!locked)'), 'editing a role must lock role selection controls');
+assert(appJs.includes('refreshActiveRoleRuntime'), 'editing the active role must refresh its runtime');
+assert(!appJs.includes('uploadTTSModel'), 'legacy standalone model uploader remains reachable');
+assert(!appJs.includes('repairingActiveRole'), 'legacy partial active-role repair path remains reachable');
+
+// Live2D is selected by the active character package, never by a stale
+// browser preference or a direct "use this model" button in the library.
+for (const contract of ['role_binding', 'roleBinding', 'runtimeModelId', 'markUnavailable']) {
+  assert(companion.includes(contract), `missing role-bound Live2D contract ${contract}`);
+}
+assert(companion.includes('roleBinding && roleBinding.enforced'), 'enforced role binding must outrank legacy model preference');
+assert(!companion.includes('/api/live2d/active'), 'model library must not directly switch the active Live2D model');
+assert(!companion.includes('data-live2d-select'), 'model library must not render a direct model-selection control');
+for (const contract of ['fallbackTouchRegionFor(event)', "companionHost.addEventListener('pointerup', handleCharacterTouch)", 'getLastError']) {
+  assert(companion.includes(contract), `missing fallback touch / voice feedback contract ${contract}`);
+}
 const ttsJs = read('js/tts.js');
+assert(ttsJs.includes('status.role_ready'), 'TTS readiness must require an enabled complete role');
+assert(!ttsJs.includes("localStorage.getItem('tts_active_role_id')"), 'browser state must not select a TTS role');
+assert(ttsJs.includes('Promise.resolve(audio.play())'), 'TTS must await the browser audio playback result');
+assert(ttsJs.includes('getLastError'), 'TTS must expose user-facing playback failures');
 for (const contract of ['tts_top_k', 'tts_fragment_interval', 'tts_text_split_method', 'tts_seed', 'use_cuda_graph', 'tts_cuda_graph', 'parallel_infer', 'tts_parallel_infer']) {
   assert(ttsJs.includes(contract), `TTS speak does not forward tuning setting ${contract}`);
 }
 for (const id of ['ttsFragRange', 'ttsTopK', 'ttsSplitSelect', 'ttsSeed', 'ttsCudaGraph', 'ttsParallelInfer']) {
   assert(index.includes(id), `missing TTS tuning control ${id}`);
 }
-const appJs = read('js/app.js');
 for (const key of ['tts_fragment_interval', 'tts_top_k', 'tts_text_split_method', 'tts_seed', 'tts_cuda_graph', 'tts_parallel_infer']) {
   assert(appJs.includes(key), `TTS tuning control not persisted in app: ${key}`);
 }

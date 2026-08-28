@@ -59,16 +59,37 @@ function personaKey(characterId) {
     return Object.prototype.hasOwnProperty.call(DEFAULT_PERSONAS, id) ? id : '_default';
 }
 
-function getActivePersona() {
-    const model = typeof Live2DModelManager !== 'undefined' && Live2DModelManager ? Live2DModelManager.current() : null;
-    const key = personaKey(model && model.character_id);
-    const base = DEFAULT_PERSONAS[key];
-    const override = getPersonaOverrides()[key] || {};
-    const persona = { name: base.name, background: base.background, tone: base.tone, avoid: base.avoid, examples: base.examples };
+function personaTemplateForRole(role) {
+    const key = personaKey(role && role.live2d_character_id);
+    const base = DEFAULT_PERSONAS[key] || DEFAULT_PERSONAS._default;
+    // One-time migration preserves the old character-id customization as the
+    // starting point of each role package.  Runtime lookup below never uses
+    // this browser-local map once the role manifest has a full persona.
+    const legacy = getPersonaOverrides()[key] || {};
+    const persona = {};
     ['name', 'background', 'tone', 'avoid', 'examples'].forEach(function(field) {
-        if (typeof override[field] === 'string' && override[field].trim()) persona[field] = override[field].trim();
+        persona[field] = typeof legacy[field] === 'string' && legacy[field].trim() ? legacy[field].trim() : base[field];
     });
+    if (role && role.name && (!legacy.name || !legacy.name.trim())) persona.name = String(role.name).slice(0, 40);
     return persona;
+}
+
+function hasCompletePersona(persona) {
+    return !!(persona && typeof persona === 'object' && ['name', 'background', 'tone', 'avoid', 'examples'].every(function(field) {
+        return typeof persona[field] === 'string' && persona[field].trim();
+    }));
+}
+
+function getActivePersona() {
+    const binding = typeof Live2DModelManager !== 'undefined' && Live2DModelManager && Live2DModelManager.roleBinding
+        ? Live2DModelManager.roleBinding() : null;
+    if (binding && hasCompletePersona(binding.persona)) return Object.assign({}, binding.persona);
+    // Transitional fallback only: existing browsers may still carry a legacy
+    // character-id persona until PersonaSettings writes it into each role.
+    return personaTemplateForRole({
+        name: binding && binding.active_role_name,
+        live2d_character_id: binding && binding.model_character_id,
+    });
 }
 
 function personaSystemPrompt(persona) {
@@ -83,87 +104,164 @@ const PersonaSettings = (function() {
     const FIELDS = ['name', 'background', 'tone', 'avoid', 'examples'];
     function escape(text) { const el = document.createElement('span'); el.textContent = String(text || ''); return el.innerHTML; }
     function escapeAttr(text) { return escape(text).replace(/"/g, '&quot;'); }
+    let roles = [];
+    let activeRoleId = '';
+    let loadRevision = 0;
 
-    function roleLabel(key) {
-        const persona = DEFAULT_PERSONAS[key];
-        return key === '_default' ? '通用兜底 · ' + persona.name : key + ' · ' + persona.name;
+    function currentRoleId() {
+        const select = document.getElementById('live2dPersonaRole');
+        return select ? String(select.value || '') : '';
     }
     function currentRole() {
-        const select = document.getElementById('live2dPersonaRole');
-        return select && Object.prototype.hasOwnProperty.call(DEFAULT_PERSONAS, select.value) ? select.value : '_default';
+        const id = currentRoleId();
+        return roles.find(function(role) { return role.role_id === id; }) || null;
     }
-    function setRole(role) {
+    function rolePersona(role) {
+        return hasCompletePersona(role && role.persona) ? Object.assign({}, role.persona) : personaTemplateForRole(role);
+    }
+    function setControlsDisabled(disabled) {
+        FIELDS.forEach(function(field) {
+            const input = document.getElementById('live2dPersona_' + field);
+            if (input) input.disabled = !!disabled;
+        });
+        ['live2dPersonaSaveBtn', 'live2dPersonaResetBtn'].forEach(function(id) {
+            const button = document.getElementById(id);
+            if (button) button.disabled = !!disabled;
+        });
+    }
+    function setRole(roleId) {
         const select = document.getElementById('live2dPersonaRole');
-        if (select) select.value = role;
+        if (select && roleId) select.value = roleId;
         render();
     }
     function render() {
         const role = currentRole();
-        const override = getPersonaOverrides()[role] || {};
+        const status = document.getElementById('live2dPersonaStatus');
+        if (!role) {
+            setControlsDisabled(true);
+            FIELDS.forEach(function(field) {
+                const input = document.getElementById('live2dPersona_' + field);
+                if (input) input.value = '';
+            });
+            if (status) status.textContent = '请先创建并启用角色资料包。';
+            return;
+        }
+        setControlsDisabled(false);
+        const persona = rolePersona(role);
         FIELDS.forEach(function(field) {
             const input = document.getElementById('live2dPersona_' + field);
-            if (input) input.value = typeof override[field] === 'string' && override[field] ? override[field] : DEFAULT_PERSONAS[role][field];
+            if (input) input.value = persona[field];
         });
-        const status = document.getElementById('live2dPersonaStatus');
         if (status) status.textContent = '';
     }
-    function save() {
+    async function persist(role, persona, silent) {
+        const response = await fetch('/api/tts/roles/' + encodeURIComponent(role.role_id) + '/persona', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            body: JSON.stringify({ persona: persona })
+        });
+        const data = await response.json().catch(function() { return {}; });
+        if (!response.ok || data.error) throw new Error(data.error || '角色人设保存失败');
+        const next = data.role || Object.assign({}, role, { persona: persona });
+        const index = roles.findIndex(function(item) { return item.role_id === role.role_id; });
+        if (index >= 0) roles[index] = Object.assign({}, roles[index], next);
+        if (!silent && role.role_id === activeRoleId && typeof Live2DModelManager !== 'undefined' && Live2DModelManager.loadModels) {
+            await Live2DModelManager.loadModels();
+        }
+        return next;
+    }
+    async function migrateLegacyPersonas(revision) {
+        for (const role of roles.slice()) {
+            if (revision !== loadRevision || hasCompletePersona(role.persona)) continue;
+            try { await persist(role, personaTemplateForRole(role), true); }
+            catch (error) { console.warn('角色人设迁移将在下次重试：', error); }
+        }
+    }
+    function populate(preferredRoleId) {
+        const select = document.getElementById('live2dPersonaRole');
+        if (!select) return;
+        select.innerHTML = roles.map(function(role) {
+            const suffix = role.role_id === activeRoleId ? '（当前启用）' : '';
+            return '<option value="' + escapeAttr(role.role_id) + '">' + escape(role.name || role.role_id) + suffix + '</option>';
+        }).join('');
+        select.disabled = !roles.length;
+        const selected = roles.some(function(role) { return role.role_id === preferredRoleId; }) ? preferredRoleId : activeRoleId;
+        if (selected) select.value = selected;
+        render();
+    }
+    async function refreshRoles(preferredRoleId) {
+        const revision = ++loadRevision;
+        try {
+            const response = await fetch('/api/tts/roles');
+            const data = await response.json().catch(function() { return {}; });
+            if (!response.ok || data.error) throw new Error(data.error || '读取角色资料失败');
+            if (revision !== loadRevision) return;
+            roles = Array.isArray(data.roles) ? data.roles : [];
+            activeRoleId = String(data.active_role_id || '');
+            await migrateLegacyPersonas(revision);
+            if (revision !== loadRevision) return;
+            populate(preferredRoleId || currentRoleId() || activeRoleId);
+        } catch (error) {
+            const status = document.getElementById('live2dPersonaStatus');
+            if (status) status.textContent = '读取角色人设失败：' + error.message;
+        }
+    }
+    async function save() {
         const role = currentRole();
-        const overrides = getPersonaOverrides();
-        const next = {};
+        if (!role) return;
+        const persona = {};
         let valid = true;
         FIELDS.forEach(function(field) {
             const input = document.getElementById('live2dPersona_' + field);
             if (!input) return;
             const value = input.value.trim();
             if (!value) { valid = false; return; }
-            if (value !== DEFAULT_PERSONAS[role][field]) next[field] = value;
+            persona[field] = value;
         });
         const status = document.getElementById('live2dPersonaStatus');
         if (!valid) { if (status) status.textContent = '人设字段不能为空。'; return; }
-        if (Object.keys(next).length) overrides[role] = next;
-        else delete overrides[role];
         try {
-            localStorage.setItem('memo_live2d_personas', JSON.stringify(overrides));
-            if (status) status.textContent = '角色人设已保存。';
+            await persist(role, persona, false);
+            if (status) status.textContent = '角色人设已保存到“' + role.name + '”资料包。';
         } catch (error) {
-            if (status) status.textContent = '保存失败：浏览器存储不可用。';
+            if (status) status.textContent = '保存失败：' + error.message;
         }
     }
-    function reset() {
+    async function reset() {
         const role = currentRole();
-        const overrides = getPersonaOverrides();
-        delete overrides[role];
+        if (!role) return;
         try {
-            localStorage.setItem('memo_live2d_personas', JSON.stringify(overrides));
+            await persist(role, personaTemplateForRole(Object.assign({}, role, { persona: {} })), false);
+            const current = roles.find(function(item) { return item.role_id === role.role_id; });
+            if (current) current.persona = personaTemplateForRole(Object.assign({}, role, { persona: {} }));
             render();
             const status = document.getElementById('live2dPersonaStatus');
-            if (status) status.textContent = '已恢复该角色默认人设。';
+            if (status) status.textContent = '已恢复该角色资料包的默认人设。';
         } catch (error) {
             const status = document.getElementById('live2dPersonaStatus');
-            if (status) status.textContent = '恢复失败：浏览器存储不可用。';
+            if (status) status.textContent = '恢复失败：' + error.message;
         }
     }
     function attach() {
         const select = document.getElementById('live2dPersonaRole');
         if (!select || select.dataset.ready) return;
         select.dataset.ready = 'true';
-        select.innerHTML = Object.keys(DEFAULT_PERSONAS).map(function(key) {
-            return '<option value="' + escapeAttr(key) + '">' + escape(roleLabel(key)) + '</option>';
-        }).join('');
         select.addEventListener('change', render);
         const saveButton = document.getElementById('live2dPersonaSaveBtn');
         const resetButton = document.getElementById('live2dPersonaResetBtn');
         if (saveButton) saveButton.addEventListener('click', save);
         if (resetButton) resetButton.addEventListener('click', reset);
-        render();
+        refreshRoles();
     }
-    return { attach: attach, setRole: setRole };
+    return { attach: attach, setRole: setRole, refreshRoles: refreshRoles };
 })();
 
 const Live2DModelManager = (function() {
     let currentModels = [];
     let preference = { active_model_id: null, companion_enabled: false };
+    // The persisted preference exists for old versions, but a current role
+    // binding is the runtime authority for both the renderer and persona.
+    let roleBinding = null;
     let activeJob = null;
 
     function headers(json) {
@@ -183,8 +281,21 @@ const Live2DModelManager = (function() {
         const data = await request('/api/live2d/models');
         currentModels = data.models || [];
         preference = data.preference || preference;
+        roleBinding = data.role_binding || null;
         renderSettings();
         return data;
+    }
+    function markUnavailable(reason) {
+        // Do not let a previous successful fetch keep rendering a stale role
+        // after the current model-list request failed.
+        roleBinding = { enforced: true, ready: false, reason: String(reason || '读取角色绑定的 Live2D 模型失败') };
+        renderSettings();
+    }
+    function runtimeModelId() {
+        if (roleBinding && roleBinding.enforced) return roleBinding.ready ? (roleBinding.active_model_id || null) : null;
+        // Graceful display compatibility when a new page is temporarily paired
+        // with an older server.  Current servers always return `enforced`.
+        return preference.active_model_id || null;
     }
     async function searchCatalog(query, refresh) {
         const suffix = '?q=' + encodeURIComponent(query || '') + (refresh ? '&refresh=1' : '');
@@ -219,7 +330,7 @@ const Live2DModelManager = (function() {
             if (job.status === 'queued' || job.status === 'fetching') {
                 setTimeout(function() { pollDownload(jobId); }, 700);
             } else if (job.status === 'completed') {
-                setStatus('模型下载完成，可以设为当前陪伴。');
+                setStatus('模型下载完成，请在角色编辑器中绑定它。');
                 activeJob = null;
                 await loadModels();
             } else if (job.status !== 'unknown') {
@@ -239,16 +350,9 @@ const Live2DModelManager = (function() {
         if (!sourcePath) { setStatus('请输入本地 Live2D 模型文件夹路径。', true); return; }
         try {
             await request('/api/live2d/import', { method: 'POST', headers: headers(true), body: JSON.stringify({ source_path: sourcePath }) });
-            setStatus('模型已复制并完成校验。');
+            setStatus('模型已复制并完成校验，请在角色编辑器中绑定它。');
             if (field) field.value = '';
             await loadModels();
-        } catch (error) { setStatus(error.message, true); }
-    }
-    async function selectModel(modelId) {
-        try {
-            preference = await request('/api/live2d/active', { method: 'POST', headers: headers(true), body: JSON.stringify({ model_id: modelId || null, companion_enabled: true }) });
-            await loadModels();
-            if (window.Live2DCompanion) Live2DCompanion.reloadModel();
         } catch (error) { setStatus(error.message, true); }
     }
     async function removeModel(modelId) {
@@ -272,18 +376,44 @@ const Live2DModelManager = (function() {
         target.textContent = activeJob.status === 'fetching' ? ('正在下载 ' + activeJob.model_name + '：' + activeJob.completed + '/' + activeJob.total) : ('下载状态：' + activeJob.status);
         if (cancel) cancel.hidden = activeJob.status !== 'queued' && activeJob.status !== 'fetching';
     }
+    function renderRoleBindingHint() {
+        const target = document.getElementById('live2dRoleBindingHint');
+        if (!target) return;
+        if (!roleBinding) {
+            target.textContent = '模型库仅用于下载、导入和删除；请在角色资料包中绑定 Live2D 模型并启用角色。';
+            target.classList.remove('error');
+            return;
+        }
+        if (roleBinding.ready) {
+            target.textContent = '当前陪伴由已启用角色“' + (roleBinding.active_role_name || roleBinding.active_role_id) + '”绑定的模型决定。';
+            target.classList.remove('error');
+            return;
+        }
+        target.textContent = roleBinding.reason || '尚未启用可用角色；模型库不会单独切换陪伴。';
+        target.classList.add('error');
+    }
     function renderSettings() {
         const list = document.getElementById('live2dInstalledModels');
         if (!list) return;
+        const activeModelId = runtimeModelId();
         list.innerHTML = currentModels.map(function(item) {
-            const active = item.model_id === preference.active_model_id;
+            const active = item.model_id === activeModelId;
+            const bindingState = active ? '当前启用角色正在使用' : '可在角色编辑器中绑定';
             return '<div class="live2d-installed-row' + (active ? ' active' : '') + '"><span><strong>' + escape(item.display_name) + '</strong><small>' + escape(item.model_format) + ' · ' + Math.round((item.byte_size || 0) / 1024 / 1024) + ' MB</small></span>' +
-                '<span><button type="button" class="test-btn" data-live2d-select="' + escapeAttr(item.model_id) + '">' + (active ? '当前使用' : '使用') + '</button><button type="button" class="danger-btn" data-live2d-remove="' + escapeAttr(item.model_id) + '">删除</button></span></div>';
+                '<span><small>' + bindingState + '</small><button type="button" class="danger-btn" data-live2d-remove="' + escapeAttr(item.model_id) + '">删除</button></span></div>';
         }).join('') || '<p class="hint">尚未安装模型；可搜索下载或导入本地文件夹。</p>';
-        list.querySelectorAll('[data-live2d-select]').forEach(function(button) { button.addEventListener('click', function() { selectModel(button.getAttribute('data-live2d-select')); }); });
         list.querySelectorAll('[data-live2d-remove]').forEach(function(button) { button.addEventListener('click', function() { removeModel(button.getAttribute('data-live2d-remove')); }); });
-        const active = currentModels.find(function(item) { return item.model_id === preference.active_model_id; });
-        PersonaSettings.setRole(personaKey(active && active.character_id));
+        renderRoleBindingHint();
+        const roleId = roleBinding && roleBinding.active_role_id;
+        PersonaSettings.setRole(roleId);
+        // The model list contains only renderer metadata.  Refresh the role
+        // list separately so the persona editor always writes by role_id,
+        // including two different voices that share one Live2D model.
+        if (PersonaSettings.refreshRoles) {
+            PersonaSettings.refreshRoles(roleId).catch(function(error) {
+                console.warn('读取角色人设失败：', error);
+            });
+        }
     }
     function attachSettings() {
         PersonaSettings.attach();
@@ -300,8 +430,10 @@ const Live2DModelManager = (function() {
         cancel.addEventListener('click', cancelDownload);
         loadModels().catch(function(error) { setStatus(error.message, true); });
     }
-    function current() { return currentModels.find(function(item) { return item.model_id === preference.active_model_id; }) || null; }
-    return { attachSettings: attachSettings, loadModels: loadModels, searchCatalog: searchCatalog, current: current, selectModel: selectModel };
+    function current() { const activeModelId = runtimeModelId(); return currentModels.find(function(item) { return item.model_id === activeModelId; }) || null; }
+    function roleName() { return roleBinding && roleBinding.ready ? (roleBinding.active_role_name || roleBinding.active_role_id || '') : ''; }
+    function roleBindingInfo() { return roleBinding ? Object.assign({}, roleBinding) : null; }
+    return { attachSettings: attachSettings, loadModels: loadModels, searchCatalog: searchCatalog, current: current, roleName: roleName, roleBinding: roleBindingInfo, markUnavailable: markUnavailable };
 })();
 
 const CompanionSession = (function() {
@@ -347,8 +479,9 @@ const CompanionSession = (function() {
 })();
 
 const Live2DCompanion = (function() {
-    let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '';
+    let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '', companionVoiceRequest = 0;
     let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
+    let rendererCapabilityCache = null, lastRendererDiagnostic = '', currentMoodLabel = '待机', lastVoiceNoticeReason = '', voiceNoticeTimer = 0, modelListError = '';
     const LOCAL_LINES = {
         started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
         'needs-help': ['没关系，先把容易混淆的地方记下来。', '卡住也正常，我们调整一下节奏。'], 'focus-time': ['已经专心学习一会儿了，喝口水再继续吧。'], finish: ['这一轮辛苦了，今天的积累很扎实。'], 'manual-empty': ['先进入背词学习页，我就能看到这一轮的进度。']
@@ -361,21 +494,237 @@ const Live2DCompanion = (function() {
         lower: { label: '住手！', mood: 'firm', part: '下体位置', state: '被碰到后有些不高兴、想让你专心背词', lines: ['喂！那里不能乱碰，专心背词！', '生气啦！先把这一题背完再闹。'] }
     };
     function setMoodLabel(mood) {
+        currentMoodLabel = MOOD_LABELS[mood] || mood || '待机';
         const state = document.getElementById('companionMood');
-        if (state) state.textContent = MOOD_LABELS[mood] || mood || '待机';
+        if (state) {
+            state.textContent = currentMoodLabel;
+            if (typeof state.removeAttribute === 'function') state.removeAttribute('title');
+        }
+    }
+    function shortDiagnosticText(value, limit) {
+        const text = String(value === undefined || value === null ? '' : value).replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+        return text.length > (limit || 220) ? text.slice(0, limit || 220) + '…' : text;
+    }
+    function safeDiagnosticError(error) {
+        let text = error && error.message ? error.message : String(error || '未知错误');
+        // Browsers occasionally include an absolute local path in a loader error.
+        // Keep the error category, but never surface a user directory in the UI.
+        text = text.replace(/file:\/\/\/[^\s"'`<>]+/gi, '[本地文件]');
+        text = text.replace(/\b[A-Za-z]:[\\/][^"'`<>\r\n]*/g, '[本地路径]');
+        text = text.replace(/\/(?:Users|home|private|var|tmp|AppData|Documents)(?:\/[^\s"'`<>]*)*/gi, '[本地路径]');
+        text = text.replace(/([?&](?:token|api[_-]?key|authorization|password|secret)=)[^&\s]+/gi, '$1[已隐藏]');
+        return shortDiagnosticText(text || '未知错误', 220);
+    }
+    function safeModelLabel(model) {
+        return shortDiagnosticText(model && model.display_name ? model.display_name : '未选择模型', 56) || '未选择模型';
+    }
+    function currentRoleLabel() {
+        try {
+            const name = Live2DModelManager && Live2DModelManager.roleName ? Live2DModelManager.roleName() : '';
+            return shortDiagnosticText(name, 40);
+        } catch (error) { return ''; }
+    }
+    function updateCompanionRoleLabels() {
+        const name = currentRoleLabel();
+        const title = document.getElementById('companionTitle');
+        const ask = document.getElementById('companionAskBtn');
+        const fallbackImage = document.querySelector ? document.querySelector('#companionGifFallback img') : null;
+        if (title) title.textContent = '✦ ' + (name || '角色') + '陪伴学习';
+        if (ask) ask.textContent = name ? ('让' + name + '看看这一轮') : '看看这一轮学习情况';
+        if (fallbackImage) fallbackImage.alt = name ? (name + '的陪伴备用图') : '角色陪伴备用图';
+    }
+    function modelAssetUrl(model) {
+        if (!model || !model.model_id || !model.entry_file) return '';
+        const modelId = String(model.model_id).trim();
+        const parts = String(model.entry_file).replace(/\\/g, '/').split('/').filter(function(part) { return part && part !== '.' && part !== '..'; });
+        if (!/^[A-Za-z0-9._-]{1,160}$/.test(modelId) || !parts.length) return '';
+        return '/api/live2d/assets/' + encodeURIComponent(modelId) + '/' + parts.map(encodeURIComponent).join('/');
+    }
+    function rendererCapabilities() {
+        if (rendererCapabilityCache) return rendererCapabilityCache;
+        const pixi = window.PIXI;
+        const capability = {
+            webgl: '未检测', webglAvailable: false,
+            pixi: pixi ? ('已加载' + (pixi.VERSION ? '（' + shortDiagnosticText(pixi.VERSION, 24) + '）' : '')) : '缺失',
+            plugin: pixi && pixi.live2d && pixi.live2d.Live2DModel ? '已加载' : '缺失',
+            runtime: window.Live2D ? 'Cubism 2 已加载' : (window.Live2DCubismCore ? 'Cubism Core 已加载' : '未检测')
+        };
+        try {
+            if (!document.createElement) throw new Error('浏览器未提供 Canvas API');
+            const probe = document.createElement('canvas');
+            if (!probe || typeof probe.getContext !== 'function') throw new Error('Canvas 上下文不可用');
+            const webgl2 = probe.getContext('webgl2');
+            const webgl = webgl2 || probe.getContext('webgl') || probe.getContext('experimental-webgl');
+            capability.webglAvailable = !!webgl;
+            capability.webgl = webgl2 ? 'WebGL2 可用' : (webgl ? 'WebGL 可用' : '不可用');
+            // This is only a short-lived probe context. Release it when the
+            // browser offers the standard extension so repeated diagnostics do
+            // not consume renderer context slots.
+            const loseContext = webgl && webgl.getExtension ? webgl.getExtension('WEBGL_lose_context') : null;
+            if (loseContext && loseContext.loseContext) loseContext.loseContext();
+        } catch (error) {
+            capability.webgl = '检测失败（' + safeDiagnosticError(error) + '）';
+        }
+        rendererCapabilityCache = capability;
+        return capability;
+    }
+    function rendererDiagnostic(code, model, cause, capability) {
+        const details = capability || rendererCapabilities();
+        const url = modelAssetUrl(model);
+        const lines = [
+            '诊断代码：' + code,
+            'WebGL 上下文：' + details.webgl,
+            'PIXI：' + details.pixi + '；Live2D 插件：' + details.plugin,
+            '运行时：' + details.runtime,
+            '模型：' + safeModelLabel(model),
+            '模型地址：' + (url || '未生成（模型记录不完整）')
+        ];
+        if (cause) lines.push('错误：' + safeDiagnosticError(cause));
+        return lines.join('\n');
+    }
+    function setDiagnosticTarget(node, diagnostic, isError) {
+        if (!node) return;
+        if (isError) {
+            node.dataset.live2dRendererDiagnostic = diagnostic;
+            delete node.dataset.live2dRendererCopied;
+            if (node.classList) node.classList.add('has-renderer-diagnostic');
+            if (typeof node.setAttribute === 'function') node.setAttribute('title', '点击复制 Live2D 加载诊断\n' + diagnostic);
+        } else {
+            delete node.dataset.live2dRendererDiagnostic;
+            delete node.dataset.live2dRendererCopied;
+            if (node.classList) node.classList.remove('has-renderer-diagnostic');
+            if (typeof node.removeAttribute === 'function') node.removeAttribute('title');
+        }
+    }
+    function showRendererDiagnostic(code, model, cause, capability, pending) {
+        const diagnostic = rendererDiagnostic(code, model, cause, capability);
+        lastRendererDiagnostic = diagnostic;
+        const tag = document.getElementById('companionModelName');
+        const bubble = document.getElementById('companionBubble');
+        if (tag) {
+            tag.textContent = safeModelLabel(model) + ' · ' + code;
+            setDiagnosticTarget(tag, diagnostic, true);
+            if (typeof tag.setAttribute === 'function') {
+                tag.setAttribute('role', 'button');
+                tag.setAttribute('tabindex', '0');
+                tag.setAttribute('aria-label', '复制 Live2D 加载诊断：' + code);
+            }
+        }
+        if (bubble) {
+            bubble.textContent = (pending ? 'Live2D 正在等待可用的渲染区域。' : 'Live2D 加载失败，已切换为备用陪伴图。') + '\n' + diagnostic + '\n点击上方模型标签可复制诊断。';
+            setDiagnosticTarget(bubble, diagnostic, true);
+        }
+        setMoodLabel(pending ? '等待渲染' : '加载失败');
+        return diagnostic;
+    }
+    function clearRendererDiagnostic(model) {
+        lastRendererDiagnostic = '';
+        const tag = document.getElementById('companionModelName');
+        const bubble = document.getElementById('companionBubble');
+        if (tag) {
+            tag.textContent = safeModelLabel(model);
+            setDiagnosticTarget(tag, '', false);
+            if (typeof tag.removeAttribute === 'function') {
+                tag.removeAttribute('role');
+                tag.removeAttribute('tabindex');
+                tag.removeAttribute('aria-label');
+            }
+        }
+        if (bubble && bubble.dataset.live2dRendererDiagnostic) {
+            bubble.textContent = 'Live2D 已加载，可以触摸角色互动。';
+            setDiagnosticTarget(bubble, '', false);
+        }
+    }
+    function clearBubbleRendererDiagnostic() {
+        const bubble = document.getElementById('companionBubble');
+        if (bubble && bubble.dataset.live2dRendererDiagnostic) setDiagnosticTarget(bubble, '', false);
+    }
+    function fallbackCopyDiagnostic(text) {
+        if (!text || !document.createElement || !document.body || !document.body.appendChild || !document.execCommand) return false;
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (error) { copied = false; }
+        if (area.remove) area.remove(); else if (area.parentNode) area.parentNode.removeChild(area);
+        return copied;
+    }
+    function markDiagnosticCopied() {
+        const tag = document.getElementById('companionModelName');
+        if (!tag || !lastRendererDiagnostic) return;
+        tag.dataset.live2dRendererCopied = 'true';
+        if (typeof tag.setAttribute === 'function') tag.setAttribute('title', '诊断已复制\n' + lastRendererDiagnostic);
+    }
+    function copyRendererDiagnostic() {
+        const text = lastRendererDiagnostic;
+        if (!text) return;
+        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(markDiagnosticCopied).catch(function() {
+                if (fallbackCopyDiagnostic(text)) markDiagnosticCopied();
+            });
+        } else if (fallbackCopyDiagnostic(text)) {
+            markDiagnosticCopied();
+        }
+    }
+    function attachRendererDiagnosticCopy() {
+        const tag = document.getElementById('companionModelName');
+        if (!tag || tag.dataset.live2dDiagnosticCopyReady) return;
+        tag.dataset.live2dDiagnosticCopyReady = 'true';
+        tag.addEventListener('click', copyRendererDiagnostic);
+        tag.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyRendererDiagnostic(); }
+        });
+    }
+    function showVoiceStatusHint(reason) {
+        if (!reason || lastVoiceNoticeReason === reason) return;
+        lastVoiceNoticeReason = reason;
+        const target = document.getElementById('companionMood');
+        if (!target) return;
+        target.textContent = currentMoodLabel + ' · ' + reason;
+        if (typeof target.setAttribute === 'function') target.setAttribute('title', reason);
+        clearTimeout(voiceNoticeTimer);
+        voiceNoticeTimer = setTimeout(function() {
+            if (lastVoiceNoticeReason === reason && target.textContent.indexOf(reason) >= 0) target.textContent = currentMoodLabel;
+        }, 4200);
     }
     function maybeSpeakCompanion(text) {
-        if (typeof localStorage === 'undefined' || localStorage.getItem('tts_companion_enabled') !== 'true') return;
-        if (!window.TTS || !TTS.isReady()) return;
+        let companionVoiceEnabled = false;
+        try { companionVoiceEnabled = typeof localStorage !== 'undefined' && localStorage.getItem('tts_companion_enabled') === 'true'; }
+        catch (error) { showVoiceStatusHint('陪伴朗读设置不可读'); return; }
+        if (!companionVoiceEnabled) {
+            showVoiceStatusHint('陪伴朗读未开启');
+            return;
+        }
+        const tts = window.TTS;
+        if (!tts || typeof tts.isReady !== 'function' || !tts.isReady()) {
+            showVoiceStatusHint('语音引擎未就绪');
+            return;
+        }
+        lastVoiceNoticeReason = '';
         const normalized = String(text || '').trim();
         if (!normalized) return;
-        if (normalized === '待机' || normalized.indexOf('模型暂时无法预览') === 0) return;
+        if (normalized === '待机' || normalized.indexOf('模型暂时无法预览') === 0 || normalized.indexOf('Live2D 加载失败') === 0) return;
         if (normalized === lastSpokenCompanion) return;
-        lastSpokenCompanion = normalized;
-        TTS.speak(normalized);
+        const requestId = ++companionVoiceRequest;
+        try {
+            Promise.resolve(tts.speak(normalized)).then(function(ok) {
+                if (requestId !== companionVoiceRequest) return;
+                if (ok) {
+                    lastSpokenCompanion = normalized;
+                    return;
+                }
+                const detail = tts.getLastError && tts.getLastError();
+                showVoiceStatusHint(detail || '语音未生成，请检查引擎');
+            }).catch(function() { if (requestId === companionVoiceRequest) showVoiceStatusHint('语音请求失败'); });
+        } catch (error) { if (requestId === companionVoiceRequest) showVoiceStatusHint('语音请求失败'); }
     }
     function showCompanionReaction(text, mood, speak) {
         const bubble = document.getElementById('companionBubble');
+        clearBubbleRendererDiagnostic();
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
         playMood(mood || 'idle');
@@ -386,6 +735,7 @@ const Live2DCompanion = (function() {
     }
     function setReply(text, mood) {
         const bubble = document.getElementById('companionBubble');
+        clearBubbleRendererDiagnostic();
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
         maybeSpeakCompanion(text);
@@ -468,30 +818,73 @@ const Live2DCompanion = (function() {
         }, delay || 180);
     }
     async function loadRenderer() {
-        if (rendererLoading) { rendererFitPending = true; return; }
+        if (rendererLoading) { rendererFitPending = true; return { ok: true, pending: true }; }
         rendererLoading = true;
         const generation = ++rendererGeneration;
         disposeRenderer();
         const host = document.getElementById('companionLive2DHost');
         const fallback = document.getElementById('companionGifFallback');
-        if (!host) { rendererLoading = false; return; }
-        if (fallback) fallback.hidden = false;
         const model = Live2DModelManager.current();
+        const capability = rendererCapabilities();
+        updateCompanionRoleLabels();
+        if (!host) {
+            showRendererDiagnostic('L2D_HOST_MISSING', model, '陪伴模式渲染容器不存在', capability);
+            rendererLoading = false;
+            return { ok: false, code: 'L2D_HOST_MISSING' };
+        }
+        if (fallback) fallback.hidden = false;
         const tag = document.getElementById('companionModelName');
         if (tag) tag.textContent = model ? model.display_name : '尚未选择模型';
-        if (!model || !window.PIXI || !PIXI.live2d || !PIXI.live2d.Live2DModel) { if (fallback) fallback.hidden = false; rendererLoading = false; return; }
+        if (!model) {
+            const code = modelListError ? 'L2D_MODEL_LIST_FAILED' : 'L2D_NO_MODEL';
+            showRendererDiagnostic(code, null, modelListError || '尚未在角色包中绑定完整的 Live2D 模型', capability);
+            rendererLoading = false;
+            return { ok: false, code: code };
+        }
         const canvas = document.getElementById('companionLive2DCanvas');
         const width = Math.round(host.clientWidth || 0), height = Math.round(host.clientHeight || 0);
-        if (!canvas || width < 32 || height < 32) { rendererLoading = false; scheduleRendererReload(180); return; }
+        if (!canvas) {
+            showRendererDiagnostic('L2D_CANVAS_MISSING', model, 'Live2D 画布元素不存在', capability);
+            rendererLoading = false;
+            return { ok: false, code: 'L2D_CANVAS_MISSING' };
+        }
+        if (!capability.webglAvailable) {
+            showRendererDiagnostic('L2D_WEBGL_UNAVAILABLE', model, '浏览器未能创建 WebGL 上下文', capability);
+            rendererLoading = false;
+            return { ok: false, code: 'L2D_WEBGL_UNAVAILABLE' };
+        }
+        if (!window.PIXI) {
+            showRendererDiagnostic('L2D_PIXI_MISSING', model, 'PIXI 运行库未加载', capability);
+            rendererLoading = false;
+            return { ok: false, code: 'L2D_PIXI_MISSING' };
+        }
+        if (!window.PIXI.live2d || !window.PIXI.live2d.Live2DModel) {
+            showRendererDiagnostic('L2D_PLUGIN_MISSING', model, 'pixi-live2d-display 插件未加载', capability);
+            rendererLoading = false;
+            return { ok: false, code: 'L2D_PLUGIN_MISSING' };
+        }
+        const url = modelAssetUrl(model);
+        if (!url) {
+            showRendererDiagnostic('L2D_MODEL_URL_INVALID', model, '模型入口文件记录无效', capability);
+            rendererLoading = false;
+            return { ok: false, code: 'L2D_MODEL_URL_INVALID' };
+        }
+        if (width < 32 || height < 32) {
+            showRendererDiagnostic('L2D_VIEWPORT_PENDING', model, '渲染区域尺寸为 ' + width + '×' + height, capability, true);
+            rendererLoading = false;
+            scheduleRendererReload(180);
+            return { ok: true, pending: true, code: 'L2D_VIEWPORT_PENDING' };
+        }
         let nextApp = null, nextModel = null;
+        let phase = '创建 PIXI 渲染器';
         try {
-            nextApp = new PIXI.Application({ view: canvas, width: width, height: height, backgroundAlpha: 0, autoDensity: true, antialias: true });
-            const url = '/api/live2d/assets/' + encodeURIComponent(model.model_id) + '/' + model.entry_file.split('/').map(encodeURIComponent).join('/');
-            nextModel = await PIXI.live2d.Live2DModel.from(url, { autoInteract: true });
+            nextApp = new window.PIXI.Application({ view: canvas, width: width, height: height, backgroundAlpha: 0, autoDensity: true, antialias: true });
+            phase = '读取模型资源';
+            nextModel = await window.PIXI.live2d.Live2DModel.from(url, { autoInteract: true });
             if (generation !== rendererGeneration || !open) {
                 if (nextModel.destroy) nextModel.destroy({ children: true });
                 if (nextApp.destroy) nextApp.destroy(true, { children: true, texture: true, baseTexture: true });
-                return;
+                return { ok: true, pending: true };
             }
             liveModel = nextModel;
             pixiApp = nextApp;
@@ -499,20 +892,28 @@ const Live2DCompanion = (function() {
             modelNaturalHeight = Math.max(liveModel.height, 1);
             liveModel.anchor.set(0.5, 1);
             pixiApp.stage.addChild(liveModel);
-            if (!fitLiveModel()) { disposeRenderer(); scheduleRendererReload(180); return; }
+            if (!fitLiveModel()) {
+                disposeRenderer();
+                showRendererDiagnostic('L2D_FIT_FAILED', model, '模型或渲染区域尺寸不可用', capability);
+                scheduleRendererReload(180);
+                return { ok: false, code: 'L2D_FIT_FAILED' };
+            }
             if (fallback) fallback.hidden = true;
+            clearRendererDiagnostic(model);
             playMood('idle');
+            return { ok: true };
         } catch (error) {
             if (generation !== rendererGeneration) {
                 if (nextModel && nextModel.destroy) { try { nextModel.destroy({ children: true }); } catch (e) {} }
                 if (nextApp && nextApp.destroy) { try { nextApp.destroy(true, { children: true, texture: true, baseTexture: true }); } catch (e) {} }
-                return;
+                return { ok: true, pending: true };
             }
             if (nextModel && nextModel.destroy) { try { nextModel.destroy({ children: true }); } catch (e) {} }
             if (nextApp && nextApp.destroy) { try { nextApp.destroy(true, { children: true, texture: true, baseTexture: true }); } catch (e) {} }
             disposeRenderer();
             if (fallback) fallback.hidden = false;
-            setMessage('模型暂时无法预览，已切换为备用陪伴图。', '待机');
+            showRendererDiagnostic('L2D_LOAD_FAILED', model, phase + '：' + safeDiagnosticError(error), capability);
+            return { ok: false, code: 'L2D_LOAD_FAILED' };
         } finally {
             if (generation === rendererGeneration) {
                 rendererLoading = false;
@@ -574,7 +975,7 @@ const Live2DCompanion = (function() {
     }
     function touchRegionFor(event) {
         const canvas = document.getElementById('companionLive2DCanvas');
-        if (!canvas || !liveModel || !pixiApp || !liveModel.width || !liveModel.height) return null;
+        if (!canvas || !liveModel || !pixiApp || !liveModel.width || !liveModel.height) return fallbackTouchRegionFor(event);
         const canvasRect = canvas.getBoundingClientRect();
         if (!canvasRect.width || !canvasRect.height) return null;
         const stageWidth = (pixiApp.renderer && pixiApp.renderer.screen ? pixiApp.renderer.screen.width : canvasRect.width);
@@ -591,8 +992,21 @@ const Live2DCompanion = (function() {
         if (y > 0.74) return 'lower';
         return 'body';
     }
+    function fallbackTouchRegionFor(event) {
+        const host = document.getElementById('companionLive2DHost');
+        if (!host || !host.getBoundingClientRect) return null;
+        const rect = host.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        const x = (event.clientX - rect.left) / rect.width;
+        const y = (event.clientY - rect.top) / rect.height;
+        if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+        if (y < 0.28) return 'head';
+        if (y > 0.76) return 'lower';
+        if (x < 0.22 || x > 0.78) return 'hand';
+        return 'body';
+    }
     function handleCharacterTouch(event) {
-        if (!open || !liveModel || Date.now() - lastTouchAt < 560) return;
+        if (!open || (event.target && event.target.id === 'companionModelName') || Date.now() - lastTouchAt < 560) return;
         const region = touchRegionFor(event);
         if (!region) return;
         lastTouchAt = Date.now();
@@ -603,12 +1017,20 @@ const Live2DCompanion = (function() {
     async function enter() {
         if (open) return;
         open = true;
+        rendererCapabilityCache = null;
         savedLayout = (typeof LayoutManager !== 'undefined' && LayoutManager) ? LayoutManager.getCurrentLayout() : 'single';
         if (typeof ChartManager !== 'undefined' && ChartManager) ChartManager.disposeAll();
         document.getElementById('dashboard').hidden = true;
         const root = document.getElementById('companionStudy'); root.hidden = false; document.body.classList.add('companion-mode');
         document.getElementById('companionBirthdayCard').hidden = true;
-        await Live2DModelManager.loadModels().catch(function() {});
+        try {
+            await Live2DModelManager.loadModels();
+            modelListError = '';
+        } catch (error) {
+            modelListError = '读取角色绑定的 Live2D 模型失败：' + safeDiagnosticError(error);
+            if (Live2DModelManager.markUnavailable) Live2DModelManager.markUnavailable(modelListError);
+        }
+        updateCompanionRoleLabels();
         studyInstance = StudyWeb.render('companionStudyFrame', { onStudyEvent: function(event) { if (!session) return; if (event.type === 'screen') session.screen(event.active); if (event.type === 'answer') session.record(event); } });
         session = CompanionSession.create(onSessionSignal);
         await loadRenderer();
@@ -651,23 +1073,39 @@ const Live2DCompanion = (function() {
         if (!openButton || openButton.dataset.ready) return;
         openButton.dataset.ready = 'true';
         openButton.addEventListener('click', enter);
+        attachRendererDiagnosticCopy();
         document.getElementById('exitCompanionModeBtn').addEventListener('click', exit);
         document.getElementById('companionAskBtn').addEventListener('click', function() { if (session) session.ask(); });
         document.getElementById('closeCompanionBirthdayCard').addEventListener('click', function() { document.getElementById('companionBirthdayCard').hidden = true; });
         window.addEventListener('resize', function() { if (open) scheduleRendererReload(180); });
+        const companionHost = document.getElementById('companionLive2DHost');
         const companionCanvas = document.getElementById('companionLive2DCanvas');
-        if (companionCanvas) companionCanvas.addEventListener('pointerup', handleCharacterTouch);
+        if (companionHost) companionHost.addEventListener('pointerup', handleCharacterTouch);
         if (companionCanvas) companionCanvas.addEventListener('webglcontextlost', function(event) {
             event.preventDefault();
-            document.getElementById('companionGifFallback').hidden = false;
+            rendererCapabilityCache = null;
+            const fallback = document.getElementById('companionGifFallback');
+            if (fallback) fallback.hidden = false;
+            showRendererDiagnostic('L2D_WEBGL_CONTEXT_LOST', Live2DModelManager.current(), 'WebGL 上下文已丢失，正在尝试恢复', rendererCapabilities());
             destroyRenderer();
             if (open) scheduleRendererReload(260);
         });
         setInterval(function() { if (session) session.tick(); }, 60000);
         Live2DModelManager.attachSettings();
     }
-    function reloadModel() { if (open) { destroyRenderer(); loadRenderer(); } }
-    return { init: init, enter: enter, exit: exit, reloadModel: reloadModel, isOpen: function() { return open; } };
+    async function reloadModel() {
+        rendererCapabilityCache = null;
+        modelListError = '';
+        updateCompanionRoleLabels();
+        if (!open) return { ok: true, pending: true };
+        destroyRenderer();
+        return loadRenderer();
+    }
+    return {
+        init: init, enter: enter, exit: exit, reloadModel: reloadModel,
+        isOpen: function() { return open; },
+        getRendererDiagnostic: function() { return lastRendererDiagnostic; }
+    };
 })();
 
 // Top-level const bindings are not properties of window.  App.init() and the

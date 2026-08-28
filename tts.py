@@ -24,6 +24,9 @@ import subprocess
 import threading
 import time
 import uuid
+import copy
+from contextlib import contextmanager
+from functools import wraps
 
 
 LANGUAGE_NUMBER_MAP = {
@@ -32,23 +35,55 @@ LANGUAGE_NUMBER_MAP = {
     "10": "多语种混合", "11": "多语种混合(粤语)",
 }
 
-# 单次合成超时（秒）。worker 卡死时强杀并重置引擎；可用环境变量调大。
+# 已加载模型的单次合成超时（秒）。worker 卡死时强杀并重置引擎；可用环境变量调大。
 _SYNTH_TIMEOUT = float(os.environ.get("MEMO_TTS_SYNTH_TIMEOUT", "30") or 30)
+# 首次加载模型会导入文本前端、加载 GPT/SoVITS 权重并初始化 GPU。它远慢于
+# 普通一句合成，绝不能沿用 30 秒热路径超时，否则用户第一次触摸会刚好在模型
+# 即将完成时被杀掉并表现为“永远没有声音”。
+_COLD_START_TIMEOUT = max(
+    _SYNTH_TIMEOUT,
+    float(os.environ.get("MEMO_TTS_COLD_START_TIMEOUT", "180") or 180),
+)
 _ROLE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_ROLE_STAGE_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 _ROLE_FILE_KINDS = {
     "ckpt": ("gpt.ckpt", (".ckpt",)),
     "pth": ("sovits.pth", (".pth",)),
     "index": ("ref.index", (".index",)),
     "audio": ("reference", (".wav", ".mp3", ".flac", ".ogg")),
 }
+_ROLE_LIBRARY_LOCK = threading.RLock()
+_PERSONA_FIELDS = ("name", "background", "tone", "avoid", "examples")
+_PERSONA_LIMITS = {"name": 40, "background": 800, "tone": 400, "avoid": 400, "examples": 600}
+
+# These imports cover the worker entry point plus the Japanese and English
+# text preprocessors.  ``install.json`` alone is not proof that a copied or
+# interrupted virtual environment can actually synthesize speech.
+_ENGINE_IMPORT_PACKAGES = {
+    "torch": "torch>=2.7,<2.8",
+    "torchaudio": "torchaudio>=2.7,<2.8",
+    "numpy": "numpy<2.0",
+    "soundfile": "soundfile>=0.13.1",
+    "matplotlib": "matplotlib>=3.8.0",
+    "transformers": "transformers>=4.57,<5",
+    "librosa": "librosa==0.10.2",
+    "wordsegment": "wordsegment>=1.3.1",
+    # The upstream package requires a local C/C++ toolchain on Windows.
+    # pyopenjtalk-plus exports the identical ``pyopenjtalk`` module and ships
+    # a CPython 3.11 Windows wheel, making repair work on normal end-user PCs.
+    "pyopenjtalk": "pyopenjtalk-plus>=0.4.1.post9",
+}
+_ENGINE_PROBE_LOCK = threading.RLock()
+_ENGINE_PROBE_CACHE = {}
+_ENGINE_PROBE_TTL = 45.0
+_ENGINE_REPAIR_LOCK = threading.Lock()
 
 # 跨进程互斥锁：防止两个 Memo Superform 实例同时使用同一语音资源包
-def _acquire_pack_lock(pack_dir):
-    """占用资源包级文件锁。返回 (lock_file, acquired)。"""
-    lock_path = os.path.join(pack_dir, ".tts.lock")
+def _acquire_file_lock(lock_path):
+    """Acquire one byte of an arbitrary local lock file without waiting."""
     f = None
     try:
-        os.makedirs(pack_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
         f = open(lock_path, "a+b")
         if os.name == "nt":
             # Windows 的 msvcrt.locking 不能锁 EOF 之后的区域：
@@ -70,7 +105,6 @@ def _acquire_pack_lock(pack_dir):
                 f.close()
             except Exception:
                 pass
-        print("[tts] 语音资源包正被另一实例占用，未能获取 .tts.lock 锁", flush=True)
         return None, False
     except Exception:
         if f is not None:
@@ -78,8 +112,15 @@ def _acquire_pack_lock(pack_dir):
                 f.close()
             except Exception:
                 pass
-        print("[tts] 获取 .tts.lock 锁失败", flush=True)
         return None, False
+
+
+def _acquire_pack_lock(pack_dir):
+    """占用资源包级文件锁。返回 (lock_file, acquired)。"""
+    lock_file, acquired = _acquire_file_lock(os.path.join(pack_dir, ".tts.lock"))
+    if not acquired:
+        print("[tts] 语音资源包正被另一实例占用，未能获取 .tts.lock 锁", flush=True)
+    return lock_file, acquired
 
 
 def _release_pack_lock(lock_file):
@@ -108,6 +149,36 @@ class TTSException(Exception):
     """语音引擎相关的可读错误。"""
 
 
+def _assert_role_write_allowed(pack_dir):
+    """Reject edits while another Memo instance owns this pack's TTS lock."""
+    manager_lock = globals().get("_MANAGER_LOCK")
+    manager = None
+    if manager_lock is not None:
+        with manager_lock:
+            manager = globals().get("_MANAGER")
+            if (manager is not None and manager._pack_locked and
+                    os.path.abspath(manager.pack_dir) == os.path.abspath(pack_dir)):
+                return
+    probe, acquired = _acquire_pack_lock(pack_dir)
+    if acquired:
+        _release_pack_lock(probe)
+        return
+    raise TTSException("语音资源包正被另一个 Memo Superform 实例使用，请先关闭另一个实例后再修改角色资料")
+
+
+@contextmanager
+def _role_write_guard(pack_dir):
+    """Serialize role-manifest writes across local processes."""
+    _assert_role_write_allowed(pack_dir)
+    lock_file, acquired = _acquire_file_lock(os.path.join(pack_dir, ".roles.lock"))
+    if not acquired:
+        raise TTSException("角色资料正在由另一个实例更新，请稍后重试")
+    try:
+        yield
+    finally:
+        _release_pack_lock(lock_file)
+
+
 def _read_json(path):
     try:
         with open(path, "r", encoding="utf-8-sig") as f:
@@ -118,12 +189,25 @@ def _read_json(path):
 
 
 def _write_json(path, data):
+    temp = ""
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        # A role manifest is the single source of truth for the model, audio,
+        # and Live2D binding.  Never leave a partially-written JSON file if the
+        # process is interrupted while changing one of those bindings.
+        temp = path + "." + uuid.uuid4().hex + ".tmp"
+        with open(temp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+        os.replace(temp, path)
         return True
     except OSError:
+        if temp:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
         return False
 
 
@@ -159,6 +243,35 @@ def _coerce_enabled(value):
 
 def _coerce_str(value, default):
     return value if isinstance(value, str) and value.strip() else default
+
+
+def _default_role_persona(role_name):
+    """A complete, role-local fallback for newly created packages."""
+    name = str(role_name or "陪伴角色").strip()[:40] or "陪伴角色"
+    return {
+        "name": name,
+        "background": "你是背词学习中的陪伴角色，观察学习节奏并给出简短、真诚的鼓励。",
+        "tone": "自然、友好、克制，不打扰学习节奏。",
+        "avoid": "不要只说单个语气词，不要说教过长，不要编造成绩或使用冒犯表达。",
+        "examples": "这一题记下来就很好。|保持节奏，下一题继续。",
+    }
+
+
+def _normalize_persona(value, role_name, *, allow_empty=False):
+    """Validate the persona stored inside one role manifest."""
+    if value is None and allow_empty:
+        return {}
+    if not isinstance(value, dict):
+        raise TTSException("角色人设格式无效")
+    result = {}
+    defaults = _default_role_persona(role_name)
+    for field in _PERSONA_FIELDS:
+        raw = value.get(field, defaults[field])
+        text = str(raw or "").strip()
+        if not text or len(text) > _PERSONA_LIMITS[field]:
+            raise TTSException("角色人设字段“%s”不能为空且不能超过 %d 个字符" % (field, _PERSONA_LIMITS[field]))
+        result[field] = text
+    return result
 
 
 _TEXT_SPLIT_METHODS = {"cut0", "cut1", "cut2", "cut5"}
@@ -210,7 +323,6 @@ def _load_state(data_dir):
     state = _read_json(_state_path(data_dir)) or {}
     return {
         "enabled": _coerce_enabled(state.get("enabled")),
-        "voice": _coerce_str(state.get("voice"), "sakiko"),
         "language": _coerce_str(state.get("language"), "中英混合"),
         "speed": _coerce_speed(state.get("speed")),
     }
@@ -250,21 +362,40 @@ def _read_reference_language(path, default="中文"):
     return LANGUAGE_NUMBER_MAP.get(numbers[-1], default) if numbers else default
 
 
-def _role_status(role):
+def _role_status(role, pack_dir=None, staged_dir=None):
     missing = []
-    if not role.get("gpt_file"): missing.append("GPT 模型")
-    if not role.get("sovits_file"): missing.append("SoVITS 模型")
-    if not role.get("audio_file"): missing.append("参考音频")
+    # Uploads always use these canonical names.  Treat a hand-edited or stale
+    # manifest as incomplete instead of following an arbitrary filename.
+    if role.get("gpt_file") != "gpt.ckpt": missing.append("GPT 模型")
+    if role.get("sovits_file") != "sovits.pth": missing.append("SoVITS 模型")
+    audio_file = str(role.get("audio_file") or "")
+    # ``startswith('reference')`` is not sufficient here: a hand-edited
+    # manifest such as ``reference/../../other.wav`` would still pass it and
+    # break the role-directory boundary.  Only the exact canonical names
+    # produced by upload_role_file are valid.
+    if audio_file not in {"reference" + suffix for suffix in _ROLE_FILE_KINDS["audio"][1]}:
+        missing.append("参考音频")
     if not str(role.get("reference_text") or "").strip(): missing.append("参考文本")
     if role.get("reference_language") not in LANGUAGE_NUMBER_MAP.values(): missing.append("参考语言")
     if not role.get("live2d_model_id"): missing.append("Live2D 模型")
+    if pack_dir and not missing:
+        folder = _role_folder(pack_dir, role)
+        required = {
+            "GPT 模型": role.get("gpt_file"),
+            "SoVITS 模型": role.get("sovits_file"),
+            "参考音频": role.get("audio_file"),
+        }
+        for label, name in required.items():
+            staged = os.path.join(staged_dir, str(name)) if staged_dir else ""
+            if not ((staged and os.path.isfile(staged)) or os.path.isfile(os.path.join(folder, str(name)))):
+                missing.append(label)
     return missing
 
 
-def _public_role(role):
+def _public_role(role, pack_dir=None):
     item = dict(role)
     item.pop("folder", None)
-    item["missing"] = _role_status(item)
+    item["missing"] = _role_status(item, pack_dir)
     item["complete"] = not item["missing"]
     return item
 
@@ -277,46 +408,113 @@ def _copy_if_present(source, target):
     return False
 
 
+def _canonical_role_folder(role_id):
+    return os.path.join("roles", _safe_role_id(role_id))
+
+
+def _role_folder(pack_dir, role):
+    """Return the only allowed on-disk directory for a role.
+
+    ``folder`` remains in old manifests for migration compatibility, but is
+    deliberately not trusted when resolving assets.  This prevents a stale or
+    edited manifest from making one role consume another role's files.
+    """
+    return os.path.join(pack_dir, _canonical_role_folder(role.get("role_id")))
+
+
+def _role_stage_root(pack_dir, role_id):
+    return os.path.join(pack_dir, _canonical_role_folder(role_id), ".staging")
+
+
+def _safe_stage_id(value):
+    batch_id = str(value or "").strip().lower()
+    if not _ROLE_STAGE_ID_RE.fullmatch(batch_id):
+        raise TTSException("角色更新批次无效")
+    return batch_id
+
+
+def _role_stage_dir(pack_dir, role_id, batch_id):
+    return os.path.join(_role_stage_root(pack_dir, _safe_role_id(role_id)), _safe_stage_id(batch_id))
+
+
+def _staged_asset_fields(stage_dir):
+    """Return the exact role-manifest fields supplied by one staged update."""
+    fields = {}
+    if os.path.isfile(os.path.join(stage_dir, "gpt.ckpt")):
+        fields["gpt_file"] = "gpt.ckpt"
+    if os.path.isfile(os.path.join(stage_dir, "sovits.pth")):
+        fields["sovits_file"] = "sovits.pth"
+    if os.path.isfile(os.path.join(stage_dir, "ref.index")):
+        fields["index_file"] = "ref.index"
+    for suffix in _ROLE_FILE_KINDS["audio"][1]:
+        name = "reference" + suffix
+        if os.path.isfile(os.path.join(stage_dir, name)):
+            fields["audio_file"] = name
+            break
+    return fields
+
+
 def ensure_role_library(pack_dir):
     """Create the explicit role registry and migrate the old shared folder once.
 
     The original files are copied, never moved, so a failed/interrupted migration
     leaves the old resource pack usable.
     """
-    existing = _read_json(_roles_path(pack_dir))
-    if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
-        return existing
-    pack = _pack_meta(pack_dir) or {}
-    legacy = os.path.join(pack_dir, "reference_audio", "sakiko")
-    root = _roles_root(pack_dir)
-    sakiko_dir, anon_dir = os.path.join(root, "sakiko"), os.path.join(root, "anon")
-    os.makedirs(sakiko_dir, exist_ok=True)
-    os.makedirs(anon_dir, exist_ok=True)
-    # Original named D_sakiko assets belong to Sakiko.  Canonical gpt/sovits are
-    # previous uploads and are intentionally isolated as the Anon draft.
-    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp-e15.ckpt"), os.path.join(sakiko_dir, "gpt.ckpt"))
-    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp_e8_s520.pth"), os.path.join(sakiko_dir, "sovits.pth"))
-    _copy_if_present(os.path.join(legacy, "black_sakiko.wav"), os.path.join(sakiko_dir, "reference.wav"))
-    sakiko_text = _read_text_file(os.path.join(legacy, "reference_text_black_sakiko.txt"))
-    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "gpt.ckpt"), os.path.join(anon_dir, "gpt.ckpt"))
-    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sovits.pth"), os.path.join(anon_dir, "sovits.pth"))
-    roles = [
-        {"role_id": "sakiko", "name": "丰川祥子", "folder": "roles/sakiko", "gpt_file": "gpt.ckpt",
-         "sovits_file": "sovits.pth", "audio_file": "reference.wav", "index_file": "",
-         "reference_text": sakiko_text, "reference_language": "日文", "live2d_model_id": ""},
-        {"role_id": "anon", "name": "千早爱音", "folder": "roles/anon", "gpt_file": "gpt.ckpt",
-         "sovits_file": "sovits.pth", "audio_file": "", "index_file": "",
-         "reference_text": "", "reference_language": "", "live2d_model_id": ""},
-    ]
-    state = {"version": 1, "active_role_id": "", "roles": roles}
-    _write_json(_roles_path(pack_dir), state)
-    return state
+    with _ROLE_LIBRARY_LOCK:
+        existing = _read_json(_roles_path(pack_dir))
+        if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
+            return existing
+        with _role_write_guard(pack_dir):
+            # Another local process may have completed migration while this one
+            # waited for the write guard.
+            existing = _read_json(_roles_path(pack_dir))
+            if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
+                return existing
+            legacy = os.path.join(pack_dir, "reference_audio", "sakiko")
+            root = _roles_root(pack_dir)
+            sakiko_dir, anon_dir = os.path.join(root, "sakiko"), os.path.join(root, "anon")
+            os.makedirs(sakiko_dir, exist_ok=True)
+            os.makedirs(anon_dir, exist_ok=True)
+            # Original named D_sakiko assets belong to Sakiko.  Canonical gpt/sovits are
+            # previous uploads and are intentionally isolated as the Anon draft.
+            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp-e15.ckpt"), os.path.join(sakiko_dir, "gpt.ckpt"))
+            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp_e8_s520.pth"), os.path.join(sakiko_dir, "sovits.pth"))
+            _copy_if_present(os.path.join(legacy, "black_sakiko.wav"), os.path.join(sakiko_dir, "reference.wav"))
+            sakiko_text = _read_text_file(os.path.join(legacy, "reference_text_black_sakiko.txt"))
+            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "gpt.ckpt"), os.path.join(anon_dir, "gpt.ckpt"))
+            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sovits.pth"), os.path.join(anon_dir, "sovits.pth"))
+            roles = [
+                {"role_id": "sakiko", "name": "丰川祥子", "folder": "roles/sakiko", "gpt_file": "gpt.ckpt",
+                 "sovits_file": "sovits.pth", "audio_file": "reference.wav", "index_file": "",
+                 "reference_text": sakiko_text, "reference_language": "日文", "live2d_model_id": "",
+                 "persona": _default_role_persona("丰川祥子")},
+                {"role_id": "anon", "name": "千早爱音", "folder": "roles/anon", "gpt_file": "gpt.ckpt",
+                 "sovits_file": "sovits.pth", "audio_file": "", "index_file": "",
+                 "reference_text": "", "reference_language": "", "live2d_model_id": "",
+                 "persona": _default_role_persona("千早爱音")},
+            ]
+            state = {"version": 1, "active_role_id": "", "roles": roles}
+            _write_json(_roles_path(pack_dir), state)
+            return state
+
+
+def _role_write_operation(operation):
+    """Apply one role mutation under both process-local and file locking."""
+    @wraps(operation)
+    def wrapped(pack_dir, *args, **kwargs):
+        # Complete a one-time migration before taking the operation guard; the
+        # migration path has its own guard and lock files are not re-entrant.
+        ensure_role_library(pack_dir)
+        with _role_write_guard(pack_dir):
+            return operation(pack_dir, *args, **kwargs)
+    return wrapped
 
 
 def list_roles(pack_dir):
-    state = ensure_role_library(pack_dir)
-    active = str(state.get("active_role_id") or "")
-    return {"active_role_id": active, "roles": [_public_role(role) for role in state.get("roles") or []]}
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        active = str(state.get("active_role_id") or "")
+        return {"active_role_id": active, "roles": [_public_role(role, pack_dir) for role in state.get("roles") or []]}
 
 
 def _write_roles(pack_dir, state):
@@ -332,72 +530,391 @@ def _find_role(state, role_id):
     return role
 
 
-def save_role(pack_dir, data):
-    state = ensure_role_library(pack_dir)
+def get_role(pack_dir, role_id, *, require_complete=False):
+    """Read a declared role without ever resolving legacy pack.json voices."""
+    with _ROLE_LIBRARY_LOCK:
+        role = _find_role(ensure_role_library(pack_dir), role_id)
+        missing = _role_status(role, pack_dir)
+        if require_complete and missing:
+            raise TTSException("角色资料未配齐: " + "、".join(missing))
+        return _public_role(role, pack_dir)
+
+
+def roles_referencing_live2d(pack_dir, model_id):
+    """Return role metadata bound to a Live2D model without triggering migration.
+
+    This is used before deleting a model.  A missing registry is equivalent to
+    no role references; it must not create a new draft library as a side effect.
+    """
+    key = str(model_id or "").strip()
+    if not key:
+        return []
+    with _ROLE_LIBRARY_LOCK:
+        path = _roles_path(pack_dir)
+        if not os.path.exists(path):
+            return []
+        state = _read_json(path)
+        if not isinstance(state, dict) or not isinstance(state.get("roles"), list):
+            # Deletion must fail closed.  An unreadable manifest cannot prove a
+            # model is unused, and deleting it would invalidate an unknown role.
+            raise TTSException("角色配置损坏，无法确认 Live2D 模型是否仍被绑定")
+        roles = state["roles"]
+        return [
+            {"role_id": str(role.get("role_id") or ""), "name": str(role.get("name") or role.get("role_id") or "")}
+            for role in roles
+            if isinstance(role, dict) and str(role.get("live2d_model_id") or "") == key
+        ]
+
+
+def role_library_snapshot(pack_dir):
+    """Internal API transaction snapshot for coordinated Live2D changes."""
+    with _ROLE_LIBRARY_LOCK:
+        return copy.deepcopy(ensure_role_library(pack_dir))
+
+
+@_role_write_operation
+def restore_role_library(pack_dir, snapshot):
+    """Restore a previously captured registry after a paired service failed."""
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("roles"), list):
+        raise TTSException("角色配置回滚数据无效")
+    with _ROLE_LIBRARY_LOCK:
+        _reset_manager()
+        _write_roles(pack_dir, copy.deepcopy(snapshot))
+
+
+def _candidate_role(pack_dir, state, data, *, staged_dir=None, check_active=True):
+    """Validate metadata changes without writing them to the registry."""
     role_id = _safe_role_id(data.get("role_id"))
     name = str(data.get("name") or "").strip()
     if not name or len(name) > 64:
         raise TTSException("角色名称不能为空且不能超过 64 个字符")
-    role = next((item for item in state["roles"] if item.get("role_id") == role_id), None)
-    if role is None:
-        role = {"role_id": role_id, "folder": "roles/" + role_id, "gpt_file": "", "sovits_file": "", "audio_file": "", "index_file": ""}
-        state["roles"].append(role)
-    role.update({"name": name, "reference_text": str(data.get("reference_text") or "").strip(),
-                 "reference_language": str(data.get("reference_language") or "").strip(),
-                 "live2d_model_id": str(data.get("live2d_model_id") or "").strip()})
-    _write_roles(pack_dir, state)
-    _reset_manager()
-    return _public_role(role)
+    existing = next((item for item in state.get("roles") or [] if item.get("role_id") == role_id), None)
+    candidate = dict(existing or {
+        "role_id": role_id, "folder": _canonical_role_folder(role_id),
+        "gpt_file": "", "sovits_file": "", "audio_file": "", "index_file": "", "persona": {},
+    })
+    # The folder is not user-configurable.  This preserves the role package
+    # invariant even for manifests created by older app versions.
+    candidate["folder"] = _canonical_role_folder(role_id)
+    candidate.update({"name": name, "reference_text": str(data.get("reference_text") or "").strip(),
+                      "reference_language": str(data.get("reference_language") or "").strip(),
+                      "live2d_model_id": str(data.get("live2d_model_id") or "").strip()})
+    if "persona" in data:
+        candidate["persona"] = _normalize_persona(data.get("persona"), name)
+    elif existing is None:
+        candidate["persona"] = _default_role_persona(name)
+    elif not isinstance(candidate.get("persona"), dict):
+        # Existing pre-v0.77 manifests are migrated by the frontend using the
+        # browser's old character-id overrides.  Keep an explicit empty marker
+        # until that lossless migration can write the role-local value.
+        candidate["persona"] = {}
+    if check_active and state.get("active_role_id") == role_id:
+        missing = _role_status(candidate, pack_dir, staged_dir)
+        if missing:
+            raise TTSException("当前已启用角色不能保存为未完成状态: " + "、".join(missing))
+    return existing, candidate
 
 
+def preview_role_save(pack_dir, data):
+    """Validate a role edit before another service changes its own binding."""
+    with _ROLE_LIBRARY_LOCK:
+        _, candidate = _candidate_role(pack_dir, ensure_role_library(pack_dir), data)
+        return _public_role(candidate, pack_dir)
+
+
+@_role_write_operation
+def save_role(pack_dir, data, *, after_commit=None):
+    """Persist role metadata, optionally pairing an active-role side effect.
+
+    ``after_commit`` is deliberately executed while the role write lock is
+    still held.  The local API uses it to move the corresponding Live2D
+    preference in the same logical transaction, so two rapid role changes
+    cannot leave the TTS manifest and renderer pointing at different roles.
+    """
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        before = copy.deepcopy(state)
+        existing, candidate = _candidate_role(pack_dir, state, data)
+        is_active = state.get("active_role_id") == candidate["role_id"]
+        if is_active:
+            # Stop the old worker before its manifest changes.  A request that
+            # starts after this lock is released must construct a worker for the
+            # new role data rather than reuse cached model weights.
+            _reset_manager()
+        if existing is None:
+            state["roles"].append(candidate)
+            role = candidate
+        else:
+            existing.clear()
+            existing.update(candidate)
+            role = existing
+        _write_roles(pack_dir, state)
+        public = _public_role(role, pack_dir)
+        if after_commit:
+            try:
+                after_commit(public)
+            except Exception:
+                _write_roles(pack_dir, before)
+                _reset_manager()
+                raise
+    return public
+
+
+@_role_write_operation
+def update_role_persona(pack_dir, role_id, persona):
+    """Persist one role's companion persona without touching TTS assets."""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        role["persona"] = _normalize_persona(persona, role.get("name"))
+        _write_roles(pack_dir, state)
+        return _public_role(role, pack_dir)
+
+
+@_role_write_operation
 def upload_role_file(pack_dir, role_id, kind, filename, data):
-    state = ensure_role_library(pack_dir)
-    role = _find_role(state, role_id)
-    kind = str(kind or "").lower()
-    if kind not in _ROLE_FILE_KINDS or not data:
-        raise TTSException("不支持的角色文件类型或文件为空")
-    target_name, suffixes = _ROLE_FILE_KINDS[kind]
-    suffix = os.path.splitext(str(filename or ""))[1].lower()
-    if suffix not in suffixes:
-        raise TTSException("文件扩展名与类型不匹配")
-    if kind == "audio": target_name += suffix
-    folder = os.path.join(pack_dir, role["folder"])
-    os.makedirs(folder, exist_ok=True)
-    target = os.path.join(folder, target_name)
-    temp = target + ".tmp"
-    with open(temp, "wb") as out:
-        out.write(data)
-        out.flush()
-    os.replace(temp, target)
-    role[{"ckpt": "gpt_file", "pth": "sovits_file", "index": "index_file", "audio": "audio_file"}[kind]] = target_name
-    _write_roles(pack_dir, state)
-    _reset_manager()
-    return _public_role(role)
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        kind = str(kind or "").lower()
+        if kind not in _ROLE_FILE_KINDS or not data:
+            raise TTSException("不支持的角色文件类型或文件为空")
+        target_name, suffixes = _ROLE_FILE_KINDS[kind]
+        suffix = os.path.splitext(str(filename or ""))[1].lower()
+        if suffix not in suffixes:
+            raise TTSException("文件扩展名与类型不匹配")
+        if kind == "audio": target_name += suffix
+        folder = _role_folder(pack_dir, role)
+        if state.get("active_role_id") == role["role_id"]:
+            _reset_manager()
+        os.makedirs(folder, exist_ok=True)
+        target = os.path.join(folder, target_name)
+        temp = target + ".tmp"
+        with open(temp, "wb") as out:
+            out.write(data)
+            out.flush()
+        os.replace(temp, target)
+        role[{"ckpt": "gpt_file", "pth": "sovits_file", "index": "index_file", "audio": "audio_file"}[kind]] = target_name
+        role["folder"] = _canonical_role_folder(role["role_id"])
+        _write_roles(pack_dir, state)
+    return _public_role(role, pack_dir)
 
 
+@_role_write_operation
+def begin_role_update(pack_dir, role_id):
+    """Open a private staging area for an atomic active-role update."""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        batch_id = uuid.uuid4().hex
+        stage_dir = _role_stage_dir(pack_dir, role["role_id"], batch_id)
+        os.makedirs(stage_dir, exist_ok=False)
+        return batch_id
+
+
+@_role_write_operation
+def stage_role_file(pack_dir, role_id, batch_id, kind, filename, data):
+    """Store one proposed asset without touching the live role package."""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        stage_dir = _role_stage_dir(pack_dir, role["role_id"], batch_id)
+        if not os.path.isdir(stage_dir):
+            raise TTSException("角色更新批次不存在或已结束")
+        kind = str(kind or "").lower()
+        if kind not in _ROLE_FILE_KINDS or not data:
+            raise TTSException("不支持的角色文件类型或文件为空")
+        target_name, suffixes = _ROLE_FILE_KINDS[kind]
+        suffix = os.path.splitext(str(filename or ""))[1].lower()
+        if suffix not in suffixes:
+            raise TTSException("文件扩展名与类型不匹配")
+        if kind == "audio":
+            # A staged package has exactly one reference track.  This makes an
+            # audio re-selection within one editor save deterministic.
+            for old_suffix in _ROLE_FILE_KINDS["audio"][1]:
+                old = os.path.join(stage_dir, "reference" + old_suffix)
+                if os.path.isfile(old):
+                    os.unlink(old)
+            target_name += suffix
+        target = os.path.join(stage_dir, target_name)
+        temp = target + ".tmp"
+        with open(temp, "wb") as out:
+            out.write(data)
+            out.flush()
+        os.replace(temp, target)
+        return {"batch_id": _safe_stage_id(batch_id), "kind": kind, "file": target_name}
+
+
+@_role_write_operation
+def discard_role_update(pack_dir, role_id, batch_id):
+    """Remove an uncommitted private staging area after a failed UI save."""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        stage_dir = _role_stage_dir(pack_dir, role["role_id"], batch_id)
+        if os.path.isdir(stage_dir):
+            shutil.rmtree(stage_dir)
+        return True
+
+
+def _restore_staged_assets(stage_dir, applied, backups):
+    """Undo a partly applied staged update and retain files for retry."""
+    restored = set()
+    for target in reversed(applied):
+        try:
+            if os.path.isfile(target):
+                os.replace(target, os.path.join(stage_dir, os.path.basename(target)))
+        except OSError:
+            pass
+        backup = backups.get(target)
+        if backup and os.path.isfile(backup):
+            try:
+                os.replace(backup, target)
+                restored.add(target)
+            except OSError:
+                pass
+    # A replace can fail after the old canonical file has already been moved
+    # into ``.rollback`` but before the new staged file was recorded in
+    # ``applied``.  Restore those untouched backups too; otherwise a failed
+    # transaction can leave roles.json pointing at a vanished old asset.
+    for target, backup in backups.items():
+        if target in restored or not os.path.isfile(backup):
+            continue
+        try:
+            if not os.path.isfile(target):
+                os.replace(backup, target)
+        except OSError:
+            pass
+
+
+def _apply_staged_assets(folder, stage_dir, fields):
+    """Atomically swap staged canonical files into a role folder.
+
+    Replacing each file is an OS-level atomic rename; old files are retained in
+    the stage directory until the manifest and paired Live2D update succeed.
+    """
+    backup_dir = os.path.join(stage_dir, ".rollback")
+    os.makedirs(backup_dir, exist_ok=True)
+    applied, backups = [], {}
+    try:
+        for field in ("gpt_file", "sovits_file", "index_file", "audio_file"):
+            name = fields.get(field)
+            if not name:
+                continue
+            staged = os.path.join(stage_dir, name)
+            target = os.path.join(folder, name)
+            if not os.path.isfile(staged):
+                continue
+            backup = os.path.join(backup_dir, name)
+            if os.path.isfile(target):
+                os.replace(target, backup)
+                backups[target] = backup
+            os.replace(staged, target)
+            applied.append(target)
+        return applied, backups
+    except Exception:
+        _restore_staged_assets(stage_dir, applied, backups)
+        raise
+
+
+@_role_write_operation
+def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
+    """Commit staged role assets, metadata, and an optional paired callback.
+
+    The callback is used by the HTTP layer to update the matching Live2D
+    preference.  A callback failure rolls back both the manifest and every
+    asset rename, so an active role never persists a half-new package.
+    """
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        batch_id = _safe_stage_id(batch_id)
+        stage_dir = _role_stage_dir(pack_dir, role["role_id"], batch_id)
+        if not os.path.isdir(stage_dir):
+            raise TTSException("角色更新批次不存在或已结束")
+        if _safe_role_id(data.get("role_id")) != role["role_id"]:
+            raise TTSException("角色更新目标不一致")
+        existing, candidate = _candidate_role(pack_dir, state, data, check_active=False)
+        staged_fields = _staged_asset_fields(stage_dir)
+        candidate.update(staged_fields)
+        candidate["folder"] = _canonical_role_folder(candidate["role_id"])
+        is_active = state.get("active_role_id") == candidate["role_id"]
+        if is_active:
+            missing = _role_status(candidate, pack_dir, stage_dir)
+            if missing:
+                raise TTSException("当前已启用角色不能保存为未完成状态: " + "、".join(missing))
+            # Reset under the role lock before exposing the new manifest, so
+            # later requests cannot reuse the old model cache with new files.
+            _reset_manager()
+        before = copy.deepcopy(state)
+        folder = _role_folder(pack_dir, candidate)
+        os.makedirs(folder, exist_ok=True)
+        applied, backups = _apply_staged_assets(folder, stage_dir, staged_fields)
+        try:
+            if existing is None:
+                state["roles"].append(candidate)
+                committed = candidate
+            else:
+                existing.clear()
+                existing.update(candidate)
+                committed = existing
+            _write_roles(pack_dir, state)
+            public = _public_role(committed, pack_dir)
+            if after_commit:
+                after_commit(public)
+        except Exception:
+            try:
+                _write_roles(pack_dir, before)
+            finally:
+                _restore_staged_assets(stage_dir, applied, backups)
+            raise
+        try:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        except OSError:
+            pass
+        return public
+
+
+@_role_write_operation
 def delete_role(pack_dir, role_id):
-    state = ensure_role_library(pack_dir)
-    role = _find_role(state, role_id)
-    if role.get("role_id") == "sakiko":
-        raise TTSException("默认迁移角色不可删除")
-    state["roles"].remove(role)
-    if state.get("active_role_id") == role["role_id"]:
-        state["active_role_id"] = ""
-    _write_roles(pack_dir, state)
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        if state.get("active_role_id") == role["role_id"]:
+            raise TTSException("不能删除当前已启用角色；请先启用另一位资料完整的角色")
+        if role.get("role_id") == "sakiko":
+            raise TTSException("默认迁移角色不可删除")
+        state["roles"].remove(role)
+        _write_roles(pack_dir, state)
     _reset_manager()
     return True
 
 
-def activate_role(pack_dir, role_id):
-    state = ensure_role_library(pack_dir)
-    role = _find_role(state, role_id)
-    missing = _role_status(role)
-    if missing:
-        raise TTSException("角色资料未配齐: " + "、".join(missing))
-    state["active_role_id"] = role["role_id"]
-    _write_roles(pack_dir, state)
-    _reset_manager()
-    return _public_role(role)
+@_role_write_operation
+def activate_role(pack_dir, role_id, *, after_commit=None):
+    """Activate a complete role and pair any dependent state atomically."""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        before = copy.deepcopy(state)
+        role = _find_role(state, role_id)
+        missing = _role_status(role, pack_dir)
+        if missing:
+            raise TTSException("角色资料未配齐: " + "、".join(missing))
+        # Ensure the manifest's exact paths exist before committing the active
+        # role.  A role with a stale manifest must never become the fallback.
+        _resolve_role(pack_dir, role["role_id"])
+        _reset_manager()
+        state["active_role_id"] = role["role_id"]
+        _write_roles(pack_dir, state)
+        public = _public_role(role, pack_dir)
+        if after_commit:
+            try:
+                after_commit(public)
+            except Exception:
+                _write_roles(pack_dir, before)
+                _reset_manager()
+                raise
+    return public
 
 
 def _install_meta(pack_dir):
@@ -407,6 +924,163 @@ def _install_meta(pack_dir):
 def _venv_python(pack_dir):
     # 仅支持 Windows（Linux 支持已归档到 codex/linux-archived，不再维护）
     return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
+
+
+def _engine_dependency_status(pack_dir, *, force=False):
+    """Return ``(ready, reason, missing_modules)`` for the worker runtime.
+
+    A resource pack used to declare itself installed as soon as setup wrote
+    install.json.  That misses interrupted uv/pip installs (and specifically
+    a missing Japanese ``pyopenjtalk`` module), which then only surfaces after
+    a user touches the character.  Probe imports in the pack's own interpreter
+    and cache briefly so normal status refreshes remain inexpensive.
+    """
+    pack_dir = os.path.abspath(pack_dir)
+    python_exe = os.path.abspath(_venv_python(pack_dir))
+    try:
+        stamp = os.path.getmtime(python_exe)
+    except OSError:
+        stamp = None
+    key = os.path.abspath(pack_dir)
+    now = time.monotonic()
+    with _ENGINE_PROBE_LOCK:
+        cached = _ENGINE_PROBE_CACHE.get(key)
+        if (not force and cached and cached.get("stamp") == stamp and
+                now - cached.get("checked_at", 0) < _ENGINE_PROBE_TTL):
+            return cached["ready"], cached["reason"], list(cached["missing"])
+
+    imports_json = json.dumps(list(_ENGINE_IMPORT_PACKAGES), ensure_ascii=True)
+    probe = (
+        "import importlib,json\n"
+        "missing=[]\n"
+        "for name in " + imports_json + ":\n"
+        "    try:\n"
+        "        importlib.import_module(name)\n"
+        "    except Exception as exc:\n"
+        "        missing.append([name, str(exc)])\n"
+        "print('__MEMO_TTS_PROBE__'+json.dumps(missing, ensure_ascii=True))\n"
+    )
+    missing, detail = [], ""
+    try:
+        completed = subprocess.run(
+            [python_exe, "-c", probe], cwd=pack_dir, text=True,
+            encoding="utf-8", errors="replace", stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=25,
+        )
+        output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+        marker = "__MEMO_TTS_PROBE__"
+        line = next((item for item in reversed(output.splitlines()) if marker in item), "")
+        if line:
+            try:
+                decoded = json.loads(line.split(marker, 1)[1])
+                missing = [str(item[0]) for item in decoded if isinstance(item, list) and item]
+                detail = "; ".join(
+                    "%s: %s" % (str(item[0]), str(item[1]))
+                    for item in decoded if isinstance(item, list) and len(item) > 1
+                )
+            except (TypeError, ValueError):
+                detail = "依赖检查返回了无法解析的结果"
+        elif completed.returncode:
+            detail = (completed.stderr or completed.stdout or "Python 依赖检查失败").strip()[-500:]
+        else:
+            detail = "依赖检查没有返回结果"
+    except subprocess.TimeoutExpired:
+        detail = "语音环境依赖检查超时"
+    except OSError as exc:
+        detail = "无法启动语音环境检查：%s" % exc
+
+    ready = not missing and not detail
+    if not ready:
+        labels = "、".join(missing) if missing else "运行时"
+        reason = "语音环境缺少或无法加载依赖（%s）；请点击“修复语音环境”" % labels
+        if detail:
+            reason += "。" + detail[:320]
+    else:
+        reason = ""
+    with _ENGINE_PROBE_LOCK:
+        _ENGINE_PROBE_CACHE[key] = {
+            "stamp": stamp, "checked_at": now, "ready": ready,
+            "reason": reason, "missing": list(missing),
+        }
+    return ready, reason, missing
+
+
+def repair_environment(pack_dir, data_dir):
+    """Repair missing worker packages in place and verify them afterwards.
+
+    This intentionally installs into *the resource pack's* venv.  It never
+    touches the application's Python environment or model/reference files.
+    """
+    if not _ENGINE_REPAIR_LOCK.acquire(blocking=False):
+        raise TTSException("语音环境正在修复，请等待当前任务结束")
+    try:
+        pack_dir = os.path.abspath(pack_dir)
+        data_dir = os.path.abspath(data_dir)
+        python_exe = os.path.abspath(_venv_python(pack_dir))
+        if not os.path.exists(python_exe):
+            raise TTSException("未找到 .venv311 解释器，请先运行资源包 setup.bat")
+        if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
+            raise TTSException("资源包缺少 tts_engine/worker_main.py")
+        _ready, _reason, missing = _engine_dependency_status(pack_dir, force=True)
+        if _ready:
+            return {"ok": True, "message": "语音环境已完整，无需修复", "installed": []}
+        _assert_role_write_allowed(pack_dir)
+        _reset_manager()
+        state = _load_state(data_dir)
+        # Do not leave a previously working companion silently disabled after
+        # a successful in-place repair.  It is temporarily stopped while its
+        # interpreter changes, then restored to the user's prior choice only
+        # after the subprocess probe proves the runtime is usable again.
+        was_enabled = bool(state.get("enabled"))
+        state["enabled"] = False
+        _save_state(data_dir, state)
+        packages = [
+            _ENGINE_IMPORT_PACKAGES[name] for name in missing
+            if name in _ENGINE_IMPORT_PACKAGES
+        ]
+        # ``pyopenjtalk`` is the known Japanese runtime requirement and must
+        # use its prebuilt Windows-compatible distribution even if an import
+        # probe was interrupted before it could list the module.
+        japanese_package = _ENGINE_IMPORT_PACKAGES["pyopenjtalk"]
+        if japanese_package not in packages:
+            packages.append(japanese_package)
+        if not packages:
+            raise TTSException("未能识别需要修复的语音依赖：" + (_reason or "请重新运行资源包 setup.bat"))
+
+        uv = shutil.which("uv")
+        if uv:
+            command = [uv, "pip", "install", "--python", python_exe, *packages]
+        else:
+            bootstrap = subprocess.run(
+                [python_exe, "-m", "ensurepip", "--upgrade"], cwd=pack_dir,
+                text=True, encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180,
+            )
+            if bootstrap.returncode:
+                raise TTSException("无法准备资源包 pip：" + (bootstrap.stdout or "")[-500:])
+            command = [python_exe, "-m", "pip", "install", "--disable-pip-version-check", *packages]
+        try:
+            installed = subprocess.run(
+                command, cwd=pack_dir, text=True, encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900,
+            )
+        except subprocess.TimeoutExpired:
+            raise TTSException("语音环境修复超时，请检查网络后重试")
+        if installed.returncode:
+            raise TTSException("语音环境修复失败：" + (installed.stdout or "")[-900:])
+        ready, reason, still_missing = _engine_dependency_status(pack_dir, force=True)
+        if not ready:
+            raise TTSException("修复后语音环境仍不可用：" + (reason or "、".join(still_missing)))
+        state["enabled"] = was_enabled
+        _save_state(data_dir, state)
+        return {
+            "ok": True,
+            "message": "语音环境已修复" + ("，已恢复此前的语音开关。" if was_enabled else "。"),
+            "installed": packages,
+            "enabled": was_enabled,
+        }
+    finally:
+        _ENGINE_REPAIR_LOCK.release()
 
 
 def _write_install_meta(pack_dir, source="ModelScope"):
@@ -426,7 +1100,7 @@ def _write_install_meta(pack_dir, source="ModelScope"):
 
 
 def _engine_ready(pack_dir):
-    """install.json 存在且 venv 解释器存在即认为引擎就绪。
+    """Validate install metadata, worker files, and imports before synthesis.
 
     install.json 只是安装完成标记；若它丢失但环境实际完整
     （venv 解释器与 worker 均存在），自动重建标记，避免用户误以为功能损坏。
@@ -443,23 +1117,10 @@ def _engine_ready(pack_dir):
         return False, "未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat）"
     if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
         return False, "资源包缺少 tts_engine/worker_main.py，资源包不完整"
+    dependency_ready, dependency_reason, _missing = _engine_dependency_status(pack_dir)
+    if not dependency_ready:
+        return False, dependency_reason
     return True, ""
-
-
-def _first_file(directory, patterns):
-    if not os.path.isdir(directory):
-        return None
-    try:
-        names = sorted(os.listdir(directory))
-    except OSError:
-        return None
-    suffixes = tuple(p.lower() for p in patterns)
-    for name in names:
-        if name.lower().endswith(suffixes):
-            full = os.path.join(directory, name)
-            if os.path.isfile(full):
-                return full
-    return None
 
 
 def _read_text_file(path):
@@ -468,72 +1129,6 @@ def _read_text_file(path):
             return f.read().strip()
     except OSError:
         return ""
-
-
-def _find_matching_ref_text(folder, ref_audio, voice):
-    """参考文本文件名不固定时（如 reference_text_black_sakiko.txt），
-    按参考音频文件名自动匹配。"""
-    if not ref_audio:
-        return ""
-    stem = os.path.splitext(os.path.basename(ref_audio))[0].lower()
-    try:
-        names = sorted(os.listdir(folder))
-    except OSError:
-        return ""
-    # 1) 文件名包含参考音频主干（如 black_sakiko）
-    for name in names:
-        low = name.lower()
-        if low.endswith(".txt") and "language" not in low and stem in low:
-            return _read_text_file(os.path.join(folder, name))
-    # 2) 任意 reference_text*.txt
-    for name in names:
-        low = name.lower()
-        if low.startswith("reference_text") and low.endswith(".txt"):
-            return _read_text_file(os.path.join(folder, name))
-    return ""
-
-
-def _resolve_voice(pack_dir, pack, voice_name):
-    """解析音色配置：返回 worker voice 字典；缺失文件时抛出 TTSException。"""
-    voices = pack.get("voices") or []
-    voice = next((v for v in voices if v.get("name") == voice_name), None)
-    if voice is None:
-        raise TTSException("未找到音色: %s" % voice_name)
-
-    folder = os.path.join(pack_dir, voice.get("folder", ""))
-    model_dir = os.path.join(folder, voice.get("model_dir", "GPT-SoVITS_models"))
-    ckpt = _first_file(model_dir, (".ckpt",))
-    pth = _first_file(model_dir, (".pth",))
-    ref_audio = _first_file(folder, (".wav", ".mp3", ".flac", ".ogg"))
-    ref_text_path = os.path.join(folder, voice.get("ref_text", "reference_text.txt"))
-    ref_text = _read_text_file(ref_text_path)
-    if not ref_text:
-        ref_text = _find_matching_ref_text(folder, ref_audio, voice)
-    ref_lan = voice.get("ref_language") or "中文"
-    lan_file = os.path.join(folder, voice.get("ref_language_file", "reference_audio_language.txt"))
-    ref_lan = _read_reference_language(lan_file, ref_lan)
-
-    missing = []
-    if not ckpt:
-        missing.append("GPT-SoVITS_models/*.ckpt")
-    if not pth:
-        missing.append("GPT-SoVITS_models/*.pth")
-    if not ref_audio:
-        missing.append("参考音频 (*.wav/*.mp3)")
-    if not ref_text:
-        missing.append("reference_text.txt")
-    if missing:
-        raise TTSException("音色 %s 不完整，缺少: %s" % (voice_name, "、".join(missing)))
-
-    return {
-        "name": voice_name,
-        "folder": voice.get("folder", ""),
-        "gpt_model_path": ckpt,
-        "sovits_model_path": pth,
-        "ref_audio_path": ref_audio,
-        "prompt_text": ref_text,
-        "ref_language": ref_lan,
-    }
 
 
 def _resolve_role(pack_dir, role_id=None):
@@ -546,7 +1141,7 @@ def _resolve_role(pack_dir, role_id=None):
     missing = _role_status(role)
     if missing:
         raise TTSException("角色资料未配齐: " + "、".join(missing))
-    folder = os.path.join(pack_dir, role["folder"])
+    folder = _role_folder(pack_dir, role)
     paths = {
         "gpt_model_path": os.path.join(folder, role["gpt_file"]),
         "sovits_model_path": os.path.join(folder, role["sovits_file"]),
@@ -554,7 +1149,7 @@ def _resolve_role(pack_dir, role_id=None):
     }
     if not all(os.path.isfile(path) for path in paths.values()):
         raise TTSException("角色资料文件缺失，请重新上传")
-    return {"name": role["role_id"], "folder": role["folder"], **paths,
+    return {"name": role["role_id"], "folder": _canonical_role_folder(role["role_id"]), **paths,
             "prompt_text": role["reference_text"], "ref_language": role["reference_language"]}
 
 
@@ -574,39 +1169,14 @@ def clean_text(text):
     return cleaned
 
 
-_MODEL_FILE_KINDS = {
-    "ckpt": (".ckpt", "gpt.ckpt"),
-    "pth": (".pth", "sovits.pth"),
-    "index": (".index", "ref.index"),
-}
-
-
 def import_model_file(pack_dir, voice_name, kind, data):
-    """把一个 GPT-SoVITS 模型文件写入对应音色的模型目录。
+    """Compatibility sentinel for callers from pre-role-package releases.
 
-    kind 为 ckpt/pth/index；data 为该文件的原始字节。返回写入路径。
+    The old endpoint wrote directly into an arbitrary ``pack.json`` voice
+    folder, which could silently pair a new model with another role's audio.
+    Keep a callable name for extension compatibility, but perform no write.
     """
-    if kind not in _MODEL_FILE_KINDS:
-        raise TTSException("未知模型文件类型: %s" % kind)
-    if not data:
-        raise TTSException("文件内容为空")
-    pack = _pack_meta(pack_dir)
-    if not pack:
-        raise TTSException("语音资源包未就绪（缺少 pack.json）")
-    voice = next((v for v in (pack.get("voices") or []) if v.get("name") == voice_name), None)
-    if voice is None:
-        raise TTSException("未找到音色: %s" % voice_name)
-    folder = str(voice.get("folder") or "")
-    model_dir = os.path.join(pack_dir, folder, voice.get("model_dir", "GPT-SoVITS_models"))
-    os.makedirs(model_dir, exist_ok=True)
-    _, target_name = _MODEL_FILE_KINDS[kind]
-    target = os.path.join(model_dir, target_name)
-    tmp = target + ".tmp"
-    with open(tmp, "wb") as out:
-        out.write(data)
-        out.flush()
-    os.replace(tmp, target)
-    return target
+    raise TTSException("旧模型上传入口已移除；请通过角色资料上传 GPT、SoVITS 或 index 文件")
 
 
 class TTSManager:
@@ -780,13 +1350,13 @@ class TTSManager:
             except Exception as exc:
                 # 进程崩溃等情况：重启一次再试
                 try:
-                    self._shutdown_process()
+                    self._shutdown_process(release_lock=False)
                 except Exception:
                     pass
                 self._ensure_started()
                 return self._send(command, timeout=timeout)
 
-    def _shutdown_process(self):
+    def _shutdown_process(self, release_lock=True):
         proc = self._proc
         self._proc = None
         try:
@@ -809,9 +1379,13 @@ class TTSManager:
                 except Exception:
                     pass
         finally:
-            # 无论 proc 是否为 None 都必须释放资源包锁，避免句柄泄漏
-            _release_pack_lock(self._lock_file)
-            self._lock_file = None
+            # A full shutdown releases the resource-pack lock.  The internal
+            # restart path deliberately keeps it, otherwise the same manager
+            # would mistake its own released lock for another app instance.
+            if release_lock:
+                _release_pack_lock(self._lock_file)
+                self._lock_file = None
+                self._pack_locked = False
 
     # ---------- 对外操作 ----------
 
@@ -835,13 +1409,26 @@ class TTSManager:
             "parallel_infer": _coerce_bool(parallel_infer, False),
         }
         self._busy = True
+        cold_start = not bool(self._last_status.get("is_loaded"))
+        timeout = _COLD_START_TIMEOUT if cold_start else _SYNTH_TIMEOUT
         try:
-            result = self._call({
-                "type": "synthesize",
-                "character_name": voice_name,
-                "voice": voice,
-                "payload": payload,
-            }, timeout=_SYNTH_TIMEOUT)
+            try:
+                result = self._call({
+                    "type": "synthesize",
+                    "character_name": voice_name,
+                    "voice": voice,
+                    "payload": payload,
+                }, timeout=timeout)
+            except TTSException as exc:
+                # Preserve the worker reset performed by ``_call``, but tell
+                # the user whether this was an ordinary synthesis timeout or a
+                # genuinely slow/failed cold model load.
+                if cold_start and "响应超时" in str(exc):
+                    raise TTSException(
+                        "语音引擎首次加载超过 %d 秒（已重置，请使用“预加载已启用角色模型”后重试）"
+                        % int(timeout)
+                    )
+                raise
         finally:
             self._busy = False
         if result.get("type") == "error":
@@ -852,7 +1439,7 @@ class TTSManager:
         self._last_status["is_loaded"] = True
         return wav_path
 
-    def preload(self, voice_name="sakiko"):
+    def preload(self, voice_name):
         try:
             voice = self._resolve_voice_config(voice_name)
         except TTSException:
@@ -864,7 +1451,7 @@ class TTSManager:
                 "character_name": voice_name,
                 "voice": voice,
                 "payload": {},
-            })
+            }, timeout=_COLD_START_TIMEOUT)
         finally:
             self._busy = False
         if result.get("type") == "error":
@@ -883,7 +1470,12 @@ class TTSManager:
             "sovits_model_path": voice.get("sovits_model_path"),
         }
 
-    def worker_status(self, voice_name="sakiko"):
+    def worker_status(self, voice_name=None):
+        # Surface a competing Memo instance during status refresh.  Returning
+        # a harmless-looking unloaded status here used to let the UI claim
+        # voice was enabled, only for the first touch to fail on the lock.
+        self._check_pack_lock()
+        voice_name = voice_name or _active_role_for_request(self.pack_dir)
         try:
             voice = self._resolve_voice_config(voice_name)
         except TTSException:
@@ -919,18 +1511,10 @@ class TTSManager:
             self._shutdown_process()
 
     def _resolve_voice_config(self, voice_name):
-        # A role id is the modern, explicit configuration.  Keep the legacy
-        # pack resolver only for compatibility with old callers/tests.
-        try:
-            return _resolve_role(self.pack_dir, voice_name)
-        except TTSException as role_error:
-            state = _read_json(_roles_path(self.pack_dir))
-            if state and any(item.get("role_id") == str(voice_name or "") for item in state.get("roles") or []):
-                raise role_error
-        pack = _pack_meta(self.pack_dir)
-        if not pack:
-            raise TTSException("未检测到语音资源包")
-        return _resolve_voice(self.pack_dir, pack, voice_name)
+        # There is exactly one resolver now: the role manifest.  In
+        # particular, do not fall back to the legacy pack.json directory or
+        # choose the first matching .wav/.ckpt/.pth file.
+        return _resolve_role(self.pack_dir, voice_name)
 
 
 _MANAGER = None
@@ -942,22 +1526,91 @@ def _reset_manager():
     global _MANAGER
     with _MANAGER_LOCK:
         manager, _MANAGER = _MANAGER, None
-    if manager is not None:
-        try:
-            manager.shutdown()
-        except Exception:
-            pass
+        # Keep the lifecycle lock until the old manager has actually released
+        # `.tts.lock`.  Otherwise another request can install a new manager in
+        # the tiny gap, fail to acquire the old lock, and remain poisoned after
+        # the shutdown finishes.
+        if manager is not None:
+            try:
+                manager.shutdown()
+            except Exception:
+                pass
 
 
 def _get_manager(pack_dir, data_dir):
     global _MANAGER
     with _MANAGER_LOCK:
+        if (_MANAGER is not None and
+                (os.path.abspath(_MANAGER.pack_dir) != os.path.abspath(pack_dir) or
+                 os.path.abspath(_MANAGER.data_dir) != os.path.abspath(data_dir))):
+            # Module-level manager state is shared by in-process tests and by
+            # a possible data-directory switch.  Never reuse a worker or lock
+            # acquired for another resource pack.
+            try:
+                _MANAGER.shutdown()
+            except Exception:
+                pass
+            _MANAGER = None
+        if _MANAGER is not None and not _MANAGER._pack_locked:
+            # A failed acquisition is never a reusable manager.  Drop it so a
+            # later request can acquire the lock after the other app exits.
+            try:
+                _MANAGER.shutdown()
+            except Exception:
+                pass
+            _MANAGER = None
         if _MANAGER is None:
             _MANAGER = TTSManager(pack_dir, data_dir)
         return _MANAGER
 
 
+def _manager_for_pack(pack_dir):
+    """Return this process's live manager without acquiring a new pack lock."""
+    with _MANAGER_LOCK:
+        manager = _MANAGER
+        if manager is not None and os.path.abspath(manager.pack_dir) == os.path.abspath(pack_dir):
+            return manager
+    return None
+
+
+def _check_pack_runtime_available(pack_dir):
+    """Probe another process's lock without retaining it for a status read."""
+    manager = _manager_for_pack(pack_dir)
+    if manager is not None:
+        manager._check_pack_lock()
+        return manager
+    probe, acquired = _acquire_pack_lock(pack_dir)
+    if not acquired:
+        raise TTSException("语音资源包正被另一个 Memo Superform 实例使用，请先关闭其它 Memo Superform 实例")
+    _release_pack_lock(probe)
+    return None
+
+
 # ---------- 供 server.py 调用的模块级接口 ----------
+
+def _active_role_for_request(pack_dir, requested_role=None):
+    """Return the only role permitted to synthesize or preload.
+
+    ``voice`` used to select an arbitrary legacy pack.json voice.  It is now
+    accepted only when it matches the current manifest's active role, so a
+    stale dropdown or old client cannot revive a previous character's model.
+    """
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        active = str(state.get("active_role_id") or "").strip()
+        if not active:
+            raise TTSException("请先在设置中启用一个资料完整的角色")
+        requested = str(requested_role or "").strip()
+        if requested and requested != active:
+            raise TTSException("语音仅使用当前已启用角色；请先切换并启用所选角色")
+        _resolve_role(pack_dir, active)
+        return active
+
+
+def _active_role_status(role_library):
+    active_id = str(role_library.get("active_role_id") or "")
+    active = next((role for role in role_library.get("roles") or [] if role.get("role_id") == active_id), None)
+    return active_id, bool(active and active.get("complete"))
 
 def get_status(pack_dir, data_dir):
     """状态接口的稳定出口：任何异常都不允许返回 500。"""
@@ -975,6 +1628,11 @@ def get_status(pack_dir, data_dir):
             "device": None,
             "loaded": False,
             "busy": False,
+            "active_role_id": "",
+            "role_ready": False,
+            "role_error": "",
+            "runtime_ready": False,
+            "runtime_error": "",
         }
 
 
@@ -991,18 +1649,42 @@ def _get_status_inner(pack_dir, data_dir):
             "device": None,
             "loaded": False,
             "busy": False,
+            "active_role_id": "",
+            "role_ready": False,
+            "role_error": "",
+            "runtime_ready": False,
+            "runtime_error": "",
         }
     ready, reason = _engine_ready(pack_dir)
-    state = _load_state(data_dir)
     role_library = list_roles(pack_dir)
+    active_role_id, role_ready = _active_role_status(role_library)
+    state = _load_state(data_dir)
+    role_error = ""
+    # Repair the historical state in which the global feature toggle survived
+    # even though no complete role had ever been activated.  Reporting that as
+    # enabled made touches appear to fail silently and could leave an old worker
+    # model in memory.  Disabling is safe: the user must explicitly activate a
+    # complete role before turning voice back on.
+    if state.get("enabled") and not role_ready:
+        state["enabled"] = False
+        _save_state(data_dir, state)
+        _reset_manager()
+        role_error = "请先启用一位资料完整的角色，再开启语音"
     voices = [{"name": item["role_id"], "label": item["name"], "language": item.get("reference_language") or "",
                "complete": item["complete"], "missing": item["missing"]} for item in role_library["roles"]]
     worker = {}
-    manager = _get_manager(pack_dir, data_dir)
+    manager = None
+    runtime_error = ""
     try:
-        if ready and state.get("enabled") and role_library.get("active_role_id"):
-            worker = manager.worker_status(role_library["active_role_id"])
-    except Exception:
+        if ready and state.get("enabled") and role_ready:
+            manager = _check_pack_runtime_available(pack_dir)
+            if manager is not None:
+                worker = manager.worker_status(active_role_id)
+    except TTSException as exc:
+        runtime_error = str(exc)
+        worker = {}
+    except Exception as exc:
+        runtime_error = "语音运行时状态读取失败：%s" % exc
         worker = {}
     return {
         "enabled": bool(state.get("enabled")),
@@ -1013,8 +1695,12 @@ def _get_status_inner(pack_dir, data_dir):
         "voices": voices,
         "device": worker.get("loaded_device") or worker.get("device_policy"),
         "loaded": bool(worker.get("is_loaded")),
-        "busy": bool(worker.get("busy") or manager.is_busy),
-        "active_role_id": role_library.get("active_role_id") or "",
+        "busy": bool(worker.get("busy") or (manager and manager.is_busy)),
+        "active_role_id": active_role_id,
+        "role_ready": role_ready,
+        "role_error": role_error,
+        "runtime_ready": bool(ready and state.get("enabled") and role_ready and not runtime_error),
+        "runtime_error": runtime_error,
         "roles": role_library["roles"],
     }
 
@@ -1027,11 +1713,24 @@ def set_enabled(pack_dir, data_dir, enabled):
     if enabled and not ready:
         raise TTSException(reason)
     state = _load_state(data_dir)
-    state["enabled"] = bool(enabled)
+    if enabled:
+        _active_role_for_request(pack_dir)
+        # A shutdown releases the cross-process pack lock.  Discard the manager
+        # before re-enabling so a stale object cannot retain an old lock flag
+        # and run beside another Memo instance.
+        _reset_manager()
+        manager = _get_manager(pack_dir, data_dir)
+        try:
+            manager._check_pack_lock()
+        except Exception:
+            _reset_manager()
+            raise
+        state["enabled"] = True
+        _save_state(data_dir, state)
+        return state
+    state["enabled"] = False
     _save_state(data_dir, state)
-    manager = _get_manager(pack_dir, data_dir)
-    if not enabled:
-        manager.shutdown()
+    _reset_manager()
     return state
 
 
@@ -1048,7 +1747,7 @@ def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None, *,
     if not state.get("enabled"):
         raise TTSException("语音功能未启用，请在设置中开启")
     cleaned = clean_text(text)
-    voice_name = voice or list_roles(pack_dir).get("active_role_id")
+    voice_name = _active_role_for_request(pack_dir, voice)
     language = language or state.get("language") or "中文"
     speed = _coerce_speed(speed if speed is not None else state.get("speed"))
     manager = _get_manager(pack_dir, data_dir)
@@ -1076,9 +1775,12 @@ def preload(pack_dir, data_dir, voice=None):
     ready, reason = _engine_ready(pack_dir)
     if not ready:
         raise TTSException(reason)
-    manager = _get_manager(pack_dir, data_dir)
     state = _load_state(data_dir)
-    return manager.preload(voice or state.get("voice") or "sakiko")
+    if not state.get("enabled"):
+        raise TTSException("语音功能未启用，请在设置中开启")
+    voice_name = _active_role_for_request(pack_dir, voice)
+    manager = _get_manager(pack_dir, data_dir)
+    return manager.preload(voice_name)
 
 
 def shutdown(pack_dir, data_dir):

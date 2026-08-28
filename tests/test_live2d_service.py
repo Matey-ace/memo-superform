@@ -82,6 +82,41 @@ class Live2DServiceTests(unittest.TestCase):
         self.assertEqual([m["catalog_name"] for m in self.service.catalog("Tomori")["models"]], ["036_casual"])
         self.assertEqual(len(self.service.catalog("037")["models"]), 1)
 
+    def test_delete_refuses_model_still_bound_by_a_role_package(self):
+        row = self.service.import_directory(str(self._c2_model("bound")), "profile")
+        pack = Path(self.temp.name) / "tts_pack"
+        pack.mkdir()
+        (pack / "roles.json").write_text(json.dumps({
+            "version": 1,
+            "active_role_id": "anon",
+            "roles": [{"role_id": "anon", "name": "千早爱音", "live2d_model_id": row["model_id"]}],
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(Live2DError, "仍被角色绑定"):
+            self.service.delete_model(row["model_id"])
+        self.assertIsNotNone(db.get_live2d_model(row["model_id"]))
+        self.assertTrue(self.service.asset_path(row["model_id"], "data/model.moc").is_file())
+
+    def test_validate_model_rechecks_descriptor_assets_after_import(self):
+        row = self.service.import_directory(str(self._c2_model("damaged")), "profile")
+        installed = self.service.models_root / row["relative_path"]
+        (installed / "data" / "textures" / "texture_00.png").unlink()
+
+        with self.assertRaisesRegex(Live2DError, "模型引用文件不存在"):
+            self.service.validate_model(row["model_id"])
+        with self.assertRaisesRegex(Live2DError, "模型引用文件不存在"):
+            self.service.set_active("profile", row["model_id"], True)
+
+    def test_delete_fails_closed_when_role_registry_is_corrupt(self):
+        row = self.service.import_directory(str(self._c2_model("unknown-binding")), "profile")
+        pack = Path(self.temp.name) / "tts_pack"
+        pack.mkdir()
+        (pack / "roles.json").write_text("{not valid json", encoding="utf-8")
+
+        with self.assertRaisesRegex(Live2DError, "无法核验角色资料包绑定"):
+            self.service.delete_model(row["model_id"])
+        self.assertIsNotNone(db.get_live2d_model(row["model_id"]))
+        self.assertTrue((self.service.models_root / row["relative_path"] / "data" / "model.moc").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

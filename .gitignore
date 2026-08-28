@@ -11,6 +11,8 @@ data/
 # 打包产物（体积大，不入库，需要时重新打包）
 build/
 dist/
+MemoSuperform-v*.exe
+MemoSuperform-v*-portable/
 
 # 编辑器 / 系统文件
 .idea/

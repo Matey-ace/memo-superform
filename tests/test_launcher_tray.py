@@ -2,11 +2,13 @@
 """Single-instance activation contracts for the Windows tray launcher path."""
 
 import json
+import os
 import pathlib
 import socket
 import sys
 import threading
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -49,6 +51,17 @@ class LauncherTrayContracts(unittest.TestCase):
         self.assertIn("window.events.closing += close_to_tray", source)
         self.assertIn("server.start_server(open_browser=False, block=False)", source)
         self.assertIn("activate_existing_instance", source)
+
+    def test_v077_uses_a_build_scoped_broker_instead_of_the_old_8891_port(self):
+        # A new executable must not activate an older v0.76 process and exit.
+        # Explicit MEMO_INSTANCE_PORT remains an opt-in operator override, so
+        # remove it only for this default-release contract.
+        environment = dict(os.environ)
+        environment.pop("MEMO_INSTANCE_PORT", None)
+        with mock.patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(launcher.BUILD_VERSION, "0.77")
+            self.assertEqual(launcher._instance_port(), 15177)
+            self.assertNotEqual(launcher._instance_port(), 8891)
 
 
 if __name__ == "__main__":

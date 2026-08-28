@@ -7,7 +7,18 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('index.html', '.'), ('css', 'css'), ('js', 'js'), ('vendor', 'vendor'), ('index-anon.html', '.'), ('img', 'img'), ('fonts', 'fonts'), ('LICENSE', '.'), ('README.md', '.'), ('CHANGELOG.md', '.'), ('schema.sql', '.'), ('sqlite_schema.sql', '.')],
-    hiddenimports=['pyodbc', 'windows_tray'],
+    # ``webview`` chooses its Windows backend dynamically.  Listing the
+    # runtime modules here keeps the desktop executable self-contained rather
+    # than producing a browser-only package that fails after launch.
+    hiddenimports=[
+        'pyodbc',
+        'windows_tray',
+        'webview',
+        'webview.guilib',
+        'webview.platforms.winforms',
+        'webview.platforms.win32',
+        'webview.platforms.edgechromium',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

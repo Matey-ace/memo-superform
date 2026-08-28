@@ -429,22 +429,53 @@ class Live2DService:
         preference = db.get_live2d_preference(profile_id)
         return {"models": db.list_live2d_models(), "preference": preference}
 
+    def validate_model(self, model_id: str) -> dict[str, Any]:
+        """Revalidate every registered asset before a role can use the model."""
+        model = db.get_live2d_model(model_id)
+        if not model or not model.get("complete"):
+            raise Live2DError("所选模型不可用")
+        root = (self.models_root / str(model["relative_path"])).resolve()
+        if self.models_root not in root.parents or not root.is_dir():
+            raise Live2DError("所选模型路径无效")
+        entry_file = self._safe_relative(str(model["entry_file"]))
+        if not (root / entry_file).is_file():
+            raise Live2DError("所选模型不可用")
+        # Models can be removed or incompletely copied after registration.  Do
+        # not report them as ready merely because their entry JSON survived.
+        self._validate_entry(root, entry_file, str(model["model_format"]))
+        return model
+
     def set_active(self, profile_id: str, model_id: Optional[str], companion_enabled: Optional[bool] = None) -> dict[str, Any]:
         if model_id:
-            model = db.get_live2d_model(model_id)
-            if not model or not model.get("complete") or not (self.models_root / model["relative_path"] / model["entry_file"]).is_file():
-                raise Live2DError("所选模型不可用")
+            self.validate_model(model_id)
         return db.set_live2d_preference(profile_id, active_model_id=model_id, companion_enabled=companion_enabled)
 
+    def role_references(self, model_id: str) -> list[dict[str, str]]:
+        """Find role manifests that would become incomplete after deletion."""
+        # Fail closed: an unreadable registry must never be treated as "no
+        # references", otherwise deleting a model could silently invalidate an
+        # active role package.  ``roles_referencing_live2d`` itself treats a
+        # missing registry as an empty list without creating one.
+        import tts
+        try:
+            return tts.roles_referencing_live2d(str(self.data_dir / "tts_pack"), model_id)
+        except tts.TTSException as exc:
+            raise Live2DError("无法核验角色资料包绑定，已阻止删除：%s" % exc) from exc
+
     def delete_model(self, model_id: str) -> bool:
-        model = db.get_live2d_model(model_id)
-        if not model:
-            return False
-        target = (self.models_root / str(model["relative_path"])).resolve()
-        if self.models_root not in target.parents:
-            raise Live2DError("模型路径无效")
-        shutil.rmtree(target, ignore_errors=True)
-        return db.remove_live2d_model(model_id)
+        with self._lock:
+            model = db.get_live2d_model(model_id)
+            if not model:
+                return False
+            references = self.role_references(model_id)
+            if references:
+                names = "、".join(item["name"] or item["role_id"] for item in references)
+                raise Live2DError("该 Live2D 模型仍被角色绑定：%s；请先在角色管理中更换绑定" % names)
+            target = (self.models_root / str(model["relative_path"])).resolve()
+            if self.models_root not in target.parents:
+                raise Live2DError("模型路径无效")
+            shutil.rmtree(target, ignore_errors=True)
+            return db.remove_live2d_model(model_id)
 
     def asset_path(self, model_id: str, relative_path: str) -> Path:
         if not _SAFE_ID.match(str(model_id)):

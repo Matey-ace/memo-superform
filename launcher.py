@@ -24,6 +24,11 @@ import webbrowser
 
 _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
+# Bump this with every packaged release.  Older releases used a fixed broker
+# port (8891), so an upgrade silently activated the old executable and exited
+# before any new code could run.  A build-scoped broker lets v0.77 start its
+# own window and report the shared TTS-pack lock honestly during an upgrade.
+BUILD_VERSION = "0.77"
 
 
 class InstanceBroker:
@@ -118,10 +123,18 @@ class InstanceBroker:
 
 
 def _instance_port():
+    """Return a build-scoped broker port, with an explicit env override."""
     try:
-        return int(os.environ.get("MEMO_INSTANCE_PORT", "8891"))
+        configured = os.environ.get("MEMO_INSTANCE_PORT")
+        if configured:
+            return int(configured)
     except (TypeError, ValueError):
-        return 8891
+        pass
+    try:
+        major, minor = (int(item) for item in BUILD_VERSION.split(".", 1))
+        return 15100 + ((major * 100 + minor) % 800)
+    except (TypeError, ValueError):
+        return 15177
 
 
 def _log(msg):
@@ -466,7 +479,7 @@ def run_desktop(guard=None):
     httpd, url = result
     # 给桌面窗口 URL 加版本参数，强制 WebView 拉取最新页面，避免陈旧缓存
     # 与当前静态入口版本同步，避免 WebView 继续命中旧版 index.html。
-    url = url + "?v=70"
+    url = url + "?v=77"
     time.sleep(0.5)
 
     import webview
@@ -563,7 +576,7 @@ def request_relaunch(mode):
     """先释放单实例锁，再拉起新进程并延迟退出当前进程。
 
     时序：释放锁 -> 写记住配置 -> 拉起 --mode <target> -> 1.5s 后退出。
-    先释放锁是为了避免新进程抢不到 8891 锁而弹出“已在运行中”后退出。
+    先释放锁是为了避免新进程抢不到当前构建的实例锁而弹出“已在运行中”后退出。
     """
     _log("request_relaunch begin: mode=%s" % mode)
     _release_tray()
