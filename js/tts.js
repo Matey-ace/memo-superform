@@ -121,29 +121,36 @@ var TTS = (function() {
         return new Promise(function(resolve) { setTimeout(resolve, ms); });
     }
 
-    async function requestSpeech(text, controller, requestGeneration) {
+    async function requestSpeech(text, controller, requestGeneration, options) {
         // The worker intentionally processes one GPU synthesis at a time.  A
         // previous browser request can be cancelled locally while the worker
         // continues running, so retry a short "正在合成中" window instead of
         // treating rapid interactions as permanently silent.
         for (let attempt = 0; attempt < 18; attempt += 1) {
+            const requestBody = {
+                text: text,
+                // The backend resolves the single enabled role from its
+                // manifest.  Do not let browser state choose another
+                // character's model or reference audio.
+                speed: parseFloat(localStorage.getItem('tts_speed') || '1.0'),
+                top_k: numSetting('tts_top_k', 15, 1, 100),
+                fragment_interval: numSetting('tts_fragment_interval', 0.5, 0, 5),
+                text_split_method: localStorage.getItem('tts_text_split_method') || 'cut0',
+                seed: numSetting('tts_seed', -1),
+                use_cuda_graph: boolSetting('tts_cuda_graph', false),
+                parallel_infer: boolSetting('tts_parallel_infer', false)
+            };
+            // Most callers rely on the resource pack's default text language.
+            // Companion mode supplies this per utterance so a Japanese reply
+            // does not inherit a stale Chinese text-language preference.
+            if (options && (options.language === '中文' || options.language === '日文')) {
+                requestBody.language = options.language;
+            }
             const resp = await fetch('/api/tts/speak', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 signal: controller ? controller.signal : undefined,
-                body: JSON.stringify({
-                    text: text,
-                    // The backend resolves the single enabled role from its
-                    // manifest.  Do not let browser state choose another
-                    // character's model or reference audio.
-                    speed: parseFloat(localStorage.getItem('tts_speed') || '1.0'),
-                    top_k: numSetting('tts_top_k', 15, 1, 100),
-                    fragment_interval: numSetting('tts_fragment_interval', 0.5, 0, 5),
-                    text_split_method: localStorage.getItem('tts_text_split_method') || 'cut0',
-                    seed: numSetting('tts_seed', -1),
-                    use_cuda_graph: boolSetting('tts_cuda_graph', false),
-                    parallel_infer: boolSetting('tts_parallel_infer', false)
-                })
+                body: JSON.stringify(requestBody)
             });
             const data = await resp.json().catch(function() { return {}; });
             if (requestGeneration !== synthesisGeneration) return { cancelled: true };
@@ -162,7 +169,7 @@ var TTS = (function() {
         waiters.forEach(function(resolve) { resolve(!!result); });
     }
 
-    async function runSynthesis(text, waiters) {
+    async function runSynthesis(text, waiters, options) {
         const requestGeneration = ++synthesisGeneration;
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         synthesisController = controller;
@@ -177,7 +184,7 @@ var TTS = (function() {
         const requestTimeout = status.loaded ? 45000 : 210000;
         const timer = setTimeout(function() { if (controller) controller.abort(); }, requestTimeout);
         try {
-            const result = await requestSpeech(text, controller, requestGeneration);
+            const result = await requestSpeech(text, controller, requestGeneration, options);
             if (result.cancelled || requestGeneration !== synthesisGeneration) {
                 settle(waiters, false);
             } else if (result.audio_url) {
@@ -205,14 +212,14 @@ var TTS = (function() {
             const next = queuedSynthesis;
             queuedSynthesis = null;
             if (next && requestGeneration === synthesisGeneration && isReady()) {
-                runSynthesis(next.text, next.waiters);
+                runSynthesis(next.text, next.waiters, next.options);
             } else if (next) {
                 settle(next.waiters, false);
             }
         }
     }
 
-    function speak(text) {
+    function speak(text, options) {
         if (!text || !isReady()) return Promise.resolve(false);
         lastError = '';
         return new Promise(function(resolve) {
@@ -221,10 +228,10 @@ var TTS = (function() {
                 // cancel an already-running inference, so replacing the queue
                 // prevents a burst of clicks from piling up stale speeches.
                 if (queuedSynthesis) settle(queuedSynthesis.waiters, false);
-                queuedSynthesis = { text: text, waiters: [resolve] };
+                queuedSynthesis = { text: text, waiters: [resolve], options: options };
                 return;
             }
-            runSynthesis(text, [resolve]);
+            runSynthesis(text, [resolve], options);
         });
     }
 

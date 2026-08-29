@@ -207,7 +207,7 @@
                     <div id="companionSummary" class="companion-summary"><span>本轮 <b>0</b> 词</span><span>正确率 <b>0%</b></span><span>专注 <b>0</b> 分钟</span></div>
                     <button id="companionAskBtn" class="test-btn companion-ask" type="button">看看这一轮学习情况</button>
                 </div>
-                <section id="companionBirthdayCard" class="companion-birthday-card" hidden aria-label="Anon 生日纪念卡"><button id="closeCompanionBirthdayCard" type="button" aria-label="关闭生日纪念卡">×</button><strong>9.06 · Birthday Memo</strong><p>今天的第一个学习里程碑完成！这份认真就当作送给爱音的小礼物吧。</p></section>
+                <section id="companionBirthdayCard" class="companion-birthday-card" hidden aria-label="Anon 生日纪念卡"><button id="closeCompanionBirthdayCard" type="button" aria-label="关闭生日纪念卡">×</button><strong>9.06 · Birthday Memo</strong><p id="companionBirthdayCardText">今天的第一个学习里程碑完成！这份认真就当作送给爱音的小礼物吧。</p></section>
             </aside>
         </div>
     </section>
@@ -286,6 +286,18 @@
                             <option value="gpt-5.4-mini"></option>
                             <option value="gpt-5.3-codex-spark"></option>
                         </datalist>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>陪伴模式</h3>
+                    <div class="setting-item">
+                        <label for="companionLanguageSelect">陪伴回复语言</label>
+                        <select id="companionLanguageSelect" aria-describedby="companionLanguageHint">
+                            <option value="zh">中文</option>
+                            <option value="ja">日语</option>
+                        </select>
+                        <p id="companionLanguageHint" class="hint">控制陪伴模式中 AI 的文字回复，并让陪伴朗读使用对应文本语言。选择后立即保存，下一次互动生效；不会修改角色的参考音频语言、TTS 模型或界面语言。</p>
                     </div>
                 </div>
 
@@ -473,20 +485,20 @@
     <script src="vendor/live2d/pixi-6.5.10.min.js?v=072"></script>
     <script src="vendor/live2d/pixi-live2d-display-0.4.0.min.js?v=072"></script>
     <script src="js/api.js?v=20260826-v070-sync"></script>
-    <script src="js/tts.js?v=20260828-v077-runtime"></script>
+    <script src="js/tts.js?v=20260829-v078-companion-language"></script>
     <script src="js/dashboard-core.js?v=20260825-unified-ui"></script>
     <script src="js/charts.js?v=44"></script>
     <script src="js/layout.js?v=20260825-unified-ui"></script>
     <script src="js/study-shortcuts.js?v=20260825-unified-ui"></script>
     <script src="js/study-lifecycle.js?v=20260825-unified-ui"></script>
     <script src="js/study-web.js?v=20260825-unified-ui"></script>
-    <script src="js/live2d-companion.js?v=20260828-v077-role-persona"></script>
+    <script src="js/live2d-companion.js?v=20260829-v078-companion-language"></script>
     <script src="js/study-sync-ui.js?v=20260827-global-fix"></script>
     <script>
         if (window.MemoUIStyle.isNotebook) {
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260828-v077-role-runtime"></script>
+    <script src="js/app.js?v=20260829-v078-companion-language"></script>
 </body>
 </html>

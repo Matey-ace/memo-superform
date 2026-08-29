@@ -163,6 +163,16 @@ const App = (function() {
         document.getElementById('aiModelInput').value = aiConfig.model;
         const uiStyleSelect = document.getElementById('uiStyleSelect');
         if (uiStyleSelect) uiStyleSelect.value = window.MemoUIStyle.name;
+        const companionLanguageSelect = document.getElementById('companionLanguageSelect');
+        if (companionLanguageSelect) {
+            // Companion replies are a browser-local AI preference, just like
+            // the provider/model configuration above.  Older installations
+            // and malformed values intentionally fall back to Chinese.
+            companionLanguageSelect.value = localStorage.getItem('companion_language') === 'ja' ? 'ja' : 'zh';
+            companionLanguageSelect.addEventListener('change', function() {
+                localStorage.setItem('companion_language', companionLanguageSelect.value === 'ja' ? 'ja' : 'zh');
+            });
+        }
 
         const providerSelect = document.getElementById('aiProviderSelect');
         const codexBox = document.getElementById('codexAuthBox');
@@ -279,6 +289,9 @@ const App = (function() {
                 apiKey: document.getElementById('aiKeyInput').value.trim(),
                 model: document.getElementById('aiModelInput').value.trim()
             });
+            if (companionLanguageSelect) {
+                localStorage.setItem('companion_language', companionLanguageSelect.value === 'ja' ? 'ja' : 'zh');
+            }
             if (nextStyle !== window.MemoUIStyle.name) {
                 window.MemoUIStyle.save(nextStyle);
                 location.replace('index.html');

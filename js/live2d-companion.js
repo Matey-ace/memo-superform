@@ -2,6 +2,59 @@
 // This module keeps study events local and only asks the configured AI at
 // deliberate learning milestones.  It never changes StudyWeb's answer flow.
 
+const COMPANION_LANGUAGE_STORAGE_KEY = 'companion_language';
+const COMPANION_LANGUAGES = {
+    zh: { label: '中文', ttsLanguage: '中文' },
+    ja: { label: '日语', ttsLanguage: '日文' }
+};
+
+function getCompanionLanguage() {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem(COMPANION_LANGUAGE_STORAGE_KEY) === 'ja' ? 'ja' : 'zh';
+    } catch (error) {
+        return 'zh';
+    }
+}
+
+function companionLanguageConfig(language) {
+    return COMPANION_LANGUAGES[language === 'ja' ? 'ja' : 'zh'];
+}
+
+function companionOutputInstruction(kind, language) {
+    const responseLanguage = language === 'ja' ? 'ja' : 'zh';
+    if (responseLanguage === 'ja') {
+        if (kind === 'touch') {
+            return '\n出力言語：日本語。キャラクターの口調で、触れられた今の気持ちを含む 8〜36 文字程度の自然で完全な一文を書いてください。単なる相づち（「うん」「あ」など）だけにはせず、JSON だけを出力してください：{"text":"...","mood":"idle|thinking|cheer|shy|firm|comfort|celebrate"}。';
+        }
+        return '\n出力言語：日本語。キャラクターの口調で、学習を邪魔しない 8〜36 文字程度の自然で完全な励ましを一文だけ書いてください。単なる相づち（「うん」「あ」など）だけにはせず、JSON だけを出力してください：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
+    }
+    if (kind === 'touch') {
+        return '\n输出语言：简体中文。请用该角色的语气写一句 8~36 个汉字的完整即时回应，说出此刻心情，自然成句，不要只说单个语气词（如嗯/啊）；仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|shy|firm|comfort|celebrate"}。';
+    }
+    return '\n输出语言：简体中文。请用该角色的语气写一句 8~36 个汉字的完整鼓励，自然成句，不要只说单个语气词，不过分打扰学习；仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
+}
+
+function companionStudyContext(summary, language) {
+    if (language === 'ja') {
+        return '今回の回答数：' + summary.count + '；正解：' + summary.correct + '；復習が必要：' + summary.weak + '；正答率：' + summary.accuracy + '%；学習時間：' + summary.elapsed_minutes + ' 分；現在の単語：「' + (summary.current_word || '不明') + '」；直前の判定：' + (summary.last_action || 'なし') + '。';
+    }
+    return '本轮已答 ' + summary.count + ' 个；正确 ' + summary.correct + ' 个；需要巩固 ' + summary.weak + ' 个；正确率 ' + summary.accuracy + '%；已学习 ' + summary.elapsed_minutes + ' 分钟；当前单词为 "' + (summary.current_word || '未知') + '"；最近判断为 ' + (summary.last_action || '无') + '。';
+}
+
+function companionTouchContext(reaction, word, language) {
+    if (language === 'ja') {
+        return '触れた部位：' + (reaction.part_ja || reaction.part) + '；現在の気分：' + (reaction.state_ja || reaction.state) + '；現在の単語：' + (word || '不明') + '。';
+    }
+    return '触摸部位：' + reaction.part + '；当前情绪：' + reaction.state + '；当前单词：' + (word || '未知') + '。';
+}
+
+function isMeaningfulCompanionReply(text, language) {
+    const normalized = String(text || '').replace(/\s+/g, '').trim();
+    if (language === 'ja') return normalized.length >= 4 && /[\u3040-\u30ff\u3400-\u9fff]/.test(normalized);
+    const matches = normalized.match(/[\u4e00-\u9fa5]/g);
+    return !!(matches && matches.length >= 4);
+}
+
 const DEFAULT_PERSONAS = {
     _default: {
         name: '陪伴角色',
@@ -483,15 +536,21 @@ const Live2DCompanion = (function() {
     let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
     let rendererCapabilityCache = null, lastRendererDiagnostic = '', currentMoodLabel = '待机', lastVoiceNoticeReason = '', voiceNoticeTimer = 0, modelListError = '';
     const LOCAL_LINES = {
-        started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
-        'needs-help': ['没关系，先把容易混淆的地方记下来。', '卡住也正常，我们调整一下节奏。'], 'focus-time': ['已经专心学习一会儿了，喝口水再继续吧。'], finish: ['这一轮辛苦了，今天的积累很扎实。'], 'manual-empty': ['先进入背词学习页，我就能看到这一轮的进度。']
+        zh: {
+            started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
+            'needs-help': ['没关系，先把容易混淆的地方记下来。', '卡住也正常，我们调整一下节奏。'], 'focus-time': ['已经专心学习一会儿了，喝口水再继续吧。'], finish: ['这一轮辛苦了，今天的积累很扎实。'], 'manual-empty': ['先进入背词学习页，我就能看到这一轮的进度。']
+        },
+        ja: {
+            started: ['準備できたよ。ゆっくり始めよう。', '今日も一緒に、この単語たちを覚えていこう。'], state: ['この一問を覚えたなら、それで十分えらいよ。', 'いいペースだね。次の一問もいこう。'], milestone: ['この組はきれいに終えられたね！', 'また少し前に進めたよ。'],
+            'needs-help': ['大丈夫。紛らわしいところを一度メモしておこう。', 'つまずくのは普通だよ。少しペースを整えよう。'], 'focus-time': ['しばらく集中できているね。お水を飲んでから続けよう。'], finish: ['今回もおつかれさま。今日の積み重ねはしっかり残っているよ。'], 'manual-empty': ['まず単語学習ページに入ってね。今回の進み具合を見守れるよ。']
+        }
     };
     const MOOD_LABELS = { idle: '待机', thinking: '思考', cheer: '开心', comfort: '安慰', shy: '害羞', firm: '生气', celebrate: '庆祝' };
     const TOUCH_REACTIONS = {
-        head: { label: '摸头', mood: 'cheer', part: '头部', state: '被摸头后很开心、很有精神', lines: ['嘿嘿，摸头会让我更有精神！下一题也一起拿下吧。', '收到鼓励！这题我们稳稳地记住。'] },
-        hand: { label: '击掌', mood: 'celebrate', part: '手部', state: '被击掌后干劲十足', lines: ['击掌！保持这个节奏继续冲。', '配合得不错，下一题继续。'] },
-        body: { label: '害羞', mood: 'shy', part: '胸部和腹部', state: '被碰到后有点害羞', lines: ['呀……被碰到会有点害羞，先专心看下一个单词啦。', '别、别盯着看……我们把这一题背完再说。'] },
-        lower: { label: '住手！', mood: 'firm', part: '下体位置', state: '被碰到后有些不高兴、想让你专心背词', lines: ['喂！那里不能乱碰，专心背词！', '生气啦！先把这一题背完再闹。'] }
+        head: { label: '摸头', mood: 'cheer', part: '头部', part_ja: '頭', state: '被摸头后很开心、很有精神', state_ja: '頭を撫でられて嬉しく、元気になった', lines: { zh: ['嘿嘿，摸头会让我更有精神！下一题也一起拿下吧。', '收到鼓励！这题我们稳稳地记住。'], ja: ['なでてくれると元気が出るよ。次の一問も一緒にいこう。', '応援、受け取ったよ。この一問をしっかり覚えよう。'] } },
+        hand: { label: '击掌', mood: 'celebrate', part: '手部', part_ja: '手', state: '被击掌后干劲十足', state_ja: 'ハイタッチでやる気が満ちている', lines: { zh: ['击掌！保持这个节奏继续冲。', '配合得不错，下一题继续。'], ja: ['ハイタッチ！この調子でいこう。', '息ぴったりだね。次の一問も続けよう。'] } },
+        body: { label: '害羞', mood: 'shy', part: '胸部和腹部', part_ja: '胸とお腹', state: '被碰到后有点害羞', state_ja: '触れられて少し恥ずかしい', lines: { zh: ['呀……被碰到会有点害羞，先专心看下一个单词啦。', '别、别盯着看……我们把这一题背完再说。'], ja: ['あっ……少し恥ずかしいよ。次の単語に集中しよう。', '見つめすぎないで……この一問を覚えたらまたね。'] } },
+        lower: { label: '住手！', mood: 'firm', part: '下体位置', part_ja: '下のほう', state: '被碰到后有些不高兴、想让你专心背词', state_ja: '触れられて少し不機嫌で、学習に集中してほしい', lines: { zh: ['喂！那里不能乱碰，专心背词！', '生气啦！先把这一题背完再闹。'], ja: ['ちょっと！そこはだめ。単語に集中して。', 'もう、怒るよ。まずこの一問を覚えよう。'] } }
     };
     function setMoodLabel(mood) {
         currentMoodLabel = MOOD_LABELS[mood] || mood || '待机';
@@ -691,7 +750,7 @@ const Live2DCompanion = (function() {
             if (lastVoiceNoticeReason === reason && target.textContent.indexOf(reason) >= 0) target.textContent = currentMoodLabel;
         }, 4200);
     }
-    function maybeSpeakCompanion(text) {
+    function maybeSpeakCompanion(text, language) {
         let companionVoiceEnabled = false;
         try { companionVoiceEnabled = typeof localStorage !== 'undefined' && localStorage.getItem('tts_companion_enabled') === 'true'; }
         catch (error) { showVoiceStatusHint('陪伴朗读设置不可读'); return; }
@@ -711,7 +770,10 @@ const Live2DCompanion = (function() {
         if (normalized === lastSpokenCompanion) return;
         const requestId = ++companionVoiceRequest;
         try {
-            Promise.resolve(tts.speak(normalized)).then(function(ok) {
+            // TTS uses the active role's manifest for its model/reference
+            // assets.  This one request option only tells GPT-SoVITS whether
+            // the companion sentence itself is Chinese or Japanese.
+            Promise.resolve(tts.speak(normalized, { language: companionLanguageConfig(language || getCompanionLanguage()).ttsLanguage })).then(function(ok) {
                 if (requestId !== companionVoiceRequest) return;
                 if (ok) {
                     lastSpokenCompanion = normalized;
@@ -722,28 +784,28 @@ const Live2DCompanion = (function() {
             }).catch(function() { if (requestId === companionVoiceRequest) showVoiceStatusHint('语音请求失败'); });
         } catch (error) { if (requestId === companionVoiceRequest) showVoiceStatusHint('语音请求失败'); }
     }
-    function showCompanionReaction(text, mood, speak) {
+    function showCompanionReaction(text, mood, speak, language) {
         const bubble = document.getElementById('companionBubble');
         clearBubbleRendererDiagnostic();
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
         playMood(mood || 'idle');
-        if (speak) maybeSpeakCompanion(text);
+        if (speak) maybeSpeakCompanion(text, language);
     }
-    function setMessage(text, mood) {
-        showCompanionReaction(text, mood, true);
+    function setMessage(text, mood, language) {
+        showCompanionReaction(text, mood, true, language);
     }
-    function setReply(text, mood) {
+    function setReply(text, mood, language) {
         const bubble = document.getElementById('companionBubble');
         clearBubbleRendererDiagnostic();
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
-        maybeSpeakCompanion(text);
+        maybeSpeakCompanion(text, language);
     }
-    function randomLine(kind) { const lines = LOCAL_LINES[kind] || LOCAL_LINES.state; return lines[Math.floor(Math.random() * lines.length)]; }
-    function meaningfulCjk(text) {
-        const matches = String(text || '').match(/[\u4e00-\u9fa5]/g);
-        return matches ? matches.length : 0;
+    function randomLine(kind, language) {
+        const localized = LOCAL_LINES[language === 'ja' ? 'ja' : 'zh'] || LOCAL_LINES.zh;
+        const lines = localized[kind] || localized.state;
+        return lines[Math.floor(Math.random() * lines.length)];
     }
     function updateSummary(summary) {
         const target = document.getElementById('companionSummary');
@@ -754,14 +816,15 @@ const Live2DCompanion = (function() {
     }
     async function askAI(kind, summary) {
         updateSummary(summary);
-        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) { setMessage(randomLine(kind), kind === 'needs-help' ? '安慰' : '鼓励'); return; }
+        const language = getCompanionLanguage();
+        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) { setMessage(randomLine(kind, language), kind === 'needs-help' ? '安慰' : '鼓励', language); return; }
         const button = document.getElementById('companionAskBtn');
         if (button) button.disabled = true;
         try {
         const config = AIAPI.getConfig();
         const persona = getActivePersona();
-        const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句 8~36 个汉字的完整中文鼓励，自然成句，不要只说单个语气词，不过分打扰学习；仅输出 JSON：{"text":"...","mood":"idle|thinking|cheer|comfort|celebrate"}。';
-        const prompt = '本轮已答 ' + summary.count + ' 个；正确 ' + summary.correct + ' 个；需要巩固 ' + summary.weak + ' 个；正确率 ' + summary.accuracy + '%；已学习 ' + summary.elapsed_minutes + ' 分钟；当前单词为 "' + (summary.current_word || '未知') + '"；最近判断为 ' + (summary.last_action || '无') + '。';
+        const systemPrompt = personaSystemPrompt(persona) + companionOutputInstruction('study', language);
+        const prompt = companionStudyContext(summary, language);
             const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.7, response_format: { type: 'json_object' } } }) });
             const data = await response.json().catch(function() { return {}; });
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
@@ -769,14 +832,18 @@ const Live2DCompanion = (function() {
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
             const moods = ['idle', 'thinking', 'cheer', 'comfort', 'celebrate'];
             const replyText = String(parsed.text || '').trim();
-            setMessage((meaningfulCjk(replyText) >= 4 ? replyText : randomLine(kind)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer');
-        } catch (error) { setMessage(randomLine(kind), kind === 'needs-help' ? 'comfort' : 'cheer'); }
+            setMessage((isMeaningfulCompanionReply(replyText, language) ? replyText : randomLine(kind, language)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer', language);
+        } catch (error) { setMessage(randomLine(kind, language), kind === 'needs-help' ? 'comfort' : 'cheer', language); }
         finally { if (button) button.disabled = false; }
     }
     function onSessionSignal(kind, summary) {
         updateSummary(summary);
         if (kind === 'milestone' && isAnonBirthday()) showBirthdayCard();
-        if (kind === 'state' || kind === 'started') { setMessage(kind === 'started' ? '进入学习页后，我会陪着你记录这一轮。' : randomLine('state'), 'thinking'); return; }
+        if (kind === 'state' || kind === 'started') {
+            const language = getCompanionLanguage();
+            setMessage(randomLine(kind === 'started' ? 'started' : 'state', language), 'thinking', language);
+            return;
+        }
         askAI(kind, summary);
     }
     function disposeRenderer() {
@@ -926,18 +993,21 @@ const Live2DCompanion = (function() {
         const candidates = { idle: ['idle', 'nf', 'nnf'], thinking: ['thinking', 'serious'], cheer: ['smile', 'wink', 'kime'], comfort: ['sad', 'shame', 'cry'], shy: ['shame', 'sad', 'cry'], firm: ['angry', 'serious'], celebrate: ['kandou', 'smile', 'gacha'] }[mood] || ['idle'];
         candidates.some(function(name) { try { liveModel.motion(name); return true; } catch (e) { return false; } });
     }
-    function randomTouchLine(region) {
-        const lines = (TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower).lines;
+    function randomTouchLine(region, language) {
+        const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
+        const localized = reaction.lines || {};
+        const lines = localized[language === 'ja' ? 'ja' : 'zh'] || localized.zh || [];
         return lines[Math.floor(Math.random() * lines.length)];
     }
     async function askTouchAI(region) {
         const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
+        const language = getCompanionLanguage();
         // React physically immediately (mood/motion) so the touch still lands,
         // but don't paint a local text bubble -- the AI reply is the single response.
         setMoodLabel(reaction.mood);
         playMood(reaction.mood);
         if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) {
-            setMessage(randomTouchLine(region), reaction.mood);
+            setMessage(randomTouchLine(region, language), reaction.mood, language);
             return;
         }
         if (Date.now() - lastTouchAIAt < 1800) return;
@@ -945,20 +1015,20 @@ const Live2DCompanion = (function() {
         try {
             const config = AIAPI.getConfig();
             const persona = getActivePersona();
-            const systemPrompt = personaSystemPrompt(persona) + '\n请用该角色的语气写一句 8~36 个汉字的完整中文即时回应，说出此刻心情，自然成句，不要只说单个语气词（如嗯/啊）；仅输出 JSON：{"text":"...","mood":"..."}，mood 只能是 idle|thinking|cheer|shy|firm|comfort|celebrate。';
+            const systemPrompt = personaSystemPrompt(persona) + companionOutputInstruction('touch', language);
             const summary = session && session.summary ? session.summary() : null;
             const word = summary && summary.current_word ? summary.current_word : '';
-            const prompt = '触摸部位：' + reaction.part + '；当前情绪：' + reaction.state + '；当前单词：' + (word || '未知') + '。';
+            const prompt = companionTouchContext(reaction, word, language);
             const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.8, response_format: { type: 'json_object' } } }) });
             const data = await response.json().catch(function() { return {}; });
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
             const replyText = String(parsed.text || '').trim();
-            setReply((meaningfulCjk(replyText) >= 4 ? replyText : randomTouchLine(region)).slice(0, 80), reaction.mood);
+            setReply((isMeaningfulCompanionReply(replyText, language) ? replyText : randomTouchLine(region, language)).slice(0, 80), reaction.mood, language);
         } catch (error) {
             // If the AI call failed, fall back to a single local reaction line.
-            setMessage(randomTouchLine(region), reaction.mood);
+            setMessage(randomTouchLine(region, language), reaction.mood, language);
         }
     }
     function showTouchFeedback(event, label) {
@@ -1057,7 +1127,8 @@ const Live2DCompanion = (function() {
     }
     function showBirthday() {
         if (birthdayShown) return; birthdayShown = true;
-        setMessage('生日快乐！今天也一起把想做的事认真完成吧。', 'celebrate');
+        const language = getCompanionLanguage();
+        setMessage(language === 'ja' ? 'お誕生日おめでとう。今日も一緒に、やりたいことを大切に進めよう。' : '生日快乐！今天也一起把想做的事认真完成吧。', 'celebrate', language);
         document.getElementById('companionBirthdayBadge').hidden = false;
     }
     function showBirthdayCard() {
@@ -1065,7 +1136,17 @@ const Live2DCompanion = (function() {
         const key = 'memo_anon_birthday_milestone_' + day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' + String(day.getDate()).padStart(2, '0');
         try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch (e) {}
         const card = document.getElementById('companionBirthdayCard');
-        if (card) card.hidden = false;
+        const language = getCompanionLanguage();
+        const text = document.getElementById('companionBirthdayCardText');
+        const closeButton = document.getElementById('closeCompanionBirthdayCard');
+        if (card) {
+            card.hidden = false;
+            if (typeof card.setAttribute === 'function') card.setAttribute('aria-label', language === 'ja' ? '愛音の誕生日メモ' : 'Anon 生日纪念卡');
+        }
+        if (closeButton && typeof closeButton.setAttribute === 'function') closeButton.setAttribute('aria-label', language === 'ja' ? '誕生日メモを閉じる' : '关闭生日纪念卡');
+        if (text) text.textContent = language === 'ja'
+            ? '今日の最初の学習マイルストーンを達成！この頑張りを、愛音への小さなプレゼントにしよう。'
+            : '今天的第一个学习里程碑完成！这份认真就当作送给爱音的小礼物吧。';
         playMood('celebrate');
     }
     function init() {
