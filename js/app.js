@@ -174,6 +174,55 @@ const App = (function() {
             });
         }
 
+        const companionReminderEnabled = document.getElementById('companionReminderEnabled');
+        const companionReminderMinutes = document.getElementById('companionReminderMinutes');
+        const COMPANION_REMINDER_MINUTES = { min: 1, max: 180, default: 30 };
+
+        function normalizeCompanionReminderMinutes(value) {
+            const rawValue = String(value == null ? '' : value).trim();
+            if (!/^\d+$/.test(rawValue)) return COMPANION_REMINDER_MINUTES.default;
+            const minutes = Number.parseInt(rawValue, 10);
+            return Math.min(COMPANION_REMINDER_MINUTES.max, Math.max(COMPANION_REMINDER_MINUTES.min, minutes));
+        }
+
+        function saveCompanionReminderSettings() {
+            if (!companionReminderEnabled || !companionReminderMinutes) return null;
+            const minutes = normalizeCompanionReminderMinutes(companionReminderMinutes.value);
+            companionReminderMinutes.value = String(minutes);
+            const settings = { enabled: companionReminderEnabled.checked, minutes: minutes };
+            localStorage.setItem('companion_reminder_enabled', settings.enabled ? 'true' : 'false');
+            localStorage.setItem('companion_reminder_minutes', String(settings.minutes));
+            return settings;
+        }
+
+        function updateCompanionReminderControls() {
+            if (!companionReminderEnabled || !companionReminderMinutes) return;
+            const disabled = !companionReminderEnabled.checked;
+            companionReminderMinutes.disabled = disabled;
+            companionReminderMinutes.setAttribute('aria-disabled', String(disabled));
+        }
+
+        function notifyCompanionReminderSettingsChanged(settings) {
+            if (!settings) return;
+            window.dispatchEvent(new CustomEvent('companion-reminder-settings-changed', { detail: settings }));
+        }
+
+        if (companionReminderEnabled && companionReminderMinutes) {
+            companionReminderEnabled.checked = localStorage.getItem('companion_reminder_enabled') === 'true';
+            companionReminderMinutes.value = String(normalizeCompanionReminderMinutes(
+                localStorage.getItem('companion_reminder_minutes') || COMPANION_REMINDER_MINUTES.default
+            ));
+            updateCompanionReminderControls();
+
+            companionReminderEnabled.addEventListener('change', function() {
+                updateCompanionReminderControls();
+                notifyCompanionReminderSettingsChanged(saveCompanionReminderSettings());
+            });
+            companionReminderMinutes.addEventListener('change', function() {
+                notifyCompanionReminderSettingsChanged(saveCompanionReminderSettings());
+            });
+        }
+
         const providerSelect = document.getElementById('aiProviderSelect');
         const codexBox = document.getElementById('codexAuthBox');
         const apiKeyFields = document.getElementById('aiApiKeyFields');
@@ -292,6 +341,7 @@ const App = (function() {
             if (companionLanguageSelect) {
                 localStorage.setItem('companion_language', companionLanguageSelect.value === 'ja' ? 'ja' : 'zh');
             }
+            notifyCompanionReminderSettingsChanged(saveCompanionReminderSettings());
             if (nextStyle !== window.MemoUIStyle.name) {
                 window.MemoUIStyle.save(nextStyle);
                 location.replace('index.html');

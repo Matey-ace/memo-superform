@@ -3,6 +3,8 @@
 // deliberate learning milestones.  It never changes StudyWeb's answer flow.
 
 const COMPANION_LANGUAGE_STORAGE_KEY = 'companion_language';
+const COMPANION_REMINDER_ENABLED_STORAGE_KEY = 'companion_reminder_enabled';
+const COMPANION_REMINDER_MINUTES_STORAGE_KEY = 'companion_reminder_minutes';
 const COMPANION_LANGUAGES = {
     zh: { label: '中文', ttsLanguage: '中文' },
     ja: { label: '日语', ttsLanguage: '日文' }
@@ -18,6 +20,24 @@ function getCompanionLanguage() {
 
 function companionLanguageConfig(language) {
     return COMPANION_LANGUAGES[language === 'ja' ? 'ja' : 'zh'];
+}
+
+function getCompanionReminderSettings() {
+    try {
+        if (typeof localStorage === 'undefined' || localStorage.getItem(COMPANION_REMINDER_ENABLED_STORAGE_KEY) !== 'true') {
+            return { enabled: false, minutes: 0, interval_ms: 0, signature: 'disabled' };
+        }
+        const rawMinutes = String(localStorage.getItem(COMPANION_REMINDER_MINUTES_STORAGE_KEY) || '').trim();
+        if (!/^[1-9]\d*$/.test(rawMinutes)) return { enabled: false, minutes: 0, interval_ms: 0, signature: 'disabled' };
+        const minutes = Number(rawMinutes);
+        const maxSafeInteger = Number.MAX_SAFE_INTEGER || 9007199254740991;
+        if (!isFinite(minutes) || Math.floor(minutes) !== minutes || minutes < 1 || minutes > 180 || minutes > Math.floor(maxSafeInteger / 60000)) {
+            return { enabled: false, minutes: 0, interval_ms: 0, signature: 'disabled' };
+        }
+        return { enabled: true, minutes: minutes, interval_ms: minutes * 60000, signature: 'enabled:' + minutes };
+    } catch (error) {
+        return { enabled: false, minutes: 0, interval_ms: 0, signature: 'disabled' };
+    }
 }
 
 function companionOutputInstruction(kind, language) {
@@ -492,12 +512,25 @@ const Live2DModelManager = (function() {
 const CompanionSession = (function() {
     const POSITIVE = { FAMILIAR: true, WELL_FAMILIAR: true };
     function create(onSignal) {
-        let active = false, startedAt = 0, records = [], currentWord = '', lastPromptAt = 0, timedPrompted = false;
-        function emit(kind, force) {
-            const now = Date.now();
-            if (!force && now - lastPromptAt < 90000) return;
-            lastPromptAt = now;
+        let active = false, startedAt = 0, records = [], currentWord = '';
+        let reminderSettings = getCompanionReminderSettings(), reminderSignature = reminderSettings.signature, nextReminderAt = 0;
+        function notify(kind) {
             if (onSignal) onSignal(kind, summary());
+        }
+        function syncReminderSettings(now) {
+            const next = getCompanionReminderSettings();
+            if (next.signature === reminderSignature) return false;
+            reminderSettings = next;
+            reminderSignature = next.signature;
+            // A changed interval always starts fresh.  Do not replay the
+            // intervals that elapsed under the old value.
+            nextReminderAt = active && records.length && next.enabled ? now + next.interval_ms : 0;
+            return true;
+        }
+        function armReminder(now) {
+            if (active && records.length && reminderSettings.enabled && !nextReminderAt) {
+                nextReminderAt = now + reminderSettings.interval_ms;
+            }
         }
         function summary() {
             const correct = records.filter(function(row) { return POSITIVE[row.action]; }).length;
@@ -508,23 +541,50 @@ const CompanionSession = (function() {
         }
         return {
             screen: function(isStudy) {
-                if (isStudy && !active) { active = true; startedAt = Date.now(); records = []; currentWord = ''; timedPrompted = false; if (onSignal) onSignal('started', summary()); }
-                if (!isStudy && active) { if (records.length) emit('finish', true); active = false; }
+                if (isStudy && !active) {
+                    active = true;
+                    startedAt = Date.now();
+                    records = [];
+                    currentWord = '';
+                    reminderSettings = getCompanionReminderSettings();
+                    reminderSignature = reminderSettings.signature;
+                    nextReminderAt = 0;
+                    notify('started');
+                }
+                if (!isStudy && active) {
+                    if (records.length) notify('finish');
+                    active = false;
+                    nextReminderAt = 0;
+                }
             },
             record: function(event) {
                 if (!active || !event || !event.action) return;
+                const now = Date.now();
+                syncReminderSettings(now);
                 currentWord = event.word || currentWord;
-                records.push({ action: event.action, at: Date.now(), word: currentWord });
+                records.push({ action: event.action, at: now, word: currentWord });
+                armReminder(now);
                 const lastThree = records.slice(-3);
-                if (records.length === 5 || (records.length > 5 && records.length % 10 === 0)) emit('milestone');
-                else if (lastThree.length === 3 && lastThree.every(function(row) { return !POSITIVE[row.action]; })) emit('needs-help');
-                else if (onSignal) onSignal('state', summary());
+                if (records.length === 5 || (records.length > 5 && records.length % 10 === 0)) notify('milestone');
+                else if (lastThree.length === 3 && lastThree.every(function(row) { return !POSITIVE[row.action]; })) notify('needs-help');
+                else notify('state');
             },
             tick: function() {
-                if (active && !timedPrompted && records.length >= 8 && Date.now() - startedAt >= 12 * 60 * 1000) { timedPrompted = true; emit('focus-time'); }
-                if (active && onSignal) onSignal('state', summary());
+                if (!active) return;
+                const now = Date.now();
+                syncReminderSettings(now);
+                armReminder(now);
+                if (records.length && reminderSettings.enabled && nextReminderAt && now >= nextReminderAt) {
+                    // Trigger at most once per tick, then schedule from now.
+                    // This prevents a resumed tab or a changed setting from
+                    // generating a burst of overdue reminders.
+                    nextReminderAt = now + reminderSettings.interval_ms;
+                    notify('reminder');
+                }
+                notify('state');
             },
-            ask: function() { if (active) emit('manual', true); else if (onSignal) onSignal('manual-empty', summary()); },
+            ask: function() { if (active) notify('manual'); else notify('manual-empty'); },
+            refreshReminder: function() { syncReminderSettings(Date.now()); },
             isActive: function() { return active; }, summary: summary
         };
     }
@@ -538,11 +598,11 @@ const Live2DCompanion = (function() {
     const LOCAL_LINES = {
         zh: {
             started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
-            'needs-help': ['没关系，先把容易混淆的地方记下来。', '卡住也正常，我们调整一下节奏。'], 'focus-time': ['已经专心学习一会儿了，喝口水再继续吧。'], finish: ['这一轮辛苦了，今天的积累很扎实。'], 'manual-empty': ['先进入背词学习页，我就能看到这一轮的进度。']
+            'needs-help': ['没关系，先把容易混淆的地方记下来。', '卡住也正常，我们调整一下节奏。'], reminder: ['已经专心学习一会儿了，看看这几个词，再稳稳地继续吧。', '这一段学习节奏不错，喝口水后把当前单词再记牢一点。'], 'focus-time': ['已经专心学习一会儿了，喝口水再继续吧。'], finish: ['这一轮辛苦了，今天的积累很扎实。'], 'manual-empty': ['先进入背词学习页，我就能看到这一轮的进度。']
         },
         ja: {
             started: ['準備できたよ。ゆっくり始めよう。', '今日も一緒に、この単語たちを覚えていこう。'], state: ['この一問を覚えたなら、それで十分えらいよ。', 'いいペースだね。次の一問もいこう。'], milestone: ['この組はきれいに終えられたね！', 'また少し前に進めたよ。'],
-            'needs-help': ['大丈夫。紛らわしいところを一度メモしておこう。', 'つまずくのは普通だよ。少しペースを整えよう。'], 'focus-time': ['しばらく集中できているね。お水を飲んでから続けよう。'], finish: ['今回もおつかれさま。今日の積み重ねはしっかり残っているよ。'], 'manual-empty': ['まず単語学習ページに入ってね。今回の進み具合を見守れるよ。']
+            'needs-help': ['大丈夫。紛らわしいところを一度メモしておこう。', 'つまずくのは普通だよ。少しペースを整えよう。'], reminder: ['しばらく集中できているね。今の単語をもう一度確かめて、続けよう。', 'この区切りまでよく頑張ったね。お水を飲んでから、次の一問へ行こう。'], 'focus-time': ['しばらく集中できているね。お水を飲んでから続けよう。'], finish: ['今回もおつかれさま。今日の積み重ねはしっかり残っているよ。'], 'manual-empty': ['まず単語学習ページに入ってね。今回の進み具合を見守れるよ。']
         }
     };
     const MOOD_LABELS = { idle: '待机', thinking: '思考', cheer: '开心', comfort: '安慰', shy: '害羞', firm: '生气', celebrate: '庆祝' };
@@ -792,15 +852,15 @@ const Live2DCompanion = (function() {
         playMood(mood || 'idle');
         if (speak) maybeSpeakCompanion(text, language);
     }
-    function setMessage(text, mood, language) {
-        showCompanionReaction(text, mood, true, language);
+    function setMessage(text, mood, language, speak) {
+        showCompanionReaction(text, mood, !!speak, language);
     }
-    function setReply(text, mood, language) {
+    function setReply(text, mood, language, speak) {
         const bubble = document.getElementById('companionBubble');
         clearBubbleRendererDiagnostic();
         if (bubble) bubble.textContent = text;
         setMoodLabel(mood);
-        maybeSpeakCompanion(text, language);
+        if (speak) maybeSpeakCompanion(text, language);
     }
     function randomLine(kind, language) {
         const localized = LOCAL_LINES[language === 'ja' ? 'ja' : 'zh'] || LOCAL_LINES.zh;
@@ -814,10 +874,10 @@ const Live2DCompanion = (function() {
         const word = document.getElementById('companionCurrentWord');
         if (word) word.textContent = summary.current_word ? ('当前单词：' + summary.current_word) : '等待进入学习页';
     }
-    async function askAI(kind, summary) {
+    async function askAI(kind, summary, speak) {
         updateSummary(summary);
         const language = getCompanionLanguage();
-        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) { setMessage(randomLine(kind, language), kind === 'needs-help' ? '安慰' : '鼓励', language); return; }
+        if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) { setMessage(randomLine(kind, language), kind === 'needs-help' ? '安慰' : '鼓励', language, speak); return; }
         const button = document.getElementById('companionAskBtn');
         if (button) button.disabled = true;
         try {
@@ -832,19 +892,26 @@ const Live2DCompanion = (function() {
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
             const moods = ['idle', 'thinking', 'cheer', 'comfort', 'celebrate'];
             const replyText = String(parsed.text || '').trim();
-            setMessage((isMeaningfulCompanionReply(replyText, language) ? replyText : randomLine(kind, language)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer', language);
-        } catch (error) { setMessage(randomLine(kind, language), kind === 'needs-help' ? 'comfort' : 'cheer', language); }
+            setMessage((isMeaningfulCompanionReply(replyText, language) ? replyText : randomLine(kind, language)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer', language, speak);
+        } catch (error) { setMessage(randomLine(kind, language), kind === 'needs-help' ? 'comfort' : 'cheer', language, speak); }
         finally { if (button) button.disabled = false; }
     }
     function onSessionSignal(kind, summary) {
         updateSummary(summary);
         if (kind === 'milestone' && isAnonBirthday()) showBirthdayCard();
-        if (kind === 'state' || kind === 'started') {
+        // Regular study feedback remains visible, but it never asks TTS to
+        // speak.  The only session paths allowed to speak are a manual check
+        // and the configured reminder; head touches are handled separately.
+        if (kind === 'started' || kind === 'state') {
             const language = getCompanionLanguage();
-            setMessage(randomLine(kind === 'started' ? 'started' : 'state', language), 'thinking', language);
+            setMessage(randomLine(kind === 'started' ? 'started' : 'state', language), 'thinking', language, false);
             return;
         }
-        askAI(kind, summary);
+        if (kind === 'manual' || kind === 'manual-empty' || kind === 'reminder') {
+            askAI(kind, summary, true);
+            return;
+        }
+        askAI(kind, summary, false);
     }
     function disposeRenderer() {
         if (liveModel && liveModel.destroy) { try { liveModel.destroy({ children: true }); } catch (e) {} }
@@ -1002,12 +1069,13 @@ const Live2DCompanion = (function() {
     async function askTouchAI(region) {
         const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
         const language = getCompanionLanguage();
+        const speak = region === 'head';
         // React physically immediately (mood/motion) so the touch still lands,
         // but don't paint a local text bubble -- the AI reply is the single response.
         setMoodLabel(reaction.mood);
         playMood(reaction.mood);
         if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) {
-            setMessage(randomTouchLine(region, language), reaction.mood, language);
+            setMessage(randomTouchLine(region, language), reaction.mood, language, speak);
             return;
         }
         if (Date.now() - lastTouchAIAt < 1800) return;
@@ -1025,10 +1093,10 @@ const Live2DCompanion = (function() {
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
             const replyText = String(parsed.text || '').trim();
-            setReply((isMeaningfulCompanionReply(replyText, language) ? replyText : randomTouchLine(region, language)).slice(0, 80), reaction.mood, language);
+            setReply((isMeaningfulCompanionReply(replyText, language) ? replyText : randomTouchLine(region, language)).slice(0, 80), reaction.mood, language, speak);
         } catch (error) {
             // If the AI call failed, fall back to a single local reaction line.
-            setMessage(randomTouchLine(region, language), reaction.mood, language);
+            setMessage(randomTouchLine(region, language), reaction.mood, language, speak);
         }
     }
     function showTouchFeedback(event, label) {
@@ -1158,6 +1226,13 @@ const Live2DCompanion = (function() {
         document.getElementById('exitCompanionModeBtn').addEventListener('click', exit);
         document.getElementById('companionAskBtn').addEventListener('click', function() { if (session) session.ask(); });
         document.getElementById('closeCompanionBirthdayCard').addEventListener('click', function() { document.getElementById('companionBirthdayCard').hidden = true; });
+        window.addEventListener('companion-reminder-settings-changed', function() {
+            if (session && session.refreshReminder) session.refreshReminder();
+        });
+        window.addEventListener('storage', function(event) {
+            if (!event || (event.key && event.key !== COMPANION_REMINDER_ENABLED_STORAGE_KEY && event.key !== COMPANION_REMINDER_MINUTES_STORAGE_KEY)) return;
+            if (session && session.refreshReminder) session.refreshReminder();
+        });
         window.addEventListener('resize', function() { if (open) scheduleRendererReload(180); });
         const companionHost = document.getElementById('companionLive2DHost');
         const companionCanvas = document.getElementById('companionLive2DCanvas');

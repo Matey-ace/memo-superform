@@ -299,6 +299,18 @@
                         </select>
                         <p id="companionLanguageHint" class="hint">控制陪伴模式中 AI 的文字回复，并让陪伴朗读使用对应文本语言。选择后立即保存，下一次互动生效；不会修改角色的参考音频语言、TTS 模型或界面语言。</p>
                     </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label" for="companionReminderEnabled">
+                            <input type="checkbox" id="companionReminderEnabled" aria-controls="companionReminderMinutes" aria-describedby="companionReminderHint">
+                            <span>开启定时陪伴提醒</span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label for="companionReminderMinutes">关心间隔（分钟）</label>
+                        <input type="number" id="companionReminderMinutes" min="1" max="180" step="1" value="30" inputmode="numeric" aria-describedby="companionReminderHint companionReminderMinutesHint">
+                        <p id="companionReminderMinutesHint" class="hint">可设为 1–180 分钟，默认 30 分钟。</p>
+                    </div>
+                    <p id="companionReminderHint" class="hint">开启后，当前陪伴角色会在每个间隔查看你的背词进度并给出鼓励；已开启陪伴模式语音朗读时，会朗读这一次提醒。正常背词过程中的学习反馈只显示文字，不会自动朗读。</p>
                 </div>
 
                 <div class="setting-group">
@@ -492,13 +504,13 @@
     <script src="js/study-shortcuts.js?v=20260825-unified-ui"></script>
     <script src="js/study-lifecycle.js?v=20260825-unified-ui"></script>
     <script src="js/study-web.js?v=20260825-unified-ui"></script>
-    <script src="js/live2d-companion.js?v=20260829-v078-companion-language"></script>
+    <script src="js/live2d-companion.js?v=20260829-v078-companion-reminder"></script>
     <script src="js/study-sync-ui.js?v=20260827-global-fix"></script>
     <script>
         if (window.MemoUIStyle.isNotebook) {
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260829-v078-companion-language"></script>
+    <script src="js/app.js?v=20260829-v078-companion-reminder"></script>
 </body>
 </html>
