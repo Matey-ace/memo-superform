@@ -47,6 +47,23 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 点击顶部「陪伴学习」进入固定双栏：左侧为墨墨背词，右侧为角色和本轮学习反馈。模型在设置 →「Live2D 模型衣柜」中管理：可检索下载 Bestdori 目录中的角色/服装，也可输入已有 Live2D 模型文件夹路径导入。模型文件会复制至 `data/live2d/models/`；安装包不携带任何角色模型。支持 Cubism 2 与 Cubism 3/4 格式，模型或 WebGL 不可用时自动回退到 Anon GIF。
 
+### GPT-SoVITS 语音包快速挂载
+
+Windows EXE 不内置体积很大的 GPT-SoVITS 环境和音色资料。将已经准备好的完整 `tts_pack` 文件夹压缩为一个 ZIP 后，打开设置 →「语音功能（GPT-SoVITS 资源包）」，把 ZIP 拖到「快速挂载完整语音包」区域即可。ZIP 可以直接以 `pack.json` 为根，也可以只包一层 `tts_pack/` 顶层目录。
+
+```text
+tts_pack/
+├── pack.json
+├── .venv311/Scripts/python.exe
+├── tts_engine/worker_main.py
+└── roles/<role_id>/
+    ├── gpt.ckpt
+    ├── sovits.pth
+    └── reference.wav   # 也可为 mp3 / flac / ogg
+```
+
+同时需有 `roles.json`（或可迁移的旧资料）、每位角色的逐字参考文本和参考语言。单独的 `.ckpt` / `.pth` 不是完整语音包；请继续在角色编辑器中为角色逐项更新。挂载过程会先在临时目录校验 ZIP、运行环境和语音资料，然后关闭旧 worker、原子替换 `data/tts_pack/`；校验失败时原有包保持不变。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
+
 ## Quick Start
 
 ### 方式一：浏览器模式
@@ -230,6 +247,23 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 ## Tech Stack
 
 Native HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python local proxy + SQLite. Desktop window via [pywebview](https://pywebview.flowrl.com/).
+
+### Quick mounting a GPT-SoVITS voice pack
+
+The Windows EXE deliberately keeps the large GPT-SoVITS runtime and voice assets outside the application. Zip a complete prepared `tts_pack` directory, then open Settings → **Voice (GPT-SoVITS resource pack)** and drag the ZIP into **Quick mount complete voice pack**. The ZIP may place `pack.json` at its root or inside one outer `tts_pack/` directory.
+
+```text
+tts_pack/
+├── pack.json
+├── .venv311/Scripts/python.exe
+├── tts_engine/worker_main.py
+└── roles/<role_id>/
+    ├── gpt.ckpt
+    ├── sovits.pth
+    └── reference.wav   # mp3 / flac / ogg also work
+```
+
+The archive must also contain `roles.json` (or migratable legacy assets), exact reference text, and the reference language for each role. A bare `.ckpt` / `.pth` pair is not a complete voice package; use the role editor for that incremental workflow. Memo validates and extracts the ZIP in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a failed validation leaves the existing pack unchanged. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
 
 ## Quick Start
 

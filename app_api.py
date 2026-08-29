@@ -279,6 +279,8 @@ class LocalApiMixin:
                     "error": "旧模型上传入口已移除；请在角色编辑器中上传模型文件",
                     "migration": "使用 /api/tts/roles/<role_id>/upload",
                 })
+            if path == "/api/tts/mount-pack":
+                return self._mount_tts_pack_archive(parsed)
             if path == "/api/tts/repair":
                 import tts
                 try:
@@ -643,6 +645,28 @@ class LocalApiMixin:
                 })
             role = tts.upload_role_file(TTS_PACK_DIR, parts[3], kind, name, data)
             return self._send_json(200, {"ok": True, "role": role})
+        except tts.TTSException as exc:
+            return self._send_json(400, {"error": str(exc)})
+
+    def _mount_tts_pack_archive(self, parsed):
+        """Receive a complete voice-pack ZIP without loading it into RAM."""
+        import tts
+        query = parse_qs(parsed.query)
+        source_name = (query.get("name") or [""])[0]
+        # The name is display-only; the ZIP parser in tts.py validates actual
+        # contents.  Keep the extension check here so a mistaken drag is
+        # reported before the potentially multi-gigabyte upload begins.
+        if source_name and not source_name.lower().endswith(".zip"):
+            return self._send_json(400, {"error": "请拖入完整的语音包 ZIP 文件"})
+        try:
+            result = tts.mount_tts_pack_stream(
+                TTS_PACK_DIR,
+                DATA_DIR,
+                self.rfile,
+                self._safe_content_length(),
+                source_name=source_name,
+            )
+            return self._send_json(200, result)
         except tts.TTSException as exc:
             return self._send_json(400, {"error": str(exc)})
 

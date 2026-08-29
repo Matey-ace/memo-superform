@@ -358,6 +358,16 @@
                         <label>状态</label>
                         <span id="ttsStatusText" class="hint">检测中...</span>
                     </div>
+                    <div class="setting-item tts-pack-mount">
+                        <label>快速挂载完整语音包</label>
+                        <div id="ttsPackMountDropzone" class="tts-pack-mount-dropzone" role="button" tabindex="0" aria-controls="ttsPackMountInput" aria-describedby="ttsPackMountHint ttsPackMountStatus">
+                            <strong>将完整语音包 ZIP 拖到这里</strong>
+                            <span>或点击此区域选择文件</span>
+                        </div>
+                        <input id="ttsPackMountInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
+                        <div class="tts-pack-mount-actions"><button id="ttsPackMountBrowseBtn" type="button" class="test-btn">选择语音包 ZIP</button><span id="ttsPackMountStatus" class="hint" role="status" aria-live="polite"></span></div>
+                        <p id="ttsPackMountHint" class="hint">ZIP 应包含完整的 <code>tts_pack</code>：<code>pack.json</code>、<code>.venv311</code>、<code>tts_engine</code> 以及角色的 GPT、SoVITS、参考音频、文本与语言。可直接压缩整个 <code>tts_pack</code> 文件夹；挂载成功后旧包会被安全替换，语音开关会关闭，待你确认角色的 Live2D 绑定后再开启。</p>
+                    </div>
                     <div class="setting-item">
                         <label>选中角色（编辑 / 上传目标）</label>
                         <select id="ttsVoiceSelect">
@@ -511,6 +521,6 @@
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260829-v078-companion-reminder"></script>
+    <script src="js/app.js?v=20260829-v079-tts-pack-mount"></script>
 </body>
 </html>

@@ -545,6 +545,10 @@ const App = (function() {
         const speedValue = document.getElementById('ttsSpeedValue');
         const autoRead = document.getElementById('ttsAutoRead');
         const companionRead = document.getElementById('ttsCompanionRead');
+        const packMountDropzone = document.getElementById('ttsPackMountDropzone');
+        const packMountInput = document.getElementById('ttsPackMountInput');
+        const packMountBrowseBtn = document.getElementById('ttsPackMountBrowseBtn');
+        const packMountStatus = document.getElementById('ttsPackMountStatus');
 
         let savedSpeed = parseFloat(localStorage.getItem('tts_speed') || '1.0');
         if (!Number.isFinite(savedSpeed) || savedSpeed < 0.5 || savedSpeed > 1.5) savedSpeed = 1.0;
@@ -619,6 +623,7 @@ const App = (function() {
 
         // ---- Explicit character role packages (TTS + reference + Live2D) ----
         let roleList = [], activeRoleId = '';
+        let packMountInFlight = false;
         const roleStatus = document.getElementById('ttsRoleStatus');
         const roleSelectionHint = document.getElementById('ttsRoleSelectionHint');
         const roleEditor = document.getElementById('ttsRoleEditor');
@@ -642,6 +647,113 @@ const App = (function() {
             const token = window.MaimemoAPI && MaimemoAPI.getToken ? MaimemoAPI.getToken() : '';
             if (token) out.Authorization = 'Bearer ' + token;
             return out;
+        }
+        function setPackMountMessage(message, error) {
+            if (!packMountStatus) return;
+            packMountStatus.textContent = message || '';
+            packMountStatus.className = error ? 'hint error' : 'hint';
+        }
+        function setPackMountBusy(busy) {
+            if (packMountDropzone) {
+                packMountDropzone.classList.toggle('is-uploading', !!busy);
+                packMountDropzone.setAttribute('aria-busy', busy ? 'true' : 'false');
+                packMountDropzone.tabIndex = busy ? -1 : 0;
+            }
+            if (packMountInput) packMountInput.disabled = !!busy;
+            if (packMountBrowseBtn) packMountBrowseBtn.disabled = !!busy;
+        }
+        function describePackSize(bytes) {
+            const size = Number(bytes) || 0;
+            if (size >= 1024 * 1024 * 1024) return (size / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+            if (size >= 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
+            return Math.max(0, Math.round(size / 1024)) + ' KB';
+        }
+        async function mountTtsPack(file) {
+            if (packMountInFlight || !file) return;
+            if (!/\.zip$/i.test(String(file.name || ''))) {
+                setPackMountMessage('请选择完整的语音包 ZIP 文件。', true);
+                return;
+            }
+            if (!file.size) {
+                setPackMountMessage('这个语音包 ZIP 是空的。', true);
+                return;
+            }
+            if (roleSaveInFlight) {
+                setPackMountMessage('角色资料正在保存，请完成后再挂载语音包。', true);
+                return;
+            }
+            if (roleEditorOpen) {
+                const proceed = window.confirm('挂载会替换当前完整语音包。未保存的角色编辑内容会被丢弃，继续吗？');
+                if (!proceed) return;
+                closeRoleEditor();
+            }
+
+            packMountInFlight = true;
+            setPackMountBusy(true);
+            setRoleEditorSelectionLock(true);
+            const label = String(file.name || '语音包.zip');
+            setPackMountMessage('正在传输并校验 ' + label + '（' + describePackSize(file.size) + '），大包需要一些时间…');
+            if (actionEl) { actionEl.textContent = '正在挂载完整语音包…'; actionEl.className = 'status-text'; }
+            try {
+                // Keep the File as the request body.  Unlike arrayBuffer(),
+                // this lets the WebView stream a multi-GB runtime pack instead
+                // of duplicating it in browser memory.
+                const response = await fetch('/api/tts/mount-pack?name=' + encodeURIComponent(label), {
+                    method: 'POST',
+                    headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/zip' }),
+                    body: file
+                });
+                const data = await response.json().catch(function() { return {}; });
+                if (!response.ok || data.error) throw new Error(data.error || '语音包挂载失败');
+                await TTS.refresh();
+                renderStatus();
+                await loadRoles();
+                const imported = Array.isArray(data.voice_ready_role_ids) ? data.voice_ready_role_ids.length : 0;
+                setPackMountMessage('✓ 已挂载“' + (data.pack_name || label) + '”。已识别 ' + imported + ' 套完整语音资料；请确认角色的 Live2D 绑定后再开启语音。');
+                if (actionEl) { actionEl.textContent = '✓ 语音包已挂载，旧 worker 已关闭'; actionEl.className = 'status-text success'; }
+            } catch (error) {
+                console.error('语音包挂载失败：', error);
+                setPackMountMessage('✗ ' + (error.message || '语音包挂载失败'), true);
+                if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
+            } finally {
+                packMountInFlight = false;
+                setPackMountBusy(false);
+                setRoleEditorSelectionLock(false);
+                if (packMountInput) packMountInput.value = '';
+            }
+        }
+        function selectTtsPack(files) {
+            const file = files && files[0];
+            if (!file) return;
+            mountTtsPack(file);
+        }
+        if (packMountBrowseBtn) packMountBrowseBtn.addEventListener('click', function() {
+            if (!packMountInFlight && packMountInput) packMountInput.click();
+        });
+        if (packMountInput) packMountInput.addEventListener('change', function() { selectTtsPack(packMountInput.files); });
+        if (packMountDropzone) {
+            packMountDropzone.addEventListener('click', function() {
+                if (!packMountInFlight && packMountInput) packMountInput.click();
+            });
+            packMountDropzone.addEventListener('keydown', function(event) {
+                if (packMountInFlight || (event.key !== 'Enter' && event.key !== ' ')) return;
+                event.preventDefault();
+                if (packMountInput) packMountInput.click();
+            });
+            packMountDropzone.addEventListener('dragover', function(event) {
+                if (packMountInFlight) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+                packMountDropzone.classList.add('is-dragover');
+            });
+            packMountDropzone.addEventListener('dragleave', function(event) {
+                if (!packMountDropzone.contains(event.relatedTarget)) packMountDropzone.classList.remove('is-dragover');
+            });
+            packMountDropzone.addEventListener('drop', function(event) {
+                event.preventDefault();
+                packMountDropzone.classList.remove('is-dragover');
+                if (!packMountInFlight) selectTtsPack(event.dataTransfer && event.dataTransfer.files);
+            });
         }
         function roleMessage(text, error) {
             if (!roleStatus) return;

@@ -20,11 +20,14 @@ import os
 import queue
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
 import copy
+import zipfile
 from contextlib import contextmanager
 from functools import wraps
 
@@ -77,6 +80,25 @@ _ENGINE_PROBE_LOCK = threading.RLock()
 _ENGINE_PROBE_CACHE = {}
 _ENGINE_PROBE_TTL = 45.0
 _ENGINE_REPAIR_LOCK = threading.Lock()
+
+# Quick-mount archives contain the complete local inference runtime as well as
+# model weights, so they are materially larger than ordinary settings uploads.
+# Stream them to disk and enforce archive-level limits before extracting.  The
+# defaults leave room for a portable Python/Torch runtime plus several voices,
+# while environment overrides let a managed installation set a tighter cap.
+def _mount_limit(name, default):
+    try:
+        value = int(os.environ.get(name, default))
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+_TTS_PACK_MOUNT_MAX_UPLOAD_BYTES = _mount_limit("MEMO_TTS_PACK_MAX_UPLOAD_BYTES", 20 * 1024 ** 3)
+_TTS_PACK_MOUNT_MAX_UNCOMPRESSED_BYTES = _mount_limit("MEMO_TTS_PACK_MAX_UNCOMPRESSED_BYTES", 28 * 1024 ** 3)
+_TTS_PACK_MOUNT_MAX_FILES = _mount_limit("MEMO_TTS_PACK_MAX_FILES", 50000)
+_TTS_PACK_MOUNT_CHUNK_BYTES = 1024 * 1024
+_TTS_PACK_MOUNT_LOCK = threading.RLock()
 
 
 def _hidden_windows_subprocess_kwargs():
@@ -1154,6 +1176,322 @@ def _engine_ready(pack_dir):
     if not dependency_ready:
         return False, dependency_reason
     return True, ""
+
+
+def _safe_zip_member_parts(info):
+    """Validate one archive member and return its relative path parts.
+
+    A voice resource pack is often exchanged outside the application, so the
+    installer treats the ZIP as untrusted input.  In particular, never hand a
+    member name directly to ``extractall``: ZIP Slip paths, Windows drive paths
+    and symlink entries could otherwise escape ``data/tts_pack``.
+    """
+    raw_name = str(getattr(info, "filename", "") or "")
+    if not raw_name or "\x00" in raw_name:
+        raise TTSException("语音包内含无效文件名")
+    normalized = raw_name.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise TTSException("语音包不能包含绝对路径文件")
+    raw_parts = normalized.split("/")
+    if any(part == ".." for part in raw_parts):
+        raise TTSException("语音包不能包含上级目录路径")
+    parts = [part for part in raw_parts if part not in ("", ".")]
+    if not parts:
+        raise TTSException("语音包内含无效文件路径")
+
+    mode = (int(getattr(info, "external_attr", 0)) >> 16) & 0o170000
+    is_directory = bool(info.is_dir() or mode == stat.S_IFDIR)
+    if mode == stat.S_IFLNK:
+        raise TTSException("语音包不能包含链接文件")
+    if mode and not is_directory and mode != stat.S_IFREG:
+        raise TTSException("语音包包含不支持的特殊文件")
+    return parts, is_directory
+
+
+def _inspect_tts_pack_archive(archive):
+    """Check member names and aggregate size before any archive is extracted."""
+    infos = archive.infolist()
+    if not infos:
+        raise TTSException("语音包 ZIP 是空的")
+    if len(infos) > _TTS_PACK_MOUNT_MAX_FILES:
+        raise TTSException("语音包文件数量过多")
+
+    total_size = 0
+    files = set()
+    directories = set()
+    members = []
+    for info in infos:
+        parts, is_directory = _safe_zip_member_parts(info)
+        key = "/".join(parts).casefold()
+        if key in files or (is_directory and key in directories):
+            raise TTSException("语音包含有重复文件路径")
+        if is_directory:
+            if key in files or any(file_path.startswith(key + "/") for file_path in files):
+                raise TTSException("语音包内的文件与目录路径冲突")
+            directories.add(key)
+        else:
+            # On Windows these collisions would otherwise make extraction
+            # depend on archive ordering.  Reject them deterministically.
+            if (key in directories or any(key.startswith(directory + "/") for directory in files)
+                    or any(directory.startswith(key + "/") for directory in directories)):
+                raise TTSException("语音包内的文件与目录路径冲突")
+            files.add(key)
+            file_size = int(getattr(info, "file_size", 0) or 0)
+            compressed_size = int(getattr(info, "compress_size", 0) or 0)
+            if file_size < 0 or compressed_size < 0:
+                raise TTSException("语音包内含无效文件大小")
+            total_size += file_size
+            if total_size > _TTS_PACK_MOUNT_MAX_UNCOMPRESSED_BYTES:
+                raise TTSException("解压后的语音包过大")
+            # Very large highly-compressible entries are the usual ZIP bomb
+            # shape.  Model weights and virtual-environment binaries have a
+            # much lower ratio in normal archives.
+            if file_size >= 128 * 1024 ** 2 and compressed_size * 200 < file_size:
+                raise TTSException("语音包压缩比例异常")
+        members.append((info, parts, is_directory))
+    return members
+
+
+def _extract_tts_pack_archive(archive_path, extract_dir):
+    """Safely extract one complete ZIP into a private staging directory."""
+    try:
+        archive = zipfile.ZipFile(archive_path, "r")
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise TTSException("请选择有效的语音包 ZIP 文件：%s" % exc)
+
+    root = os.path.abspath(extract_dir)
+    try:
+        members = _inspect_tts_pack_archive(archive)
+        for info, parts, is_directory in members:
+            destination = os.path.abspath(os.path.join(root, *parts))
+            try:
+                if os.path.commonpath((root, destination)) != root:
+                    raise TTSException("语音包内含越界文件路径")
+            except ValueError:
+                raise TTSException("语音包内含无效文件路径")
+            if is_directory:
+                os.makedirs(destination, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            written = 0
+            try:
+                with archive.open(info, "r") as source, open(destination, "xb") as target:
+                    while True:
+                        chunk = source.read(_TTS_PACK_MOUNT_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        target.write(chunk)
+                        written += len(chunk)
+            except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+                raise TTSException("解压语音包失败：%s" % exc)
+            if written != int(info.file_size):
+                raise TTSException("语音包内文件大小校验失败")
+    finally:
+        archive.close()
+
+
+def _find_tts_pack_root(extract_dir):
+    """Accept either a direct pack root or a ZIP with one outer folder."""
+    direct_meta = os.path.join(extract_dir, "pack.json")
+    if os.path.isfile(direct_meta):
+        return extract_dir
+    ignored = {"__macosx", ".ds_store"}
+    entries = []
+    try:
+        for entry in os.scandir(extract_dir):
+            if entry.name.casefold() in ignored:
+                continue
+            entries.append(entry)
+    except OSError as exc:
+        raise TTSException("读取已解压语音包失败：%s" % exc)
+    if len(entries) == 1 and entries[0].is_dir():
+        wrapped = entries[0].path
+        if os.path.isfile(os.path.join(wrapped, "pack.json")):
+            return wrapped
+    raise TTSException("语音包根目录必须包含 pack.json（可放在 ZIP 的唯一顶层文件夹中）")
+
+
+def _validate_tts_pack_root(pack_root):
+    """Verify a mounted archive contains a usable runtime and at least one voice.
+
+    Live2D assets remain part of the app's model library, not the voice ZIP.
+    Therefore a role is considered voice-complete here even when it still needs
+    a Live2D binding in the settings page.
+    """
+    pack = _pack_meta(pack_root)
+    if not isinstance(pack, dict):
+        raise TTSException("语音包的 pack.json 格式无效")
+    if not os.path.isfile(_venv_python(pack_root)):
+        raise TTSException("语音包缺少 .venv311/Scripts/python.exe 运行环境")
+    if not os.path.isfile(os.path.join(pack_root, "tts_engine", "worker_main.py")):
+        raise TTSException("语音包缺少 tts_engine/worker_main.py")
+
+    library = list_roles(pack_root)
+    voice_ready = []
+    for role in library.get("roles") or []:
+        missing = [item for item in role.get("missing") or [] if item != "Live2D 模型"]
+        if not missing:
+            voice_ready.append(role)
+    if not voice_ready:
+        raise TTSException("语音包未包含资料完整的 GPT、SoVITS、参考音频、参考文本和参考语言")
+    return pack, library, voice_ready
+
+
+def _clear_engine_probe_cache(pack_dir):
+    with _ENGINE_PROBE_LOCK:
+        _ENGINE_PROBE_CACHE.pop(os.path.abspath(pack_dir), None)
+
+
+def _check_tts_pack_can_be_replaced(pack_dir):
+    """Stop this process's idle worker and reject another process's pack lock."""
+    manager = _manager_for_pack(pack_dir)
+    if manager is not None and manager.is_busy:
+        raise TTSException("正在生成语音，请等待当前生成完成后再挂载语音包")
+    # The worker owns the interpreter and its current model files.  It must be
+    # gone before Windows can exchange the enclosing pack directory.
+    _reset_manager()
+    probe, acquired = _acquire_pack_lock(pack_dir)
+    if not acquired:
+        raise TTSException("语音资源包正被另一个 Memo Superform 实例使用，请先关闭另一个实例后再挂载")
+    _release_pack_lock(probe)
+
+
+def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
+    """Exchange a fully validated staged pack for the active pack directory."""
+    pack_dir = os.path.abspath(pack_dir)
+    data_dir = os.path.abspath(data_dir)
+    parent = os.path.dirname(pack_dir)
+    if os.path.islink(pack_dir):
+        raise TTSException("语音资源包目录不能是链接路径")
+    os.makedirs(parent, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
+
+    previous_state = _load_state(data_dir)
+    disabled_state = dict(previous_state)
+    disabled_state["enabled"] = False
+    if not _save_state(data_dir, disabled_state):
+        raise TTSException("保存语音开关状态失败")
+
+    backup_dir = os.path.join(parent, ".tts-pack-backup-" + uuid.uuid4().hex)
+    moved_previous = False
+    mounted = False
+    try:
+        if os.path.lexists(pack_dir):
+            os.replace(pack_dir, backup_dir)
+            moved_previous = True
+        os.replace(candidate_dir, pack_dir)
+        mounted = True
+    except Exception:
+        # Roll both state and directory back.  No partial extraction ever
+        # reaches the live location; a failed mount therefore keeps the old
+        # package exactly where the user left it.
+        if moved_previous and not os.path.lexists(pack_dir):
+            try:
+                os.replace(backup_dir, pack_dir)
+            except OSError:
+                pass
+        _save_state(data_dir, previous_state)
+        raise
+    finally:
+        # A successful exchange deliberately discards the previous complete
+        # pack only after the new directory is live.  Failed cleanup merely
+        # leaves a private rollback copy; it never affects the active pack.
+        if mounted and moved_previous and os.path.isdir(backup_dir):
+            shutil.rmtree(backup_dir, ignore_errors=True)
+    _clear_engine_probe_cache(pack_dir)
+
+
+def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
+    """Install a complete GPT-SoVITS voice package ZIP into ``data/tts_pack``.
+
+    The accepted ZIP is the contents of a complete ``tts_pack`` directory,
+    either at archive root or inside one top-level folder.  It includes the
+    portable runtime (``.venv311``), ``tts_engine``, ``pack.json`` and role
+    assets.  Extraction happens beside the live pack and is atomically swapped
+    only after structural and role-asset validation succeeds.
+    """
+    archive_path = os.path.abspath(os.fspath(archive_path))
+    if not os.path.isfile(archive_path):
+        raise TTSException("未找到待挂载的语音包 ZIP")
+    try:
+        archive_size = os.path.getsize(archive_path)
+    except OSError as exc:
+        raise TTSException("读取语音包失败：%s" % exc)
+    if archive_size <= 0:
+        raise TTSException("语音包 ZIP 是空的")
+    if archive_size > _TTS_PACK_MOUNT_MAX_UPLOAD_BYTES:
+        raise TTSException("语音包 ZIP 超过允许大小")
+
+    pack_dir = os.path.abspath(pack_dir)
+    parent = os.path.dirname(pack_dir)
+    os.makedirs(parent, exist_ok=True)
+    extraction_dir = tempfile.mkdtemp(prefix=".tts-pack-extract-", dir=parent)
+    candidate_dir = ""
+    try:
+        with _TTS_PACK_MOUNT_LOCK:
+            _extract_tts_pack_archive(archive_path, extraction_dir)
+            source_root = _find_tts_pack_root(extraction_dir)
+            pack, library, voice_ready = _validate_tts_pack_root(source_root)
+            candidate_dir = os.path.join(parent, ".tts-pack-ready-" + uuid.uuid4().hex)
+            os.replace(source_root, candidate_dir)
+            _check_tts_pack_can_be_replaced(pack_dir)
+            _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir)
+            candidate_dir = ""  # ownership moved to the live package path
+            return {
+                "ok": True,
+                "message": "语音包已挂载；已停止旧语音进程，请在角色资料包中确认 Live2D 绑定后开启语音。",
+                "pack_name": str(pack.get("name") or "语音资源包"),
+                "version": pack.get("version"),
+                "roles": library.get("roles") or [],
+                "active_role_id": str(library.get("active_role_id") or ""),
+                "voice_ready_role_ids": [role.get("role_id") for role in voice_ready],
+                "enabled": False,
+                "source_name": os.path.basename(str(source_name or archive_path)),
+            }
+    except TTSException:
+        raise
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise TTSException("挂载语音包失败：%s" % exc)
+    finally:
+        if candidate_dir and os.path.isdir(candidate_dir):
+            shutil.rmtree(candidate_dir, ignore_errors=True)
+        if os.path.isdir(extraction_dir):
+            shutil.rmtree(extraction_dir, ignore_errors=True)
+
+
+def mount_tts_pack_stream(pack_dir, data_dir, stream, content_length, source_name=""):
+    """Receive a ZIP into a temporary file without keeping a multi-GB pack in RAM."""
+    try:
+        content_length = int(content_length)
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length <= 0:
+        raise TTSException("未收到语音包文件")
+    if content_length > _TTS_PACK_MOUNT_MAX_UPLOAD_BYTES:
+        raise TTSException("语音包 ZIP 超过允许大小")
+
+    parent = os.path.dirname(os.path.abspath(pack_dir))
+    os.makedirs(parent, exist_ok=True)
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".tts-pack-upload-", suffix=".zip", dir=parent, delete=False) as target:
+            temp_path = target.name
+            remaining = content_length
+            while remaining:
+                chunk = stream.read(min(_TTS_PACK_MOUNT_CHUNK_BYTES, remaining))
+                if not chunk:
+                    raise TTSException("语音包上传中断")
+                target.write(chunk)
+                remaining -= len(chunk)
+        return mount_tts_pack_archive(pack_dir, data_dir, temp_path, source_name)
+    except OSError as exc:
+        raise TTSException("保存语音包上传文件失败：%s" % exc)
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 def _read_text_file(path):
