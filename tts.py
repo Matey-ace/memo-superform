@@ -430,7 +430,7 @@ def _role_status(role, pack_dir=None, staged_dir=None):
     if not str(role.get("reference_text") or "").strip(): missing.append("参考文本")
     if role.get("reference_language") not in LANGUAGE_NUMBER_MAP.values(): missing.append("参考语言")
     if not role.get("live2d_model_id"): missing.append("Live2D 模型")
-    if pack_dir and not missing:
+    if pack_dir:
         folder = _role_folder(pack_dir, role)
         required = {
             "GPT 模型": role.get("gpt_file"),
@@ -438,6 +438,11 @@ def _role_status(role, pack_dir=None, staged_dir=None):
             "参考音频": role.get("audio_file"),
         }
         for label, name in required.items():
+            # A malformed manifest has already reported this asset as missing.
+            # Do not follow a non-canonical name, but keep checking every other
+            # valid asset even if text/language/Live2D is also incomplete.
+            if label in missing:
+                continue
             staged = os.path.join(staged_dir, str(name)) if staged_dir else ""
             if not ((staged and os.path.isfile(staged)) or os.path.isfile(os.path.join(folder, str(name)))):
                 missing.append(label)
@@ -1154,24 +1159,27 @@ def _write_install_meta(pack_dir, source="ModelScope"):
     return _write_json(os.path.join(pack_dir, "install.json"), data)
 
 
+def _runtime_layout_missing(pack_dir):
+    """Return the exact runtime files a mounted package still needs."""
+    required = (
+        (".venv311/Scripts/python.exe", _venv_python(pack_dir)),
+        ("tts_engine/worker_main.py", os.path.join(pack_dir, "tts_engine", "worker_main.py")),
+    )
+    return [label for label, path in required if not os.path.isfile(path)]
+
+
 def _engine_ready(pack_dir):
     """Validate install metadata, worker files, and imports before synthesis.
 
     install.json 只是安装完成标记；若它丢失但环境实际完整
     （venv 解释器与 worker 均存在），自动重建标记，避免用户误以为功能损坏。
     """
+    runtime_missing = _runtime_layout_missing(pack_dir)
+    if runtime_missing:
+        return False, "语音包尚待补齐，缺少：" + "、".join(runtime_missing)
     meta = _install_meta(pack_dir)
     if not meta or not meta.get("installed"):
-        if (os.path.exists(_venv_python(pack_dir))
-                and os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py"))):
-            _write_install_meta(pack_dir)
-            meta = _install_meta(pack_dir)
-        else:
-            return False, "资源包尚未安装，请先运行安装脚本（Windows: setup.bat）完成安装"
-    if not os.path.exists(_venv_python(pack_dir)):
-        return False, "未找到 .venv311 解释器，请重新运行安装脚本（Windows: setup.bat）"
-    if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
-        return False, "资源包缺少 tts_engine/worker_main.py，资源包不完整"
+        _write_install_meta(pack_dir)
     dependency_ready, dependency_reason, _missing = _engine_dependency_status(pack_dir)
     if not dependency_ready:
         return False, dependency_reason
@@ -1311,30 +1319,63 @@ def _find_tts_pack_root(extract_dir):
     raise TTSException("语音包根目录必须包含 pack.json（可放在 ZIP 的唯一顶层文件夹中）")
 
 
-def _validate_tts_pack_root(pack_root):
-    """Verify a mounted archive contains a usable runtime and at least one voice.
+def _missing_mount_paths(role):
+    """Translate one role's status labels into paths/settings users can fill."""
+    role_id = _safe_role_id(role.get("role_id"))
+    role_dir = "roles/%s" % role_id
+    expected = {
+        "GPT 模型": role_dir + "/gpt.ckpt",
+        "SoVITS 模型": role_dir + "/sovits.pth",
+        "参考音频": role_dir + "/reference.wav（也可为 .mp3 / .flac / .ogg）",
+        "参考文本": "roles.json → %s.reference_text" % role_id,
+        "参考语言": "roles.json → %s.reference_language" % role_id,
+        "Live2D 模型": "设置 → 角色资料包 → 绑定 Live2D",
+        "Live2D 模型（不可用）": "设置 → 角色资料包 → 绑定可用的 Live2D",
+    }
+    return [expected.get(item, item) for item in role.get("missing") or []]
 
-    Live2D assets remain part of the app's model library, not the voice ZIP.
-    Therefore a role is considered voice-complete here even when it still needs
-    a Live2D binding in the settings page.
+
+def _incomplete_role_reports(roles):
+    """Build the persistent, user-facing missing-item list for a role library."""
+    reports = []
+    for role in roles or []:
+        missing = list(role.get("missing") or [])
+        if not missing:
+            continue
+        reports.append({
+            "role_id": role.get("role_id"),
+            "name": role.get("name") or role.get("role_id"),
+            "missing": missing,
+            "missing_paths": _missing_mount_paths(role),
+        })
+    return reports
+
+
+def _inspect_tts_pack_root(pack_root):
+    """Read a mounted archive and report missing parts without rejecting it.
+
+    ``pack.json`` is the minimum structural marker of a Memo voice package.
+    All other runtime and role assets are intentionally allowed to be absent:
+    the settings UI can then show their exact expected locations and the user
+    can finish the package with the existing role editor or repair workflow.
     """
     pack = _pack_meta(pack_root)
     if not isinstance(pack, dict):
         raise TTSException("语音包的 pack.json 格式无效")
-    if not os.path.isfile(_venv_python(pack_root)):
-        raise TTSException("语音包缺少 .venv311/Scripts/python.exe 运行环境")
-    if not os.path.isfile(os.path.join(pack_root, "tts_engine", "worker_main.py")):
-        raise TTSException("语音包缺少 tts_engine/worker_main.py")
-
     library = list_roles(pack_root)
     voice_ready = []
     for role in library.get("roles") or []:
         missing = [item for item in role.get("missing") or [] if item != "Live2D 模型"]
         if not missing:
             voice_ready.append(role)
-    if not voice_ready:
-        raise TTSException("语音包未包含资料完整的 GPT、SoVITS、参考音频、参考文本和参考语言")
-    return pack, library, voice_ready
+    incomplete_roles = _incomplete_role_reports(library.get("roles") or [])
+    readiness = {
+        "runtime_missing": _runtime_layout_missing(pack_root),
+        "incomplete_roles": incomplete_roles,
+        "voice_ready_roles": voice_ready,
+        "complete": not _runtime_layout_missing(pack_root) and not incomplete_roles,
+    }
+    return pack, library, readiness
 
 
 def _clear_engine_probe_cache(pack_dir):
@@ -1402,13 +1443,15 @@ def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
 
 
 def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
-    """Install a complete GPT-SoVITS voice package ZIP into ``data/tts_pack``.
+    """Install a complete or partially prepared GPT-SoVITS ZIP into ``data/tts_pack``.
 
     The accepted ZIP is the contents of a complete ``tts_pack`` directory,
     either at archive root or inside one top-level folder.  It includes the
     portable runtime (``.venv311``), ``tts_engine``, ``pack.json`` and role
-    assets.  Extraction happens beside the live pack and is atomically swapped
-    only after structural and role-asset validation succeeds.
+    assets.  ``pack.json`` is the only mandatory structural marker: a package
+    missing runtime or role files is mounted as a draft and reports each missing
+    item to the settings UI.  Extraction happens beside the live pack and is
+    atomically swapped only after ZIP and manifest validation succeeds.
     """
     archive_path = os.path.abspath(os.fspath(archive_path))
     if not os.path.isfile(archive_path):
@@ -1431,20 +1474,28 @@ def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
         with _TTS_PACK_MOUNT_LOCK:
             _extract_tts_pack_archive(archive_path, extraction_dir)
             source_root = _find_tts_pack_root(extraction_dir)
-            pack, library, voice_ready = _validate_tts_pack_root(source_root)
+            pack, library, readiness = _inspect_tts_pack_root(source_root)
             candidate_dir = os.path.join(parent, ".tts-pack-ready-" + uuid.uuid4().hex)
             os.replace(source_root, candidate_dir)
             _check_tts_pack_can_be_replaced(pack_dir)
             _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir)
             candidate_dir = ""  # ownership moved to the live package path
+            incomplete = bool(readiness["runtime_missing"] or readiness["incomplete_roles"])
             return {
                 "ok": True,
-                "message": "语音包已挂载；已停止旧语音进程，请在角色资料包中确认 Live2D 绑定后开启语音。",
+                "message": (
+                    "语音包已挂载，但仍有待补齐内容；请按设置页提示补齐后再开启语音。"
+                    if incomplete else
+                    "语音包已挂载；已停止旧语音进程，请在角色资料包中确认 Live2D 绑定后开启语音。"
+                ),
                 "pack_name": str(pack.get("name") or "语音资源包"),
                 "version": pack.get("version"),
                 "roles": library.get("roles") or [],
                 "active_role_id": str(library.get("active_role_id") or ""),
-                "voice_ready_role_ids": [role.get("role_id") for role in voice_ready],
+                "voice_ready_role_ids": [role.get("role_id") for role in readiness["voice_ready_roles"]],
+                "runtime_missing": readiness["runtime_missing"],
+                "incomplete_roles": readiness["incomplete_roles"],
+                "complete": not incomplete,
                 "enabled": False,
                 "source_name": os.path.basename(str(source_name or archive_path)),
             }
@@ -2009,6 +2060,8 @@ def get_status(pack_dir, data_dir):
             "role_error": "",
             "runtime_ready": False,
             "runtime_error": "",
+            "runtime_missing_files": _runtime_layout_missing(pack_dir) if pack is not None else [],
+            "incomplete_roles": [],
         }
 
 
@@ -2030,6 +2083,8 @@ def _get_status_inner(pack_dir, data_dir):
             "role_error": "",
             "runtime_ready": False,
             "runtime_error": "",
+            "runtime_missing_files": [],
+            "incomplete_roles": [],
         }
     ready, reason = _engine_ready(pack_dir)
     role_library = list_roles(pack_dir)
@@ -2077,6 +2132,8 @@ def _get_status_inner(pack_dir, data_dir):
         "role_error": role_error,
         "runtime_ready": bool(ready and state.get("enabled") and role_ready and not runtime_error),
         "runtime_error": runtime_error,
+        "runtime_missing_files": _runtime_layout_missing(pack_dir),
+        "incomplete_roles": _incomplete_role_reports(role_library["roles"]),
         "roles": role_library["roles"],
     }
 

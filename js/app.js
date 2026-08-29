@@ -549,6 +549,7 @@ const App = (function() {
         const packMountInput = document.getElementById('ttsPackMountInput');
         const packMountBrowseBtn = document.getElementById('ttsPackMountBrowseBtn');
         const packMountStatus = document.getElementById('ttsPackMountStatus');
+        const packMountMissing = document.getElementById('ttsPackMountMissing');
 
         let savedSpeed = parseFloat(localStorage.getItem('tts_speed') || '1.0');
         if (!Number.isFinite(savedSpeed) || savedSpeed < 0.5 || savedSpeed > 1.5) savedSpeed = 1.0;
@@ -653,6 +654,23 @@ const App = (function() {
             packMountStatus.textContent = message || '';
             packMountStatus.className = error ? 'hint error' : 'hint';
         }
+        function renderPackMountMissing(data) {
+            if (!packMountMissing) return;
+            const lines = [];
+            const runtime = Array.isArray(data && data.runtime_missing) ? data.runtime_missing
+                : (Array.isArray(data && data.runtime_missing_files) ? data.runtime_missing_files : []);
+            if (runtime.length) lines.push('运行环境缺少：' + runtime.join('、'));
+            const roles = Array.isArray(data && data.incomplete_roles) ? data.incomplete_roles : [];
+            roles.forEach(function(role) {
+                const label = String(role && (role.name || role.role_id) || '未命名角色');
+                const missing = Array.isArray(role && role.missing_paths) && role.missing_paths.length
+                    ? role.missing_paths
+                    : (Array.isArray(role && role.missing) ? role.missing : []);
+                if (missing.length) lines.push(label + ' 缺少：' + missing.join('、'));
+            });
+            packMountMissing.hidden = !lines.length;
+            packMountMissing.textContent = lines.length ? ('当前语音包待补齐：\n' + lines.join('\n')) : '';
+        }
         function setPackMountBusy(busy) {
             if (packMountDropzone) {
                 packMountDropzone.classList.toggle('is-uploading', !!busy);
@@ -671,7 +689,7 @@ const App = (function() {
         async function mountTtsPack(file) {
             if (packMountInFlight || !file) return;
             if (!/\.zip$/i.test(String(file.name || ''))) {
-                setPackMountMessage('请选择完整的语音包 ZIP 文件。', true);
+                setPackMountMessage('请选择语音包 ZIP 文件。', true);
                 return;
             }
             if (!file.size) {
@@ -692,8 +710,9 @@ const App = (function() {
             setPackMountBusy(true);
             setRoleEditorSelectionLock(true);
             const label = String(file.name || '语音包.zip');
+            renderPackMountMissing(null);
             setPackMountMessage('正在传输并校验 ' + label + '（' + describePackSize(file.size) + '），大包需要一些时间…');
-            if (actionEl) { actionEl.textContent = '正在挂载完整语音包…'; actionEl.className = 'status-text'; }
+            if (actionEl) { actionEl.textContent = '正在挂载语音包…'; actionEl.className = 'status-text'; }
             try {
                 // Keep the File as the request body.  Unlike arrayBuffer(),
                 // this lets the WebView stream a multi-GB runtime pack instead
@@ -709,8 +728,21 @@ const App = (function() {
                 renderStatus();
                 await loadRoles();
                 const imported = Array.isArray(data.voice_ready_role_ids) ? data.voice_ready_role_ids.length : 0;
-                setPackMountMessage('✓ 已挂载“' + (data.pack_name || label) + '”。已识别 ' + imported + ' 套完整语音资料；请确认角色的 Live2D 绑定后再开启语音。');
-                if (actionEl) { actionEl.textContent = '✓ 语音包已挂载，旧 worker 已关闭'; actionEl.className = 'status-text success'; }
+                renderPackMountMissing(data);
+                if (data.complete) {
+                    setPackMountMessage('✓ 已挂载“' + (data.pack_name || label) + '”。已识别 ' + imported + ' 套完整语音资料；请确认角色的 Live2D 绑定后再开启语音。');
+                    if (actionEl) { actionEl.textContent = '✓ 语音包已挂载，旧 worker 已关闭'; actionEl.className = 'status-text success'; }
+                } else {
+                    const runtimeMissing = Array.isArray(data.runtime_missing) && data.runtime_missing.length;
+                    const usableRoles = !runtimeMissing && imported > 0;
+                    setPackMountMessage(usableRoles
+                        ? ('✓ 已挂载“' + (data.pack_name || label) + '”。已识别 ' + imported + ' 套完整语音资料；其余待补齐内容见下方清单。')
+                        : ('✓ 已挂载“' + (data.pack_name || label) + '”，但还有待补齐内容；请按下方清单补充后再开启语音。'));
+                    if (actionEl) {
+                        actionEl.textContent = usableRoles ? '✓ 语音包已挂载，部分角色待补齐' : '✓ 语音包已挂载，等待补齐资料';
+                        actionEl.className = usableRoles ? 'status-text success' : 'status-text';
+                    }
+                }
             } catch (error) {
                 console.error('语音包挂载失败：', error);
                 setPackMountMessage('✗ ' + (error.message || '语音包挂载失败'), true);
@@ -1047,6 +1079,7 @@ const App = (function() {
         function renderStatus() {
             if (!statusEl) return;
             const st = TTS.getStatus();
+            renderPackMountMissing(st);
             if (!st.pack_ready) {
                 statusEl.textContent = '未检测到语音资源包（data/tts_pack/）';
                 if (enableBtn) enableBtn.textContent = '开启语音';

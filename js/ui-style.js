@@ -5,7 +5,7 @@
     'use strict';
 
     var STORAGE_KEY = 'memo_ui_style';
-    var VERSION = '20260829-tts-pack-mount';
+    var VERSION = '20260829-tts-pack-partial';
     var value = 'standard';
     try {
         var saved = localStorage.getItem(STORAGE_KEY);

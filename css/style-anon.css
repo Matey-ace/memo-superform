@@ -358,6 +358,7 @@ body {
 .tts-pack-mount-dropzone.is-uploading { cursor: progress; opacity: .72; }
 .tts-pack-mount-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
 .tts-pack-mount-actions .hint { margin-top: 0; }
+.tts-pack-mount-missing { margin-top: 9px; padding: 9px 10px; border: 1px solid #ecd8a3; border-radius: 9px; background: #fff9e7; color: #987322; font-size: 11px; line-height: 1.65; white-space: pre-line; }
 .checkbox-label { display: flex !important; align-items: center; gap: 8px; cursor: pointer; }
 .checkbox-label input { accent-color: var(--rose); }
 .setting-item input[type="range"] { accent-color: var(--rose); width: 100%; }

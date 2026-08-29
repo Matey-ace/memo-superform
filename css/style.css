@@ -560,6 +560,18 @@ body {
     margin-top: 0;
 }
 
+.tts-pack-mount-missing {
+    margin-top: 9px;
+    padding: 9px 10px;
+    border: 1px solid #ffd591;
+    border-radius: 8px;
+    background: #fffbe6;
+    color: #8c5a00;
+    font-size: 11px;
+    line-height: 1.65;
+    white-space: pre-line;
+}
+
 .checkbox-label {
     display: flex !important;
     align-items: center;

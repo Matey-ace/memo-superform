@@ -14,7 +14,8 @@ var TTS = (function() {
         busy: false,
         role_ready: false,
         runtime_ready: false,
-        runtime_error: ''
+        runtime_error: '',
+        runtime_missing_files: []
     };
     let audio = new Audio();
     let playbackGeneration = 0;

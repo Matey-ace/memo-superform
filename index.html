@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
-    <script src="js/ui-style.js?v=20260828-role-runtime"></script>
+    <script src="js/ui-style.js?v=20260829-tts-pack-partial"></script>
     <script src="vendor/echarts.min.js?v=40"></script>
 </head>
 <body>
@@ -359,14 +359,15 @@
                         <span id="ttsStatusText" class="hint">检测中...</span>
                     </div>
                     <div class="setting-item tts-pack-mount">
-                        <label>快速挂载完整语音包</label>
+                        <label>快速挂载语音包</label>
                         <div id="ttsPackMountDropzone" class="tts-pack-mount-dropzone" role="button" tabindex="0" aria-controls="ttsPackMountInput" aria-describedby="ttsPackMountHint ttsPackMountStatus">
-                            <strong>将完整语音包 ZIP 拖到这里</strong>
+                            <strong>将语音包 ZIP 拖到这里</strong>
                             <span>或点击此区域选择文件</span>
                         </div>
                         <input id="ttsPackMountInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
                         <div class="tts-pack-mount-actions"><button id="ttsPackMountBrowseBtn" type="button" class="test-btn">选择语音包 ZIP</button><span id="ttsPackMountStatus" class="hint" role="status" aria-live="polite"></span></div>
-                        <p id="ttsPackMountHint" class="hint">ZIP 应包含完整的 <code>tts_pack</code>：<code>pack.json</code>、<code>.venv311</code>、<code>tts_engine</code> 以及角色的 GPT、SoVITS、参考音频、文本与语言。可直接压缩整个 <code>tts_pack</code> 文件夹；挂载成功后旧包会被安全替换，语音开关会关闭，待你确认角色的 Live2D 绑定后再开启。</p>
+                        <p id="ttsPackMountHint" class="hint">ZIP 至少需包含有效的 <code>pack.json</code>，可直接压缩整个 <code>tts_pack</code> 文件夹。即使暂缺 <code>.venv311</code>、<code>tts_engine</code> 或角色资料，程序也会正常挂载并在下方列出准确缺项，方便你后续补齐；挂载成功后旧包会被安全替换，语音开关会关闭。</p>
+                        <p id="ttsPackMountMissing" class="tts-pack-mount-missing" hidden aria-live="polite"></p>
                     </div>
                     <div class="setting-item">
                         <label>选中角色（编辑 / 上传目标）</label>
@@ -507,7 +508,7 @@
     <script src="vendor/live2d/pixi-6.5.10.min.js?v=072"></script>
     <script src="vendor/live2d/pixi-live2d-display-0.4.0.min.js?v=072"></script>
     <script src="js/api.js?v=20260826-v070-sync"></script>
-    <script src="js/tts.js?v=20260829-v078-hidden-worker-preload"></script>
+    <script src="js/tts.js?v=20260829-v080-tts-pack-partial"></script>
     <script src="js/dashboard-core.js?v=20260825-unified-ui"></script>
     <script src="js/charts.js?v=44"></script>
     <script src="js/layout.js?v=20260825-unified-ui"></script>
@@ -521,6 +522,6 @@
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260829-v079-tts-pack-mount"></script>
+    <script src="js/app.js?v=20260829-v080-tts-pack-partial"></script>
 </body>
 </html>

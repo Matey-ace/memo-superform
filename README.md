@@ -49,7 +49,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 ### GPT-SoVITS 语音包快速挂载
 
-Windows EXE 不内置体积很大的 GPT-SoVITS 环境和音色资料。将已经准备好的完整 `tts_pack` 文件夹压缩为一个 ZIP 后，打开设置 →「语音功能（GPT-SoVITS 资源包）」，把 ZIP 拖到「快速挂载完整语音包」区域即可。ZIP 可以直接以 `pack.json` 为根，也可以只包一层 `tts_pack/` 顶层目录。
+Windows EXE 不内置体积很大的 GPT-SoVITS 环境和音色资料。将已经准备好的 `tts_pack` 文件夹压缩为一个 ZIP 后，打开设置 →「语音功能（GPT-SoVITS 资源包）」，把 ZIP 拖到「快速挂载语音包」区域即可。ZIP 可以直接以 `pack.json` 为根，也可以只包一层 `tts_pack/` 顶层目录。
 
 ```text
 tts_pack/
@@ -62,7 +62,7 @@ tts_pack/
     └── reference.wav   # 也可为 mp3 / flac / ogg
 ```
 
-同时需有 `roles.json`（或可迁移的旧资料）、每位角色的逐字参考文本和参考语言。单独的 `.ckpt` / `.pth` 不是完整语音包；请继续在角色编辑器中为角色逐项更新。挂载过程会先在临时目录校验 ZIP、运行环境和语音资料，然后关闭旧 worker、原子替换 `data/tts_pack/`；校验失败时原有包保持不变。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
+完整可用包应含有 `roles.json`（或可迁移的旧资料）、每位角色的逐字参考文本和参考语言。单独的 `.ckpt` / `.pth` 也可先作为待补齐包挂载：只要 ZIP 含有效的 `pack.json`，程序会先安全替换本地包，再在设置中逐项列出缺少的运行环境、模型、参考音频、文本、语言或 Live2D 绑定及其预期位置。随后可在角色编辑器中补充；资料尚未配齐的角色保持不可启用。挂载过程会在临时目录校验 ZIP 路径、链接和解压体积，然后关闭旧 worker、原子替换 `data/tts_pack/`；缺少 `pack.json`、清单损坏或 ZIP 不安全时原有包保持不变。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
 
 ## Quick Start
 
@@ -250,7 +250,7 @@ Native HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python
 
 ### Quick mounting a GPT-SoVITS voice pack
 
-The Windows EXE deliberately keeps the large GPT-SoVITS runtime and voice assets outside the application. Zip a complete prepared `tts_pack` directory, then open Settings → **Voice (GPT-SoVITS resource pack)** and drag the ZIP into **Quick mount complete voice pack**. The ZIP may place `pack.json` at its root or inside one outer `tts_pack/` directory.
+The Windows EXE deliberately keeps the large GPT-SoVITS runtime and voice assets outside the application. Zip a prepared `tts_pack` directory, then open Settings → **Voice (GPT-SoVITS resource pack)** and drag the ZIP into **Quick mount voice pack**. The ZIP may place `pack.json` at its root or inside one outer `tts_pack/` directory.
 
 ```text
 tts_pack/
@@ -263,7 +263,7 @@ tts_pack/
     └── reference.wav   # mp3 / flac / ogg also work
 ```
 
-The archive must also contain `roles.json` (or migratable legacy assets), exact reference text, and the reference language for each role. A bare `.ckpt` / `.pth` pair is not a complete voice package; use the role editor for that incremental workflow. Memo validates and extracts the ZIP in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a failed validation leaves the existing pack unchanged. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
+A complete usable archive contains `roles.json` (or migratable legacy assets), exact reference text, and the reference language for each role. A bare `.ckpt` / `.pth` pair may also be mounted as a package to finish later: as long as the ZIP contains a valid `pack.json`, Memo safely replaces the local pack and lists every missing runtime file, model, reference audio, text, language, or Live2D binding together with its expected location. Finish those items in the role editor; incomplete roles remain unavailable for activation. Memo validates ZIP paths, links, and extracted size in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a missing manifest, malformed manifest, or unsafe ZIP leaves the existing pack unchanged. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
 
 ## Quick Start
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Regression coverage for complete GPT-SoVITS ZIP quick mounting."""
+"""Regression coverage for GPT-SoVITS ZIP quick mounting."""
 
 import io
 import json
@@ -93,6 +93,13 @@ class TTSPackMountTests(unittest.TestCase):
         ):
             tts.upload_role_file(str(path), role_id, kind, filename, content)
         tts.activate_role(str(path), role_id)
+        # save_role initializes legacy draft roles when no registry exists.
+        # A complete fixture instead declares only its supplied role.
+        roles_path = path / "roles.json"
+        registry = json.loads(roles_path.read_text(encoding="utf-8"))
+        registry["roles"] = [role for role in registry["roles"] if role["role_id"] == role_id]
+        registry["active_role_id"] = role_id
+        roles_path.write_text(json.dumps(registry), encoding="utf-8")
 
     def _archive_directory(self, directory, archive_path, wrapper="tts_pack"):
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
@@ -119,6 +126,9 @@ class TTSPackMountTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["runtime_missing"], [])
+        self.assertEqual(result["incomplete_roles"], [])
         self.assertEqual(result["source_name"], archive.name)
         self.assertIn("newvoice", result["voice_ready_role_ids"])
         self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "new")
@@ -130,13 +140,82 @@ class TTSPackMountTests(unittest.TestCase):
         self.assertEqual(state["language"], "日文")
         self.assertEqual(state["speed"], 1.1)
 
-    def test_invalid_archive_keeps_previous_pack_and_state(self):
-        archive = self.root / "missing-runtime.zip"
+    def test_partial_archive_mounts_and_reports_every_missing_requirement(self):
+        archive = self.root / "partial-voice-pack.zip"
+        roles = {
+            "version": 1,
+            "active_role_id": "",
+            "roles": [
+                {
+                    "role_id": "partial",
+                    "name": "待补齐文件",
+                    "folder": "roles/partial",
+                    "gpt_file": "gpt.ckpt",
+                    "sovits_file": "sovits.pth",
+                    "audio_file": "reference.wav",
+                    "index_file": "",
+                    "reference_text": "这是已有的参考文本。",
+                    "reference_language": "中文",
+                    "live2d_model_id": "fixture-live2d",
+                },
+                {
+                    "role_id": "metadata",
+                    "name": "待补齐资料",
+                    "folder": "roles/metadata",
+                    "gpt_file": "",
+                    "sovits_file": "",
+                    "audio_file": "",
+                    "index_file": "",
+                    "reference_text": "",
+                    "reference_language": "",
+                    "live2d_model_id": "",
+                },
+            ],
+        }
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-            output.writestr("tts_pack/pack.json", json.dumps({"name": "incomplete"}))
+            output.writestr("tts_pack/pack.json", json.dumps({"name": "partial fixture"}))
+            output.writestr("tts_pack/roles.json", json.dumps(roles))
         tts._save_state(str(self.data), {"enabled": True, "language": "中文", "speed": 1.0})
 
-        with self.assertRaisesRegex(tts.TTSException, "缺少 .venv311"):
+        result = tts.mount_tts_pack_archive(str(self.pack), str(self.data), str(archive))
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["runtime_missing"], [
+            ".venv311/Scripts/python.exe",
+            "tts_engine/worker_main.py",
+        ])
+        missing_by_role = {item["role_id"]: item["missing_paths"] for item in result["incomplete_roles"]}
+        self.assertEqual(missing_by_role["partial"], [
+            "roles/partial/gpt.ckpt",
+            "roles/partial/sovits.pth",
+            "roles/partial/reference.wav（也可为 .mp3 / .flac / .ogg）",
+        ])
+        self.assertEqual(missing_by_role["metadata"], [
+            "roles/metadata/gpt.ckpt",
+            "roles/metadata/sovits.pth",
+            "roles/metadata/reference.wav（也可为 .mp3 / .flac / .ogg）",
+            "roles.json → metadata.reference_text",
+            "roles.json → metadata.reference_language",
+            "设置 → 角色资料包 → 绑定 Live2D",
+        ])
+        self.assertFalse((self.pack / "marker.txt").exists())
+        self.assertFalse(tts._load_state(str(self.data))["enabled"])
+        status = tts.get_status(str(self.pack), str(self.data))
+        self.assertFalse(status["engine_ready"])
+        self.assertEqual(status["runtime_missing_files"], result["runtime_missing"])
+        self.assertEqual(
+            {item["role_id"]: item["missing_paths"] for item in status["incomplete_roles"]},
+            missing_by_role,
+        )
+
+    def test_archive_without_pack_manifest_keeps_previous_pack_and_state(self):
+        archive = self.root / "not-a-voice-pack.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            output.writestr("tts_pack/readme.txt", "not a Memo voice package")
+        tts._save_state(str(self.data), {"enabled": True, "language": "中文", "speed": 1.0})
+
+        with self.assertRaisesRegex(tts.TTSException, "根目录必须包含 pack.json"):
             tts.mount_tts_pack_archive(str(self.pack), str(self.data), str(archive))
 
         self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "old")
