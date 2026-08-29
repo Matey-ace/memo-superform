@@ -78,6 +78,36 @@ _ENGINE_PROBE_CACHE = {}
 _ENGINE_PROBE_TTL = 45.0
 _ENGINE_REPAIR_LOCK = threading.Lock()
 
+
+def _hidden_windows_subprocess_kwargs():
+    """Hide helper processes when the desktop app has no parent console.
+
+    The TTS worker speaks over stdin/stdout pipes and never needs a visible
+    terminal.  Without these flags Windows creates a console for ``python.exe``
+    whenever Memo is running as a windowed executable, which steals focus from
+    the study window.  Reuse the same options for short dependency probes so
+    they cannot flash a console during a status refresh either.
+    """
+    if os.name != "nt":
+        return {}
+    kwargs = {}
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+    startupinfo_factory = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_factory is not None:
+        try:
+            startupinfo = startupinfo_factory()
+            startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+            kwargs["startupinfo"] = startupinfo
+        except Exception:
+            # CREATE_NO_WINDOW still covers normal Python installations when
+            # STARTUPINFO is unavailable in an embedded runtime.
+            pass
+    return kwargs
+
+
 # 跨进程互斥锁：防止两个 Memo Superform 实例同时使用同一语音资源包
 def _acquire_file_lock(lock_path):
     """Acquire one byte of an arbitrary local lock file without waiting."""
@@ -966,6 +996,7 @@ def _engine_dependency_status(pack_dir, *, force=False):
             [python_exe, "-c", probe], cwd=pack_dir, text=True,
             encoding="utf-8", errors="replace", stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=25,
+            **_hidden_windows_subprocess_kwargs()
         )
         output = (completed.stdout or "") + "\n" + (completed.stderr or "")
         marker = "__MEMO_TTS_PROBE__"
@@ -1055,6 +1086,7 @@ def repair_environment(pack_dir, data_dir):
                 [python_exe, "-m", "ensurepip", "--upgrade"], cwd=pack_dir,
                 text=True, encoding="utf-8", errors="replace",
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180,
+                **_hidden_windows_subprocess_kwargs()
             )
             if bootstrap.returncode:
                 raise TTSException("无法准备资源包 pip：" + (bootstrap.stdout or "")[-500:])
@@ -1063,6 +1095,7 @@ def repair_environment(pack_dir, data_dir):
             installed = subprocess.run(
                 command, cwd=pack_dir, text=True, encoding="utf-8", errors="replace",
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900,
+                **_hidden_windows_subprocess_kwargs()
             )
         except subprocess.TimeoutExpired:
             raise TTSException("语音环境修复超时，请检查网络后重试")
@@ -1249,18 +1282,23 @@ class TTSManager:
         log_path = os.path.join(self.data_dir, "tts_worker.log")
         log_file = open(log_path, "a", encoding="utf-8", errors="replace")
         engine_dir = os.path.join(self.pack_dir, "tts_engine")
-        proc = subprocess.Popen(
-            [venv_py, worker_main],
-            cwd=engine_dir,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=log_file,
-            env=env,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
+        try:
+            proc = subprocess.Popen(
+                [venv_py, worker_main],
+                cwd=engine_dir,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=log_file,
+                env=env,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                **_hidden_windows_subprocess_kwargs()
+            )
+        except Exception:
+            log_file.close()
+            raise
         self._proc = proc
         self._reader = threading.Thread(target=self._read_loop, args=(proc, log_file), daemon=True)
         self._reader.start()

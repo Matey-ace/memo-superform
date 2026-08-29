@@ -22,6 +22,7 @@ var TTS = (function() {
     let synthesisController = null;
     let synthesisInFlight = false;
     let queuedSynthesis = null;
+    let preloadInFlight = null;
     let lastError = '';
 
     async function refresh() {
@@ -235,6 +236,39 @@ var TTS = (function() {
         });
     }
 
+    function preload() {
+        // Model preloading starts the same persistent backend worker used by
+        // synthesis, but deliberately sends no text and never plays audio.
+        // A companion-mode entry can therefore pay the cold-start cost once,
+        // before the user touches the character.
+        if (status.loaded && !status.busy) return Promise.resolve(true);
+        if (preloadInFlight) return preloadInFlight;
+        if (synthesisInFlight) return Promise.resolve(false);
+        preloadInFlight = (async function() {
+            try {
+                const resp = await fetch('/api/tts/preload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    body: JSON.stringify({})
+                });
+                const data = await resp.json().catch(function() { return {}; });
+                if (!resp.ok || data.error) {
+                    lastError = data.error || ('语音预加载失败（HTTP ' + resp.status + '）。');
+                    return false;
+                }
+                status.loaded = true;
+                status.busy = false;
+                return true;
+            } catch (error) {
+                lastError = '语音预加载请求失败。';
+                return false;
+            } finally {
+                preloadInFlight = null;
+            }
+        })();
+        return preloadInFlight;
+    }
+
     async function setEnabled(enabled) {
         try {
             const resp = await fetch(enabled ? '/api/tts/enable' : '/api/tts/disable', {
@@ -256,6 +290,7 @@ var TTS = (function() {
     return {
         refresh: refresh,
         speak: speak,
+        preload: preload,
         stop: stop,
         isReady: isReady,
         setEnabled: setEnabled,

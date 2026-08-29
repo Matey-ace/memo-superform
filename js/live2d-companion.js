@@ -592,7 +592,7 @@ const CompanionSession = (function() {
 })();
 
 const Live2DCompanion = (function() {
-    let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '', companionVoiceRequest = 0;
+    let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '', companionVoiceRequest = 0, companionVoicePreloadRequest = 0;
     let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
     let rendererCapabilityCache = null, lastRendererDiagnostic = '', currentMoodLabel = '待机', lastVoiceNoticeReason = '', voiceNoticeTimer = 0, modelListError = '';
     const LOCAL_LINES = {
@@ -809,6 +809,28 @@ const Live2DCompanion = (function() {
         voiceNoticeTimer = setTimeout(function() {
             if (lastVoiceNoticeReason === reason && target.textContent.indexOf(reason) >= 0) target.textContent = currentMoodLabel;
         }, 4200);
+    }
+    function companionVoiceIsEnabled() {
+        try { return typeof localStorage !== 'undefined' && localStorage.getItem('tts_companion_enabled') === 'true'; }
+        catch (error) { return false; }
+    }
+    function preloadCompanionVoice() {
+        // Model loading starts while the companion screen opens, rather than
+        // on the first approved spoken reaction.  The TTS worker stays alive
+        // after preload, so head touches, manual checks and reminders reuse
+        // the same process without launching a new console window each time.
+        if (!companionVoiceIsEnabled()) return;
+        const tts = window.TTS;
+        if (!tts || typeof tts.refresh !== 'function' || typeof tts.isReady !== 'function' || typeof tts.preload !== 'function') return;
+        const requestId = ++companionVoicePreloadRequest;
+        Promise.resolve(tts.refresh()).then(function() {
+            if (!open || requestId !== companionVoicePreloadRequest || !companionVoiceIsEnabled() || !tts.isReady()) return false;
+            return tts.preload();
+        }).catch(function() {
+            // Voice is optional in companion mode.  Preload failures should
+            // never interrupt study or create a visible error notification.
+            return false;
+        });
     }
     function maybeSpeakCompanion(text, language) {
         let companionVoiceEnabled = false;
@@ -1161,6 +1183,7 @@ const Live2DCompanion = (function() {
         document.getElementById('dashboard').hidden = true;
         const root = document.getElementById('companionStudy'); root.hidden = false; document.body.classList.add('companion-mode');
         document.getElementById('companionBirthdayCard').hidden = true;
+        preloadCompanionVoice();
         try {
             await Live2DModelManager.loadModels();
             modelListError = '';

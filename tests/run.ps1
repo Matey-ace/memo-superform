@@ -10,6 +10,7 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/tts-playback-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/tts-single-flight-persona-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/tts-cold-start-timeout-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/companion-tts-preload-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/companion-language-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/companion-reminder-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & python -m compileall -q @((Get-ChildItem -File *.py).FullName); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
