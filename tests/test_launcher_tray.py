@@ -52,15 +52,15 @@ class LauncherTrayContracts(unittest.TestCase):
         self.assertIn("server.start_server(open_browser=False, block=False)", source)
         self.assertIn("activate_existing_instance", source)
 
-    def test_v077_uses_a_build_scoped_broker_instead_of_the_old_8891_port(self):
+    def test_v078_uses_a_build_scoped_broker_instead_of_the_old_8891_port(self):
         # A new executable must not activate an older v0.76 process and exit.
         # Explicit MEMO_INSTANCE_PORT remains an opt-in operator override, so
         # remove it only for this default-release contract.
         environment = dict(os.environ)
         environment.pop("MEMO_INSTANCE_PORT", None)
         with mock.patch.dict(os.environ, environment, clear=True):
-            self.assertEqual(launcher.BUILD_VERSION, "0.77")
-            self.assertEqual(launcher._instance_port(), 15177)
+            self.assertEqual(launcher.BUILD_VERSION, "0.78")
+            self.assertEqual(launcher._instance_port(), 15178)
             self.assertNotEqual(launcher._instance_port(), 8891)
 
 

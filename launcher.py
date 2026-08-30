@@ -25,9 +25,9 @@ import webbrowser
 _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
 # 每次打包发布都要更新此值。旧版本使用固定协调端口 8891，升级时会悄悄激活旧
-# 可执行文件，并在新代码运行前退出。按构建版本划分端口后，v0.77 能打开自己的
+# 可执行文件，并在新代码运行前退出。按构建版本划分端口后，v0.78 能打开自己的
 # 窗口，并在升级期间准确报告共享 TTS 资料包锁。
-BUILD_VERSION = "0.77"
+BUILD_VERSION = "0.78"
 
 
 class InstanceBroker:
@@ -477,7 +477,7 @@ def run_desktop(guard=None):
     httpd, url = result
     # 给桌面窗口 URL 加版本参数，强制 WebView 拉取最新页面，避免陈旧缓存
     # 与当前静态入口版本同步，避免 WebView 继续命中旧版 index.html。
-    url = url + "?v=77"
+    url = url + "?v=78"
     time.sleep(0.5)
 
     import webview
