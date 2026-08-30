@@ -59,9 +59,8 @@ _ROLE_LIBRARY_LOCK = threading.RLock()
 _PERSONA_FIELDS = ("name", "background", "tone", "avoid", "examples")
 _PERSONA_LIMITS = {"name": 40, "background": 800, "tone": 400, "avoid": 400, "examples": 600}
 
-# These imports cover the worker entry point plus the Japanese and English
-# text preprocessors.  ``install.json`` alone is not proof that a copied or
-# interrupted virtual environment can actually synthesize speech.
+# 这些导入覆盖 worker 入口以及日文、英文文本前处理器。仅有
+# ``install.json`` 并不能证明复制过来或安装中断的虚拟环境确实能合成语音。
 _ENGINE_IMPORT_PACKAGES = {
     "torch": "torch>=2.7,<2.8",
     "torchaudio": "torchaudio>=2.7,<2.8",
@@ -71,9 +70,9 @@ _ENGINE_IMPORT_PACKAGES = {
     "transformers": "transformers>=4.57,<5",
     "librosa": "librosa==0.10.2",
     "wordsegment": "wordsegment>=1.3.1",
-    # The upstream package requires a local C/C++ toolchain on Windows.
-    # pyopenjtalk-plus exports the identical ``pyopenjtalk`` module and ships
-    # a CPython 3.11 Windows wheel, making repair work on normal end-user PCs.
+    # 上游软件包在 Windows 上需要本地 C/C++ 工具链。
+    # pyopenjtalk-plus 导出同名的 ``pyopenjtalk`` 模块，并提供 CPython 3.11
+    # Windows wheel，因此普通用户电脑也能直接执行修复。
     "pyopenjtalk": "pyopenjtalk-plus>=0.4.1.post9",
 }
 _ENGINE_PROBE_LOCK = threading.RLock()
@@ -81,11 +80,9 @@ _ENGINE_PROBE_CACHE = {}
 _ENGINE_PROBE_TTL = 45.0
 _ENGINE_REPAIR_LOCK = threading.Lock()
 
-# Quick-mount archives contain the complete local inference runtime as well as
-# model weights, so they are materially larger than ordinary settings uploads.
-# Stream them to disk and enforce archive-level limits before extracting.  The
-# defaults leave room for a portable Python/Torch runtime plus several voices,
-# while environment overrides let a managed installation set a tighter cap.
+# 快速挂载包同时包含本地推理运行时和模型权重，体积远大于普通设置上传。
+# 因此先流式写盘，并在解压前执行归档级限制。默认上限可容纳便携式
+# Python/Torch 运行时和多套音色；受管安装仍可通过环境变量收紧限制。
 def _mount_limit(name, default):
     try:
         value = int(os.environ.get(name, default))
@@ -102,7 +99,7 @@ _TTS_PACK_MOUNT_LOCK = threading.RLock()
 
 
 def _hidden_windows_subprocess_kwargs():
-    """Hide helper processes when the desktop app has no parent console.
+    """桌面应用没有父控制台时隐藏辅助进程窗口。
 
     The TTS worker speaks over stdin/stdout pipes and never needs a visible
     terminal.  Without these flags Windows creates a console for ``python.exe``
@@ -124,15 +121,15 @@ def _hidden_windows_subprocess_kwargs():
             startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
             kwargs["startupinfo"] = startupinfo
         except Exception:
-            # CREATE_NO_WINDOW still covers normal Python installations when
-            # STARTUPINFO is unavailable in an embedded runtime.
+            # 嵌入式运行时没有 STARTUPINFO 时，CREATE_NO_WINDOW 仍可覆盖普通
+            # Python 安装环境。
             pass
     return kwargs
 
 
 # 跨进程互斥锁：防止两个 Memo Superform 实例同时使用同一语音资源包
 def _acquire_file_lock(lock_path):
-    """Acquire one byte of an arbitrary local lock file without waiting."""
+    """尝试无等待锁定任意本地锁文件的一个字节。"""
     f = None
     try:
         os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
@@ -202,7 +199,7 @@ class TTSException(Exception):
 
 
 def _assert_role_write_allowed(pack_dir):
-    """Reject edits while another Memo instance owns this pack's TTS lock."""
+    """其他 Memo 实例持有本包 TTS 锁时拒绝编辑。"""
     manager_lock = globals().get("_MANAGER_LOCK")
     manager = None
     if manager_lock is not None:
@@ -220,7 +217,7 @@ def _assert_role_write_allowed(pack_dir):
 
 @contextmanager
 def _role_write_guard(pack_dir):
-    """Serialize role-manifest writes across local processes."""
+    """在本地进程之间串行写入角色清单。"""
     _assert_role_write_allowed(pack_dir)
     lock_file, acquired = _acquire_file_lock(os.path.join(pack_dir, ".roles.lock"))
     if not acquired:
@@ -245,9 +242,8 @@ def _write_json(path, data):
     try:
         directory = os.path.dirname(path) or "."
         os.makedirs(directory, exist_ok=True)
-        # A role manifest is the single source of truth for the model, audio,
-        # and Live2D binding.  Never leave a partially-written JSON file if the
-        # process is interrupted while changing one of those bindings.
+        # 角色清单是模型、音频和 Live2D 绑定的唯一事实来源。进程在更改绑定时
+        # 即使被中断，也不能留下只写了一半的 JSON 文件。
         temp = path + "." + uuid.uuid4().hex + ".tmp"
         with open(temp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -298,7 +294,7 @@ def _coerce_str(value, default):
 
 
 def _default_role_persona(role_name):
-    """A complete, role-local fallback for newly created packages."""
+    """为新建资料包返回一套完整且角色独立的默认人设。"""
     name = str(role_name or "陪伴角色").strip()[:40] or "陪伴角色"
     return {
         "name": name,
@@ -310,7 +306,7 @@ def _default_role_persona(role_name):
 
 
 def _normalize_persona(value, role_name, *, allow_empty=False):
-    """Validate the persona stored inside one role manifest."""
+    """校验角色清单中保存的人设。"""
     if value is None and allow_empty:
         return {}
     if not isinstance(value, dict):
@@ -404,7 +400,7 @@ def _safe_role_id(value):
 
 
 def _read_reference_language(path, default="中文"):
-    """Read a modern value or a legacy file containing comments plus a number."""
+    """读取现代配置值，或读取包含注释和数字的旧版文件。"""
     raw = _read_text_file(path)
     if raw in LANGUAGE_NUMBER_MAP:
         return LANGUAGE_NUMBER_MAP[raw]
@@ -416,15 +412,14 @@ def _read_reference_language(path, default="中文"):
 
 def _role_status(role, pack_dir=None, staged_dir=None):
     missing = []
-    # Uploads always use these canonical names.  Treat a hand-edited or stale
-    # manifest as incomplete instead of following an arbitrary filename.
+    # 上传始终使用这些规范文件名。手工编辑或过期的清单一律视为不完整，
+    # 不跟随其中任意指定的文件名。
     if role.get("gpt_file") != "gpt.ckpt": missing.append("GPT 模型")
     if role.get("sovits_file") != "sovits.pth": missing.append("SoVITS 模型")
     audio_file = str(role.get("audio_file") or "")
-    # ``startswith('reference')`` is not sufficient here: a hand-edited
-    # manifest such as ``reference/../../other.wav`` would still pass it and
-    # break the role-directory boundary.  Only the exact canonical names
-    # produced by upload_role_file are valid.
+    # 此处仅检查 ``startswith('reference')`` 并不充分：手工写入的
+    # ``reference/../../other.wav`` 仍会通过并越出角色目录。只接受
+    # upload_role_file 生成的精确规范文件名。
     if audio_file not in {"reference" + suffix for suffix in _ROLE_FILE_KINDS["audio"][1]}:
         missing.append("参考音频")
     if not str(role.get("reference_text") or "").strip(): missing.append("参考文本")
@@ -438,9 +433,8 @@ def _role_status(role, pack_dir=None, staged_dir=None):
             "参考音频": role.get("audio_file"),
         }
         for label, name in required.items():
-            # A malformed manifest has already reported this asset as missing.
-            # Do not follow a non-canonical name, but keep checking every other
-            # valid asset even if text/language/Live2D is also incomplete.
+            # 畸形清单已把该资源报告为缺失；不要跟随非规范文件名，但即使文本、
+            # 语言或 Live2D 也不完整，仍要继续检查其他有效资源。
             if label in missing:
                 continue
             staged = os.path.join(staged_dir, str(name)) if staged_dir else ""
@@ -470,7 +464,7 @@ def _canonical_role_folder(role_id):
 
 
 def _role_folder(pack_dir, role):
-    """Return the only allowed on-disk directory for a role.
+    """返回角色在磁盘上唯一允许使用的目录。
 
     ``folder`` remains in old manifests for migration compatibility, but is
     deliberately not trusted when resolving assets.  This prevents a stale or
@@ -495,7 +489,7 @@ def _role_stage_dir(pack_dir, role_id, batch_id):
 
 
 def _staged_asset_fields(stage_dir):
-    """Return the exact role-manifest fields supplied by one staged update."""
+    """返回一次暂存更新提供的准确角色清单字段。"""
     fields = {}
     if os.path.isfile(os.path.join(stage_dir, "gpt.ckpt")):
         fields["gpt_file"] = "gpt.ckpt"
@@ -512,7 +506,7 @@ def _staged_asset_fields(stage_dir):
 
 
 def ensure_role_library(pack_dir):
-    """Create the explicit role registry and migrate the old shared folder once.
+    """建立显式角色库，并一次性迁移旧共享目录。
 
     The original files are copied, never moved, so a failed/interrupted migration
     leaves the old resource pack usable.
@@ -522,8 +516,7 @@ def ensure_role_library(pack_dir):
         if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
             return existing
         with _role_write_guard(pack_dir):
-            # Another local process may have completed migration while this one
-            # waited for the write guard.
+            # 本进程等待写保护期间，另一个本地进程可能已经完成迁移。
             existing = _read_json(_roles_path(pack_dir))
             if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
                 return existing
@@ -532,8 +525,8 @@ def ensure_role_library(pack_dir):
             sakiko_dir, anon_dir = os.path.join(root, "sakiko"), os.path.join(root, "anon")
             os.makedirs(sakiko_dir, exist_ok=True)
             os.makedirs(anon_dir, exist_ok=True)
-            # Original named D_sakiko assets belong to Sakiko.  Canonical gpt/sovits are
-            # previous uploads and are intentionally isolated as the Anon draft.
+            # 原始 D_sakiko 命名资源归属祥子；规范名 gpt/sovits 是后续上传内容，
+            # 有意隔离为爱音草稿。
             _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp-e15.ckpt"), os.path.join(sakiko_dir, "gpt.ckpt"))
             _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp_e8_s520.pth"), os.path.join(sakiko_dir, "sovits.pth"))
             _copy_if_present(os.path.join(legacy, "black_sakiko.wav"), os.path.join(sakiko_dir, "reference.wav"))
@@ -556,11 +549,10 @@ def ensure_role_library(pack_dir):
 
 
 def _role_write_operation(operation):
-    """Apply one role mutation under both process-local and file locking."""
+    """同时在进程内锁和文件锁保护下执行一次角色变更。"""
     @wraps(operation)
     def wrapped(pack_dir, *args, **kwargs):
-        # Complete a one-time migration before taking the operation guard; the
-        # migration path has its own guard and lock files are not re-entrant.
+        # 获取操作保护前先完成一次性迁移；迁移路径自带保护，而文件锁不可重入。
         ensure_role_library(pack_dir)
         with _role_write_guard(pack_dir):
             return operation(pack_dir, *args, **kwargs)
@@ -588,7 +580,7 @@ def _find_role(state, role_id):
 
 
 def get_role(pack_dir, role_id, *, require_complete=False):
-    """Read a declared role without ever resolving legacy pack.json voices."""
+    """只读取已声明角色，绝不解析旧 pack.json 音色。"""
     with _ROLE_LIBRARY_LOCK:
         role = _find_role(ensure_role_library(pack_dir), role_id)
         missing = _role_status(role, pack_dir)
@@ -598,7 +590,7 @@ def get_role(pack_dir, role_id, *, require_complete=False):
 
 
 def roles_referencing_live2d(pack_dir, model_id):
-    """Return role metadata bound to a Live2D model without triggering migration.
+    """返回绑定到 Live2D 模型的角色元数据，且不触发迁移。
 
     This is used before deleting a model.  A missing registry is equivalent to
     no role references; it must not create a new draft library as a side effect.
@@ -612,8 +604,8 @@ def roles_referencing_live2d(pack_dir, model_id):
             return []
         state = _read_json(path)
         if not isinstance(state, dict) or not isinstance(state.get("roles"), list):
-            # Deletion must fail closed.  An unreadable manifest cannot prove a
-            # model is unused, and deleting it would invalidate an unknown role.
+            # 删除必须保守失败。清单不可读时无法证明模型未被使用，直接删除可能
+            # 破坏未知角色。
             raise TTSException("角色配置损坏，无法确认 Live2D 模型是否仍被绑定")
         roles = state["roles"]
         return [
@@ -624,14 +616,14 @@ def roles_referencing_live2d(pack_dir, model_id):
 
 
 def role_library_snapshot(pack_dir):
-    """Internal API transaction snapshot for coordinated Live2D changes."""
+    """供 API 协调 Live2D 变更使用的内部事务快照。"""
     with _ROLE_LIBRARY_LOCK:
         return copy.deepcopy(ensure_role_library(pack_dir))
 
 
 @_role_write_operation
 def restore_role_library(pack_dir, snapshot):
-    """Restore a previously captured registry after a paired service failed."""
+    """配对服务失败后恢复此前捕获的角色库。"""
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("roles"), list):
         raise TTSException("角色配置回滚数据无效")
     with _ROLE_LIBRARY_LOCK:
@@ -640,7 +632,7 @@ def restore_role_library(pack_dir, snapshot):
 
 
 def _candidate_role(pack_dir, state, data, *, staged_dir=None, check_active=True):
-    """Validate metadata changes without writing them to the registry."""
+    """校验元数据变更，但不写入角色库。"""
     role_id = _safe_role_id(data.get("role_id"))
     name = str(data.get("name") or "").strip()
     if not name or len(name) > 64:
@@ -650,8 +642,7 @@ def _candidate_role(pack_dir, state, data, *, staged_dir=None, check_active=True
         "role_id": role_id, "folder": _canonical_role_folder(role_id),
         "gpt_file": "", "sovits_file": "", "audio_file": "", "index_file": "", "persona": {},
     })
-    # The folder is not user-configurable.  This preserves the role package
-    # invariant even for manifests created by older app versions.
+    # 目录不允许用户自定义，从而让旧版本创建的清单也遵守角色包不变量。
     candidate["folder"] = _canonical_role_folder(role_id)
     candidate.update({"name": name, "reference_text": str(data.get("reference_text") or "").strip(),
                       "reference_language": str(data.get("reference_language") or "").strip(),
@@ -661,9 +652,8 @@ def _candidate_role(pack_dir, state, data, *, staged_dir=None, check_active=True
     elif existing is None:
         candidate["persona"] = _default_role_persona(name)
     elif not isinstance(candidate.get("persona"), dict):
-        # Existing pre-v0.77 manifests are migrated by the frontend using the
-        # browser's old character-id overrides.  Keep an explicit empty marker
-        # until that lossless migration can write the role-local value.
+        # v0.77 之前的清单由前端利用浏览器中的旧角色 ID 覆盖值迁移。在无损
+        # 迁移写入角色本地值前，保留一个明确的空标记。
         candidate["persona"] = {}
     if check_active and state.get("active_role_id") == role_id:
         missing = _role_status(candidate, pack_dir, staged_dir)
@@ -673,7 +663,7 @@ def _candidate_role(pack_dir, state, data, *, staged_dir=None, check_active=True
 
 
 def preview_role_save(pack_dir, data):
-    """Validate a role edit before another service changes its own binding."""
+    """在其他服务变更自身绑定前校验角色编辑。"""
     with _ROLE_LIBRARY_LOCK:
         _, candidate = _candidate_role(pack_dir, ensure_role_library(pack_dir), data)
         return _public_role(candidate, pack_dir)
@@ -681,7 +671,7 @@ def preview_role_save(pack_dir, data):
 
 @_role_write_operation
 def save_role(pack_dir, data, *, after_commit=None):
-    """Persist role metadata, optionally pairing an active-role side effect.
+    """持久化角色元数据，并可配对执行当前角色副作用。
 
     ``after_commit`` is deliberately executed while the role write lock is
     still held.  The local API uses it to move the corresponding Live2D
@@ -694,9 +684,8 @@ def save_role(pack_dir, data, *, after_commit=None):
         existing, candidate = _candidate_role(pack_dir, state, data)
         is_active = state.get("active_role_id") == candidate["role_id"]
         if is_active:
-            # Stop the old worker before its manifest changes.  A request that
-            # starts after this lock is released must construct a worker for the
-            # new role data rather than reuse cached model weights.
+            # 在清单变化前停止旧 worker。此锁释放后开始的请求必须按新角色资料
+            # 创建 worker，不能复用缓存的模型权重。
             _reset_manager()
         if existing is None:
             state["roles"].append(candidate)
@@ -719,7 +708,7 @@ def save_role(pack_dir, data, *, after_commit=None):
 
 @_role_write_operation
 def update_role_persona(pack_dir, role_id, persona):
-    """Persist one role's companion persona without touching TTS assets."""
+    """保存一个角色的陪伴人设，不改动 TTS 资源。"""
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         role = _find_role(state, role_id)
@@ -759,7 +748,7 @@ def upload_role_file(pack_dir, role_id, kind, filename, data):
 
 @_role_write_operation
 def begin_role_update(pack_dir, role_id):
-    """Open a private staging area for an atomic active-role update."""
+    """为当前角色的原子更新创建私有暂存区。"""
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         role = _find_role(state, role_id)
@@ -771,7 +760,7 @@ def begin_role_update(pack_dir, role_id):
 
 @_role_write_operation
 def stage_role_file(pack_dir, role_id, batch_id, kind, filename, data):
-    """Store one proposed asset without touching the live role package."""
+    """暂存一个候选资源，不改动正在使用的角色包。"""
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         role = _find_role(state, role_id)
@@ -786,8 +775,8 @@ def stage_role_file(pack_dir, role_id, batch_id, kind, filename, data):
         if suffix not in suffixes:
             raise TTSException("文件扩展名与类型不匹配")
         if kind == "audio":
-            # A staged package has exactly one reference track.  This makes an
-            # audio re-selection within one editor save deterministic.
+            # 暂存包只保留一条参考音频，确保同一次编辑保存中重新选择音频的结果
+            # 确定且唯一。
             for old_suffix in _ROLE_FILE_KINDS["audio"][1]:
                 old = os.path.join(stage_dir, "reference" + old_suffix)
                 if os.path.isfile(old):
@@ -804,7 +793,7 @@ def stage_role_file(pack_dir, role_id, batch_id, kind, filename, data):
 
 @_role_write_operation
 def discard_role_update(pack_dir, role_id, batch_id):
-    """Remove an uncommitted private staging area after a failed UI save."""
+    """界面保存失败后移除尚未提交的私有暂存区。"""
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         role = _find_role(state, role_id)
@@ -815,7 +804,7 @@ def discard_role_update(pack_dir, role_id, batch_id):
 
 
 def _restore_staged_assets(stage_dir, applied, backups):
-    """Undo a partly applied staged update and retain files for retry."""
+    """撤销部分应用的暂存更新，并保留文件以便重试。"""
     restored = set()
     for target in reversed(applied):
         try:
@@ -830,10 +819,9 @@ def _restore_staged_assets(stage_dir, applied, backups):
                 restored.add(target)
             except OSError:
                 pass
-    # A replace can fail after the old canonical file has already been moved
-    # into ``.rollback`` but before the new staged file was recorded in
-    # ``applied``.  Restore those untouched backups too; otherwise a failed
-    # transaction can leave roles.json pointing at a vanished old asset.
+    # 替换可能在旧规范文件已移入 ``.rollback``、但新暂存文件尚未记入
+    # ``applied`` 时失败。这些未触碰的备份也必须恢复，否则失败事务会让
+    # roles.json 指向已经消失的旧资源。
     for target, backup in backups.items():
         if target in restored or not os.path.isfile(backup):
             continue
@@ -845,7 +833,7 @@ def _restore_staged_assets(stage_dir, applied, backups):
 
 
 def _apply_staged_assets(folder, stage_dir, fields):
-    """Atomically swap staged canonical files into a role folder.
+    """把暂存的规范文件原子交换到角色目录。
 
     Replacing each file is an OS-level atomic rename; old files are retained in
     the stage directory until the manifest and paired Live2D update succeed.
@@ -876,7 +864,7 @@ def _apply_staged_assets(folder, stage_dir, fields):
 
 @_role_write_operation
 def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
-    """Commit staged role assets, metadata, and an optional paired callback.
+    """提交暂存角色资源、元数据以及可选的配对回调。
 
     The callback is used by the HTTP layer to update the matching Live2D
     preference.  A callback failure rolls back both the manifest and every
@@ -900,8 +888,7 @@ def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
             missing = _role_status(candidate, pack_dir, stage_dir)
             if missing:
                 raise TTSException("当前已启用角色不能保存为未完成状态: " + "、".join(missing))
-            # Reset under the role lock before exposing the new manifest, so
-            # later requests cannot reuse the old model cache with new files.
+            # 在角色锁内、公开新清单前重置，避免后续请求把旧模型缓存与新文件混用。
             _reset_manager()
         before = copy.deepcopy(state)
         folder = _role_folder(pack_dir, candidate)
@@ -949,7 +936,7 @@ def delete_role(pack_dir, role_id):
 
 @_role_write_operation
 def activate_role(pack_dir, role_id, *, after_commit=None):
-    """Activate a complete role and pair any dependent state atomically."""
+    """启用完整角色，并原子配对所有依赖状态。"""
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         before = copy.deepcopy(state)
@@ -957,8 +944,7 @@ def activate_role(pack_dir, role_id, *, after_commit=None):
         missing = _role_status(role, pack_dir)
         if missing:
             raise TTSException("角色资料未配齐: " + "、".join(missing))
-        # Ensure the manifest's exact paths exist before committing the active
-        # role.  A role with a stale manifest must never become the fallback.
+        # 提交当前角色前确认清单中的精确路径存在；过期清单对应的角色绝不能成为兜底。
         _resolve_role(pack_dir, role["role_id"])
         _reset_manager()
         state["active_role_id"] = role["role_id"]
@@ -984,7 +970,7 @@ def _venv_python(pack_dir):
 
 
 def _engine_dependency_status(pack_dir, *, force=False):
-    """Return ``(ready, reason, missing_modules)`` for the worker runtime.
+    """返回 worker 运行时的 ``(ready, reason, missing_modules)``。
 
     A resource pack used to declare itself installed as soon as setup wrote
     install.json.  That misses interrupted uv/pip installs (and specifically
@@ -1064,7 +1050,7 @@ def _engine_dependency_status(pack_dir, *, force=False):
 
 
 def repair_environment(pack_dir, data_dir):
-    """Repair missing worker packages in place and verify them afterwards.
+    """原地修复 worker 缺失的软件包，并在完成后验证。
 
     This intentionally installs into *the resource pack's* venv.  It never
     touches the application's Python environment or model/reference files.
@@ -1085,10 +1071,8 @@ def repair_environment(pack_dir, data_dir):
         _assert_role_write_allowed(pack_dir)
         _reset_manager()
         state = _load_state(data_dir)
-        # Do not leave a previously working companion silently disabled after
-        # a successful in-place repair.  It is temporarily stopped while its
-        # interpreter changes, then restored to the user's prior choice only
-        # after the subprocess probe proves the runtime is usable again.
+        # 原地修复成功后，不要让此前可用的陪伴语音悄悄保持关闭。解释器变更期间
+        # 临时停止，只有子进程探测确认运行时恢复可用后，才恢复用户之前的选择。
         was_enabled = bool(state.get("enabled"))
         state["enabled"] = False
         _save_state(data_dir, state)
@@ -1096,9 +1080,8 @@ def repair_environment(pack_dir, data_dir):
             _ENGINE_IMPORT_PACKAGES[name] for name in missing
             if name in _ENGINE_IMPORT_PACKAGES
         ]
-        # ``pyopenjtalk`` is the known Japanese runtime requirement and must
-        # use its prebuilt Windows-compatible distribution even if an import
-        # probe was interrupted before it could list the module.
+        # ``pyopenjtalk`` 是已知的日文运行时依赖，即使导入探测在列出模块前被
+        # 中断，也必须使用其兼容 Windows 的预编译发行版。
         japanese_package = _ENGINE_IMPORT_PACKAGES["pyopenjtalk"]
         if japanese_package not in packages:
             packages.append(japanese_package)
@@ -1160,7 +1143,7 @@ def _write_install_meta(pack_dir, source="ModelScope"):
 
 
 def _runtime_layout_missing(pack_dir):
-    """Return the exact runtime files a mounted package still needs."""
+    """返回已挂载包仍缺少的精确运行时文件。"""
     required = (
         (".venv311/Scripts/python.exe", _venv_python(pack_dir)),
         ("tts_engine/worker_main.py", os.path.join(pack_dir, "tts_engine", "worker_main.py")),
@@ -1169,7 +1152,7 @@ def _runtime_layout_missing(pack_dir):
 
 
 def _engine_ready(pack_dir):
-    """Validate install metadata, worker files, and imports before synthesis.
+    """合成前校验安装元数据、worker 文件和模块导入。
 
     install.json 只是安装完成标记；若它丢失但环境实际完整
     （venv 解释器与 worker 均存在），自动重建标记，避免用户误以为功能损坏。
@@ -1187,7 +1170,7 @@ def _engine_ready(pack_dir):
 
 
 def _safe_zip_member_parts(info):
-    """Validate one archive member and return its relative path parts.
+    """校验一个归档成员，并返回其相对路径片段。
 
     A voice resource pack is often exchanged outside the application, so the
     installer treats the ZIP as untrusted input.  In particular, never hand a
@@ -1217,7 +1200,7 @@ def _safe_zip_member_parts(info):
 
 
 def _inspect_tts_pack_archive(archive):
-    """Check member names and aggregate size before any archive is extracted."""
+    """解压前检查所有成员名称和总大小。"""
     infos = archive.infolist()
     if not infos:
         raise TTSException("语音包 ZIP 是空的")
@@ -1238,8 +1221,7 @@ def _inspect_tts_pack_archive(archive):
                 raise TTSException("语音包内的文件与目录路径冲突")
             directories.add(key)
         else:
-            # On Windows these collisions would otherwise make extraction
-            # depend on archive ordering.  Reject them deterministically.
+            # Windows 上的这类冲突会使解压结果取决于归档顺序，因此统一拒绝。
             if (key in directories or any(key.startswith(directory + "/") for directory in files)
                     or any(directory.startswith(key + "/") for directory in directories)):
                 raise TTSException("语音包内的文件与目录路径冲突")
@@ -1251,9 +1233,8 @@ def _inspect_tts_pack_archive(archive):
             total_size += file_size
             if total_size > _TTS_PACK_MOUNT_MAX_UNCOMPRESSED_BYTES:
                 raise TTSException("解压后的语音包过大")
-            # Very large highly-compressible entries are the usual ZIP bomb
-            # shape.  Model weights and virtual-environment binaries have a
-            # much lower ratio in normal archives.
+            # 极大且压缩率异常高的成员通常是 ZIP 炸弹；正常模型权重和虚拟环境
+            # 二进制文件的压缩率远低于此。
             if file_size >= 128 * 1024 ** 2 and compressed_size * 200 < file_size:
                 raise TTSException("语音包压缩比例异常")
         members.append((info, parts, is_directory))
@@ -1261,7 +1242,7 @@ def _inspect_tts_pack_archive(archive):
 
 
 def _extract_tts_pack_archive(archive_path, extract_dir):
-    """Safely extract one complete ZIP into a private staging directory."""
+    """把一个 ZIP 安全解压到私有暂存目录。"""
     try:
         archive = zipfile.ZipFile(archive_path, "r")
     except (OSError, zipfile.BadZipFile) as exc:
@@ -1299,7 +1280,7 @@ def _extract_tts_pack_archive(archive_path, extract_dir):
 
 
 def _find_tts_pack_root(extract_dir):
-    """Accept either a direct pack root or a ZIP with one outer folder."""
+    """接受直接位于根目录的资料包，或仅多一层外目录的 ZIP。"""
     direct_meta = os.path.join(extract_dir, "pack.json")
     if os.path.isfile(direct_meta):
         return extract_dir
@@ -1320,7 +1301,7 @@ def _find_tts_pack_root(extract_dir):
 
 
 def _missing_mount_paths(role):
-    """Translate one role's status labels into paths/settings users can fill."""
+    """把一个角色的状态标签转换为用户可补齐的路径或设置项。"""
     role_id = _safe_role_id(role.get("role_id"))
     role_dir = "roles/%s" % role_id
     expected = {
@@ -1336,7 +1317,7 @@ def _missing_mount_paths(role):
 
 
 def _incomplete_role_reports(roles):
-    """Build the persistent, user-facing missing-item list for a role library."""
+    """为角色库生成持久、面向用户的缺项清单。"""
     reports = []
     for role in roles or []:
         missing = list(role.get("missing") or [])
@@ -1352,12 +1333,11 @@ def _incomplete_role_reports(roles):
 
 
 def _inspect_tts_pack_root(pack_root):
-    """Read a mounted archive and report missing parts without rejecting it.
+    """读取待挂载归档并报告缺项，而不因资料未齐而拒绝。
 
-    ``pack.json`` is the minimum structural marker of a Memo voice package.
-    All other runtime and role assets are intentionally allowed to be absent:
-    the settings UI can then show their exact expected locations and the user
-    can finish the package with the existing role editor or repair workflow.
+    ``pack.json`` 是 Memo 语音包唯一最低限度的结构标识。其余运行时和角色资料
+    均可暂缺，使设置页能够展示其准确预期位置，用户可通过现有角色编辑器或修复
+    流程完成资料包。
     """
     pack = _pack_meta(pack_root)
     if not isinstance(pack, dict):
@@ -1384,12 +1364,11 @@ def _clear_engine_probe_cache(pack_dir):
 
 
 def _check_tts_pack_can_be_replaced(pack_dir):
-    """Stop this process's idle worker and reject another process's pack lock."""
+    """停止本进程的空闲 worker，并在其他进程持有资料包锁时拒绝替换。"""
     manager = _manager_for_pack(pack_dir)
     if manager is not None and manager.is_busy:
         raise TTSException("正在生成语音，请等待当前生成完成后再挂载语音包")
-    # The worker owns the interpreter and its current model files.  It must be
-    # gone before Windows can exchange the enclosing pack directory.
+    # worker 持有解释器和当前模型文件；Windows 交换其外层资料包目录前必须先结束它。
     _reset_manager()
     probe, acquired = _acquire_pack_lock(pack_dir)
     if not acquired:
@@ -1398,7 +1377,7 @@ def _check_tts_pack_can_be_replaced(pack_dir):
 
 
 def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
-    """Exchange a fully validated staged pack for the active pack directory."""
+    """用已完成结构校验的暂存包替换当前资料包目录。"""
     pack_dir = os.path.abspath(pack_dir)
     data_dir = os.path.abspath(data_dir)
     parent = os.path.dirname(pack_dir)
@@ -1423,9 +1402,8 @@ def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
         os.replace(candidate_dir, pack_dir)
         mounted = True
     except Exception:
-        # Roll both state and directory back.  No partial extraction ever
-        # reaches the live location; a failed mount therefore keeps the old
-        # package exactly where the user left it.
+        # 同时回滚状态与目录。任何部分解压结果都不会进入正式路径，因此挂载失败
+        # 后旧资料包仍保持用户原先的完整状态。
         if moved_previous and not os.path.lexists(pack_dir):
             try:
                 os.replace(backup_dir, pack_dir)
@@ -1434,24 +1412,21 @@ def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
         _save_state(data_dir, previous_state)
         raise
     finally:
-        # A successful exchange deliberately discards the previous complete
-        # pack only after the new directory is live.  Failed cleanup merely
-        # leaves a private rollback copy; it never affects the active pack.
+        # 只有新目录正式生效后才丢弃旧完整包。清理失败最多留下私有回滚副本，
+        # 不会影响正在使用的资料包。
         if mounted and moved_previous and os.path.isdir(backup_dir):
             shutil.rmtree(backup_dir, ignore_errors=True)
     _clear_engine_probe_cache(pack_dir)
 
 
 def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
-    """Install a complete or partially prepared GPT-SoVITS ZIP into ``data/tts_pack``.
+    """把完整或待补齐的 GPT-SoVITS ZIP 安装到 ``data/tts_pack``。
 
-    The accepted ZIP is the contents of a complete ``tts_pack`` directory,
-    either at archive root or inside one top-level folder.  It includes the
-    portable runtime (``.venv311``), ``tts_engine``, ``pack.json`` and role
-    assets.  ``pack.json`` is the only mandatory structural marker: a package
-    missing runtime or role files is mounted as a draft and reports each missing
-    item to the settings UI.  Extraction happens beside the live pack and is
-    atomically swapped only after ZIP and manifest validation succeeds.
+    可接受 ZIP 的内容为完整 ``tts_pack`` 目录，可直接位于归档根目录或唯一一层
+    顶层文件夹内，通常包含便携运行时（``.venv311``）、``tts_engine``、
+    ``pack.json`` 与角色资料。``pack.json`` 是唯一强制结构标识：缺少运行时或
+    角色文件的包会作为草稿挂载，并向设置页报告每一项缺失内容。解压在正式资料包
+    旁完成，且只会在 ZIP 与清单校验成功后原子切换。
     """
     archive_path = os.path.abspath(os.fspath(archive_path))
     if not os.path.isfile(archive_path):
@@ -1511,7 +1486,7 @@ def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
 
 
 def mount_tts_pack_stream(pack_dir, data_dir, stream, content_length, source_name=""):
-    """Receive a ZIP into a temporary file without keeping a multi-GB pack in RAM."""
+    """把 ZIP 流式接收到临时文件，避免数 GB 资料包常驻内存。"""
     try:
         content_length = int(content_length)
     except (TypeError, ValueError):
@@ -1554,7 +1529,7 @@ def _read_text_file(path):
 
 
 def _resolve_role(pack_dir, role_id=None):
-    """Resolve only manifest-addressed role files; never scan a role directory."""
+    """只解析清单明确指向的角色文件，绝不扫描目录猜测文件。"""
     state = ensure_role_library(pack_dir)
     selected = role_id or state.get("active_role_id")
     if not selected:
@@ -1592,11 +1567,10 @@ def clean_text(text):
 
 
 def import_model_file(pack_dir, voice_name, kind, data):
-    """Compatibility sentinel for callers from pre-role-package releases.
+    """供角色包版本之前的调用方使用的兼容哨兵。
 
-    The old endpoint wrote directly into an arbitrary ``pack.json`` voice
-    folder, which could silently pair a new model with another role's audio.
-    Keep a callable name for extension compatibility, but perform no write.
+    旧入口会直接写入任意 ``pack.json`` 音色目录，可能把新模型悄悄配到其他角色
+    的音频上。为扩展兼容保留可调用名称，但不执行任何写入。
     """
     raise TTSException("旧模型上传入口已移除；请通过角色资料上传 GPT、SoVITS 或 index 文件")
 
@@ -1806,9 +1780,8 @@ class TTSManager:
                 except Exception:
                     pass
         finally:
-            # A full shutdown releases the resource-pack lock.  The internal
-            # restart path deliberately keeps it, otherwise the same manager
-            # would mistake its own released lock for another app instance.
+            # 完整关闭会释放资源包锁；内部重启路径刻意保留它，否则同一管理器会把
+            # 自己刚释放的锁误判为被其他应用实例占用。
             if release_lock:
                 _release_pack_lock(self._lock_file)
                 self._lock_file = None
@@ -1847,9 +1820,8 @@ class TTSManager:
                     "payload": payload,
                 }, timeout=timeout)
             except TTSException as exc:
-                # Preserve the worker reset performed by ``_call``, but tell
-                # the user whether this was an ordinary synthesis timeout or a
-                # genuinely slow/failed cold model load.
+                # 保留 ``_call`` 已执行的 worker 重置，同时向用户区分普通合成超时
+                # 与确实缓慢或失败的冷模型加载。
                 if cold_start and "响应超时" in str(exc):
                     raise TTSException(
                         "语音引擎首次加载超过 %d 秒（已重置，请使用“预加载已启用角色模型”后重试）"
@@ -1898,9 +1870,8 @@ class TTSManager:
         }
 
     def worker_status(self, voice_name=None):
-        # Surface a competing Memo instance during status refresh.  Returning
-        # a harmless-looking unloaded status here used to let the UI claim
-        # voice was enabled, only for the first touch to fail on the lock.
+        # 状态刷新时直接报告竞争中的 Memo 实例。过去若返回看似无害的未加载状态，
+        # 界面会声称语音已启用，直到第一次触摸才因锁冲突失败。
         self._check_pack_lock()
         voice_name = voice_name or _active_role_for_request(self.pack_dir)
         try:
@@ -1938,9 +1909,8 @@ class TTSManager:
             self._shutdown_process()
 
     def _resolve_voice_config(self, voice_name):
-        # There is exactly one resolver now: the role manifest.  In
-        # particular, do not fall back to the legacy pack.json directory or
-        # choose the first matching .wav/.ckpt/.pth file.
+        # 现在唯一的解析来源是角色清单；尤其不能回退到旧 pack.json 目录，也不能
+        # 选择首个匹配的 .wav/.ckpt/.pth 文件。
         return _resolve_role(self.pack_dir, voice_name)
 
 
@@ -1949,14 +1919,12 @@ _MANAGER_LOCK = threading.Lock()
 
 
 def _reset_manager():
-    """Discard cached worker/model after a role asset or selection changes."""
+    """角色资源或选择变化后丢弃缓存的 worker 和模型。"""
     global _MANAGER
     with _MANAGER_LOCK:
         manager, _MANAGER = _MANAGER, None
-        # Keep the lifecycle lock until the old manager has actually released
-        # `.tts.lock`.  Otherwise another request can install a new manager in
-        # the tiny gap, fail to acquire the old lock, and remain poisoned after
-        # the shutdown finishes.
+        # 在旧管理器确实释放 `.tts.lock` 前持续持有生命周期锁。否则另一个请求会在
+        # 极短间隙装入新管理器、获取旧锁失败，并在关闭完成后仍处于失效状态。
         if manager is not None:
             try:
                 manager.shutdown()
@@ -1970,17 +1938,15 @@ def _get_manager(pack_dir, data_dir):
         if (_MANAGER is not None and
                 (os.path.abspath(_MANAGER.pack_dir) != os.path.abspath(pack_dir) or
                  os.path.abspath(_MANAGER.data_dir) != os.path.abspath(data_dir))):
-            # Module-level manager state is shared by in-process tests and by
-            # a possible data-directory switch.  Never reuse a worker or lock
-            # acquired for another resource pack.
+            # 模块级管理器状态会被进程内测试共享，也可能遇到数据目录切换。绝不复用
+            # 为另一资源包获取的 worker 或锁。
             try:
                 _MANAGER.shutdown()
             except Exception:
                 pass
             _MANAGER = None
         if _MANAGER is not None and not _MANAGER._pack_locked:
-            # A failed acquisition is never a reusable manager.  Drop it so a
-            # later request can acquire the lock after the other app exits.
+            # 获取锁失败的管理器不可复用；立即丢弃，让后续请求能在其他应用退出后重新取锁。
             try:
                 _MANAGER.shutdown()
             except Exception:
@@ -1992,7 +1958,7 @@ def _get_manager(pack_dir, data_dir):
 
 
 def _manager_for_pack(pack_dir):
-    """Return this process's live manager without acquiring a new pack lock."""
+    """返回本进程现有管理器，不获取新的资料包锁。"""
     with _MANAGER_LOCK:
         manager = _MANAGER
         if manager is not None and os.path.abspath(manager.pack_dir) == os.path.abspath(pack_dir):
@@ -2001,7 +1967,7 @@ def _manager_for_pack(pack_dir):
 
 
 def _check_pack_runtime_available(pack_dir):
-    """Probe another process's lock without retaining it for a status read."""
+    """为状态读取探测其他进程的锁，但不保留该锁。"""
     manager = _manager_for_pack(pack_dir)
     if manager is not None:
         manager._check_pack_lock()
@@ -2016,11 +1982,10 @@ def _check_pack_runtime_available(pack_dir):
 # ---------- 供 server.py 调用的模块级接口 ----------
 
 def _active_role_for_request(pack_dir, requested_role=None):
-    """Return the only role permitted to synthesize or preload.
+    """返回唯一允许合成或预加载的角色。
 
-    ``voice`` used to select an arbitrary legacy pack.json voice.  It is now
-    accepted only when it matches the current manifest's active role, so a
-    stale dropdown or old client cannot revive a previous character's model.
+    ``voice`` 过去可选择任意旧 pack.json 音色；现在只有与当前清单启用角色一致时
+    才会被接受，避免旧下拉框或旧客户端重新唤起先前角色的模型。
     """
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
@@ -2091,11 +2056,9 @@ def _get_status_inner(pack_dir, data_dir):
     active_role_id, role_ready = _active_role_status(role_library)
     state = _load_state(data_dir)
     role_error = ""
-    # Repair the historical state in which the global feature toggle survived
-    # even though no complete role had ever been activated.  Reporting that as
-    # enabled made touches appear to fail silently and could leave an old worker
-    # model in memory.  Disabling is safe: the user must explicitly activate a
-    # complete role before turning voice back on.
+    # 修复历史遗留状态：从未启用完整角色，但全局功能开关仍为开启。若仍报告已启用，
+    # 触摸会表现为静默失败，也可能让旧 worker 模型残留内存。此处关闭开关；用户必须
+    # 先明确启用完整角色，之后才能重新打开语音。
     if state.get("enabled") and not role_ready:
         state["enabled"] = False
         _save_state(data_dir, state)
@@ -2148,9 +2111,8 @@ def set_enabled(pack_dir, data_dir, enabled):
     state = _load_state(data_dir)
     if enabled:
         _active_role_for_request(pack_dir)
-        # A shutdown releases the cross-process pack lock.  Discard the manager
-        # before re-enabling so a stale object cannot retain an old lock flag
-        # and run beside another Memo instance.
+        # 关闭会释放跨进程资料包锁。重新启用前先丢弃管理器，避免旧对象保留过期锁标记
+        # 并与另一个 Memo 实例同时运行。
         _reset_manager()
         manager = _get_manager(pack_dir, data_dir)
         try:

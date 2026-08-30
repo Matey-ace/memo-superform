@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Incremental study-record synchronisation for Memo Superform.
+"""Memo Superform 学习记录增量同步。
 
-The Maimemo Open API exposes a current study-record collection, but does not
-offer an ``updated_at`` cursor or an offset that can safely be used for
-pagination.  This module deliberately keeps that limitation visible:
+墨墨开放 API 会提供当前学习记录集合，但没有 ``updated_at`` 游标，也没有可安全
+用于分页的偏移量。本模块刻意正视这一限制：
 
-* normal refreshes only read a small active window and locally-known due IDs;
-* bootstrap/reconciliation uses non-overlapping ``next_study_date`` ranges;
-* a range that still contains 1,000 records at day granularity is reported as
-  incomplete instead of silently truncating it;
-* synchronisation never deletes a local record from a partial response.
+* 普通刷新只读取较小的活动窗口和本地已知到期 ID；
+* 初始化/核验使用互不重叠的 ``next_study_date`` 区间；
+* 若日期细分到一天后某区间仍含 1000 条记录，则报告不完整，不静默截断；
+* 同步绝不依据局部响应删除本地记录。
 
-The module is intentionally independent from ``server.py`` and ``db.py``.
-``DbStudySyncRepository`` documents the small SQLite-facing contract that the
-database layer will implement, while the service itself is testable with a
-pure-Python repository and transport.
+本模块有意独立于 ``server.py`` 和 ``db.py``。``DbStudySyncRepository`` 记录
+数据库层需要实现的最小 SQLite 契约，而服务本身可用纯 Python 仓库和传输层测试。
 """
 
 from __future__ import annotations
@@ -44,15 +40,15 @@ DEFAULT_BOOTSTRAP_END = date(2200, 12, 31)
 
 
 class StudySyncError(RuntimeError):
-    """Base error for a study synchronisation failure."""
+    """学习同步失败的基础异常。"""
 
 
 class SyncCancelled(StudySyncError):
-    """Raised when a caller cancels a running synchronisation."""
+    """调用方取消正在运行的同步时抛出。"""
 
 
 class RemoteAPIError(StudySyncError):
-    """An HTTP/API failure returned by Maimemo."""
+    """墨墨返回的 HTTP/API 错误。"""
 
     def __init__(self, message: str, *, status: Optional[int] = None):
         super().__init__(message)
@@ -60,16 +56,16 @@ class RemoteAPIError(StudySyncError):
 
 
 class DataIncompleteError(StudySyncError):
-    """The remote API did not provide enough information for a safe result."""
+    """远程 API 信息不足，无法得出可靠结果。"""
 
 
 class RepositoryContractError(StudySyncError):
-    """The persistence adapter has not implemented a required operation."""
+    """持久化适配器尚未实现必要操作。"""
 
 
 @dataclass(frozen=True)
 class HTTPResponse:
-    """Small transport-neutral HTTP response object."""
+    """与传输实现无关的轻量 HTTP 响应对象。"""
 
     status: int
     headers: Mapping[str, str] = field(default_factory=dict)
@@ -84,11 +80,11 @@ class HTTPTransport(Protocol):
         headers: Mapping[str, str],
         timeout: float,
     ) -> HTTPResponse:
-        """POST JSON and return a decoded response (or raise OSError)."""
+        """POST JSON 并返回解码后的响应，失败时抛出 OSError。"""
 
 
 class UrllibJSONTransport:
-    """Production transport implemented only with Python's standard library."""
+    """仅用 Python 标准库实现的生产传输层。"""
 
     def post_json(
         self,
@@ -128,7 +124,7 @@ def _decode_json_body(raw: bytes) -> Any:
 
 
 def beijing_today(now: Optional[datetime] = None) -> date:
-    """Return today's calendar date in Beijing time."""
+    """返回北京时间的当前日历日期。"""
 
     if now is None:
         now = datetime.now(timezone.utc)
@@ -138,7 +134,7 @@ def beijing_today(now: Optional[datetime] = None) -> date:
 
 
 def token_profile_id(token: str) -> str:
-    """Return the stable, non-reversible profile key used for local data."""
+    """返回本地数据使用的稳定、不可逆用户键。"""
 
     value = (token or "").strip()
     if not value:
@@ -147,7 +143,7 @@ def token_profile_id(token: str) -> str:
 
 
 def record_fingerprint(record: Mapping[str, Any]) -> str:
-    """Hash only the documented StudyRecord fields in a deterministic order."""
+    """只按确定顺序散列文档声明的 StudyRecord 字段。"""
 
     payload = {
         "voc_id": record.get("voc_id"),
@@ -165,7 +161,7 @@ def record_fingerprint(record: Mapping[str, Any]) -> str:
 
 
 def normalise_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep the API contract stable and reject records without a stable key."""
+    """保持 API 契约稳定，并拒绝没有稳定键的记录。"""
 
     voc_id = str(record.get("voc_id") or "").strip()
     if not voc_id:
@@ -186,7 +182,7 @@ def normalise_record(record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def today_item_fingerprint(item: Mapping[str, Any]) -> str:
-    """Return a stable fingerprint for the documented StudyTodayItem shape."""
+    """为文档声明的 StudyTodayItem 结构返回稳定指纹。"""
 
     payload = {
         "voc_id": item.get("voc_id"),
@@ -201,7 +197,7 @@ def today_item_fingerprint(item: Mapping[str, Any]) -> str:
 
 
 def normalise_today_item(item: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate a today-item while retaining only its stable public fields."""
+    """校验今日条目，并只保留其稳定公开字段。"""
 
     voc_id = str(item.get("voc_id") or "").strip()
     if not voc_id:
@@ -271,7 +267,7 @@ class RateLimit:
 
 
 class SlidingWindowRateLimiter:
-    """Thread-safe API limiter for Maimemo's 10s/60s/5h quota windows."""
+    """适配墨墨 10 秒/60 秒/5 小时配额窗口的线程安全限流器。"""
 
     DEFAULT_LIMITS = (
         RateLimit(20, 10.0),
@@ -308,13 +304,13 @@ class SlidingWindowRateLimiter:
                     self._timestamps.append(now)
                     return
                 delay = max(waits)
-            # Event.wait is both interruptible and avoids an uninterruptible sleep.
+            # Event.wait 既可中断，也避免使用不可中断的 sleep。
             if cancel_event.wait(delay):
                 raise SyncCancelled("sync cancelled")
 
 
 class MaimemoStudyClient:
-    """Authenticated Maimemo study-record client with bounded retry behaviour."""
+    """带身份验证和有限重试的墨墨学习记录客户端。"""
 
     def __init__(
         self,
@@ -354,9 +350,8 @@ class MaimemoStudyClient:
         records = data.get("records", [])
         if not isinstance(records, list):
             raise DataIncompleteError("remote records is not an array")
-        # Keep the raw response cardinality here.  A response containing 1,000
-        # entries may have been truncated by the API even if an upstream bug
-        # duplicated a ``voc_id``; range splitting must remain conservative.
+        # 此处保留原始响应数量。即使上游错误导致 ``voc_id`` 重复，恰有 1000 条的
+        # 响应仍可能已被 API 截断，日期区间拆分必须保持保守。
         return [normalise_record(record) for record in records]
 
     def today_items(
@@ -366,7 +361,7 @@ class MaimemoStudyClient:
         *,
         on_retry: Optional[Callable[[str], None]] = None,
     ) -> list[dict[str, Any]]:
-        """Read today's compact item list, never substituting a full query.
+        """读取今日精简条目列表，绝不用完整查询代替。
 
         ``get_today_items`` is the only reliable cheap signal that an active
         study item changed.  If the endpoint cannot provide a complete list,
@@ -498,7 +493,7 @@ def _api_error_message(body: Any) -> str:
 
 
 class StudySyncRepository(Protocol):
-    """Persistence contract required by :class:`StudySyncService`.
+    """:class:`StudySyncService` 所需的持久化契约。
 
     All writes are scoped to ``profile_id``.  ``upsert_study_records`` must
     atomically compare the supplied ``content_hash`` with the stored hash and
@@ -521,11 +516,10 @@ class StudySyncRepository(Protocol):
 
 
 class DbStudySyncRepository:
-    """Thin compatibility adapter over the future SQLite functions in ``db``.
+    """对 ``db`` 中 SQLite 函数的轻量兼容适配器。
 
-    The adapter deliberately imports nothing.  The caller passes the database
-    module after it has initialised SQLite, so pyodbc remains optional and can
-    be absent in a new installation.
+    适配器刻意不额外导入模块。调用方会在 SQLite 初始化完成后传入数据库模块，因此
+    pyodbc 始终是可选依赖，新安装中不存在也不影响运行。
     """
 
     def __init__(self, db_module: Any):
@@ -601,8 +595,7 @@ class DbStudySyncRepository:
     def mark_needs_reconcile(self, profile_id: str, reason: str) -> None:
         self._call("mark_needs_reconcile", profile_id, reason)
 
-    # Optional reconciliation hooks.  Their absence intentionally means that
-    # no record is ever deleted/disabled based on a partial view of the API.
+    # 可选核验钩子。未实现时有意不根据 API 的局部视图删除或停用任何记录。
     def mark_reconcile_seen(self, profile_id: str, voc_ids: Sequence[str]) -> None:
         func = getattr(self.db, "mark_reconcile_seen", None)
         if callable(func):
@@ -672,7 +665,7 @@ class SyncStatus:
 
 
 class StudySyncService:
-    """Synchronous worker used by :class:`SyncManager` and tests."""
+    """供 :class:`SyncManager` 和测试使用的同步 worker。"""
 
     def __init__(
         self,
@@ -767,18 +760,15 @@ class StudySyncService:
                 seed_is_trusted = True
                 self._apply_if_changed(profile_id, clean_seed, status)
             except DataIncompleteError:
-                # A stale browser cache is useful only after all records carry
-                # a unique stable ID.  Treat malformed/duplicated cache data
-                # as absent and build a verified baseline instead of failing
-                # the entire installation.
+                # 只有所有记录都带唯一稳定 ID 时，旧浏览器缓存才有价值。畸形或重复
+                # 的缓存按不存在处理并建立经核验的基线，不让整个安装流程失败。
                 status.update(phase="seed_untrusted")
 
         status.update(phase="counting")
         remote_total = self.client.count(token, cancel_event, on_retry=lambda text: status.update(phase=text))
         if seed_is_trusted and len(clean_seed) == remote_total:
-            # The only fast bootstrap path: a structurally valid cached state
-            # exactly matches the remote cardinality, so no historical ranges
-            # (including 2020–2022) need to be requested again.
+            # 唯一快速初始化路径：结构有效的缓存状态与远程数量完全一致，因此无需
+            # 再请求包括 2020–2022 在内的历史区间。
             self.repository.set_sync_state(
                 profile_id,
                 bootstrap_complete=True,
@@ -876,9 +866,8 @@ class StudySyncService:
     ) -> None:
         state = self.repository.get_sync_state(profile_id) or {}
         if not state.get("bootstrap_complete"):
-            # A first normal refresh is safe and deterministic: make its state
-            # explicit instead of pretending a partial active-window scan is a
-            # complete local baseline.
+            # 首次普通刷新安全且确定；明确记录其状态，不把局部活动窗口扫描伪装成
+            # 完整本地基线。
             self._run_bootstrap(profile_id, token, cancel_event, status, seed_records=None, source="bootstrap")
             return
 
@@ -897,9 +886,8 @@ class StudySyncService:
             self._set_needs_reconcile(profile_id, status, "remote count decreased; no local deletion performed")
 
         if need_probe:
-            # Do not query the entire date range here.  The compact today-items
-            # endpoint is the change detector; only IDs whose compact state
-            # changed are allowed to flow into a full StudyRecord lookup.
+            # 此处不查询整个日期范围。精简今日条目接口负责检测变化，只有精简状态
+            # 已变化的 ID 才进入完整 StudyRecord 查询。
             status.update(phase="checking_today_items")
             today_items = self.client.today_items(
                 token,
@@ -967,7 +955,7 @@ class StudySyncService:
         status.update(phase="up_to_date", records_count=status.added + status.updated + status.unchanged)
 
     def _get_today_item_hashes(self, profile_id: str, item_date: date, voc_ids: Sequence[str]) -> Mapping[str, str]:
-        """Read compact-item hashes from SQLite, with a state JSON fallback.
+        """从 SQLite 读取精简条目散列，并以状态 JSON 兜底。
 
         The fallback exists only for an interrupted upgrade before the SQLite
         table is created.  A normal v0.70 database provides the dedicated two
@@ -1011,8 +999,7 @@ class StudySyncService:
                 return
             except RepositoryContractError:
                 pass
-        # Compatibility path for an already-created SQLite state row during a
-        # rolling upgrade.  This is metadata, not a study-record write.
+        # 滚动升级期间对已有 SQLite 状态行的兼容路径；这是元数据，不是学习记录写入。
         merged = dict(existing_hashes)
         merged.update({str(item["voc_id"]): str(item["content_hash"]) for item in changed_items})
         self.repository.set_sync_state(
@@ -1107,8 +1094,7 @@ class StudySyncService:
 
     def _due_candidates(self, profile_id: str, state: Mapping[str, Any], today: date) -> set[str]:
         previous = _coerce_date(state.get("last_incremental_date"))
-        # The local query returns only IDs already known to be due in this
-        # interval, so this does not re-download historical ranges.
+        # 本地查询只返回此区间内已知到期的 ID，因此不会重新下载历史区间。
         start = today if previous is None else min(today, previous + timedelta(days=1))
         raw = self.repository.get_due_candidate_voc_ids(profile_id, start, today)
         return {str(value) for value in raw if str(value)}
@@ -1172,7 +1158,7 @@ class _ManagedTask:
 
 
 class SyncManager:
-    """One background task per token-derived profile, with cancellation/status."""
+    """每个由令牌派生的用户对应一个后台任务，并支持取消和状态查询。"""
 
     def __init__(self, service: StudySyncService):
         self.service = service

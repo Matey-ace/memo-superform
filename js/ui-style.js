@@ -1,6 +1,5 @@
-// Memo Superform - unified UI style bootstrap.
-// This file is deliberately visual-neutral: it selects exactly one visual
-// resource set before the document body is rendered.
+// Memo Superform - 统一界面样式引导。
+// 本文件刻意不偏向任一视觉主题：在 document body 渲染前只选择一套视觉资源。
 (function () {
     'use strict';
 
@@ -42,9 +41,8 @@
         if (!body) return;
         body.classList.toggle('notebook-mode', notebook);
         body.classList.toggle('standard-mode', !notebook);
-// Anon的笔记本 colors are designed as a fixed light paper palette.  Do
-        // not overwrite the saved standard preference; only enforce the
-        // runtime invariant that notebook-mode and dark never coexist.
+        // Anon 的笔记本采用固定浅色纸张配色。不要覆盖已保存的标准主题偏好；只保证
+        // 运行时“笔记本模式”和暗色模式不会同时生效。
         if (notebook) body.classList.remove('dark');
     }
 

@@ -27,10 +27,46 @@ class RepositoryContracts(unittest.TestCase):
         self.assertIn("windows_tray", spec)
         self.assertIn("console=False", spec)
         self.assertIn("CHANGELOG.md", spec)
+        self.assertIn("excludes=['pyodbc']", spec)
         self.assertFalse((ROOT / "MemoSuperform-Desktop.spec").exists())
         self.assertFalse((ROOT / "MemoSuperform-Web.spec").exists())
         self.assertTrue((ROOT / "_archive/legacy/MemoSuperform-Desktop.spec").exists())
         self.assertTrue((ROOT / "_archive/legacy/MemoSuperform-Web.spec").exists())
+
+    def test_third_party_sources_and_licenses_are_declared_and_packaged(self):
+        readme = self.read("README.md")
+        notices = self.read("THIRD_PARTY_NOTICES.md")
+        spec = self.read("MemoSuperform.spec")
+        downloader = "A-kirami/bestdori-live2d-downloader"
+
+        self.assertIn("### Bestdori Live2D 下载器与渲染组件", readme)
+        self.assertIn("### Bestdori Live2D downloader and rendering components", readme)
+        self.assertIn("### Cherry Studio 的 Codex 集成参考", readme)
+        self.assertIn("### Cherry Studio Codex integration reference", readme)
+        self.assertGreaterEqual(readme.count(downloader), 2)
+        for phrase in (
+            downloader,
+            "Copyright (c) 2023 Akirami",
+            "Apache ECharts 5.5.0",
+            "Copyright 2017-2024 The Apache Software Foundation",
+            "PixiJS 6.5.10",
+            "Copyright (c) 2013-2017 Mathew Groves, Chad Engler",
+            "pixi-live2d-display 0.4.0",
+            "Live2D Cubism Core for Web",
+            "M PLUS Rounded 1c",
+            "pywebview BSD 3-Clause License",
+            "mkleehammer/pyodbc",
+            "pyodbc MIT-0 License",
+            "CherryHQ/cherry-studio",
+        ):
+            self.assertIn(phrase, notices)
+        self.assertIn("THIRD_PARTY_NOTICES.md", spec)
+        self.assertTrue((ROOT / "vendor/echarts-LICENSE.txt").is_file())
+        self.assertTrue((ROOT / "vendor/echarts-NOTICE.txt").is_file())
+        self.assertTrue((ROOT / "vendor/echarts-LICENSE-d3.txt").is_file())
+        self.assertTrue((ROOT / "vendor/live2d/pixi-LICENSE.txt").is_file())
+        self.assertTrue((ROOT / "vendor/live2d/pixi-live2d-display-LICENSE").is_file())
+        self.assertTrue((ROOT / "fonts/OFL-1.1.txt").is_file())
 
     def test_theme_and_study_contracts(self):
         dashboard = self.read("js/dashboard-core.js")

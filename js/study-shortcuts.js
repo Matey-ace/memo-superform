@@ -1,4 +1,4 @@
-// Memo Superform - study shortcut persistence, rendering and dispatch.
+// Memo Superform - 学习快捷键的持久化、渲染与分发。
 const StudyShortcuts = (function() {
     function defaultShortcuts() { return {
         SHOW_ANSWER: { key: 'S', modifiers: [], enabled: true }, PREVIOUS_WORD: { key: 'Backspace', modifiers: [], enabled: true },
@@ -52,7 +52,7 @@ const StudyShortcuts = (function() {
         var keyCode = key && key.length === 1 && /[0-9]/.test(key) ? 48 + parseInt(key, 10) : 0;
 
         try {
-            // keydown
+            // 按键按下。
             var downEvent = new win.KeyboardEvent('keydown', {
                 key: key,
                 code: key === 'Space' ? 'Space' : (key && key.length === 1 && /[0-9]/.test(key) ? 'Digit' + key : key),
@@ -68,7 +68,7 @@ const StudyShortcuts = (function() {
             doc.dispatchEvent(downEvent);
             if (doc.body) doc.body.dispatchEvent(downEvent);
 
-            // keyup
+            // 按键抬起。
             var upEvent = new win.KeyboardEvent('keyup', {
                 key: key,
                 code: key === 'Space' ? 'Space' : (key && key.length === 1 && /[0-9]/.test(key) ? 'Digit' + key : key),

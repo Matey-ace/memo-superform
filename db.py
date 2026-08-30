@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Memo Superform SQLite data centre.
+"""Memo Superform SQLite 数据中心。
 
-SQLite is the only runtime database from v0.70 onward. The former SQL Server
-database is never opened for writing; an optional, lazy importer can copy its
-stable statistics/settings without making startup depend on pyodbc.
+从 v0.70 起 SQLite 是唯一运行时数据库。旧 SQL Server 数据库绝不以写入方式
+打开；可选的惰性导入器能够复制其中稳定的统计/设置，且启动不依赖 pyodbc。
 """
 from __future__ import annotations
 
@@ -59,7 +58,7 @@ def get_connection(autocommit: bool = True) -> sqlite3.Connection:
 
 
 def init_db(data_dir: Optional[str] = None) -> str:
-    """Initialise/migrate the writable SQLite database and return its path."""
+    """初始化或迁移可写 SQLite 数据库，并返回其路径。"""
     global _DATA_DIR, _DB_PATH, _INITIALISED
     with _INIT_LOCK:
         if data_dir:
@@ -567,10 +566,10 @@ def set_setting(key: str, value: Any) -> None:
                      (str(key), str(value), now))
 
 
-# ===================== Live2D companion registry =====================
+# ===================== Live2D 陪伴模型注册表 =====================
 
 def upsert_live2d_model(metadata: Mapping[str, Any]) -> None:
-    """Register a validated local model while keeping model bytes on disk."""
+    """注册已校验的本地模型，模型文件继续保存在磁盘。"""
     now = _utc_now()
     fields = {
         "model_id": str(metadata["model_id"]),
@@ -661,7 +660,7 @@ def get_live2d_preference(profile_id: Any = None) -> dict[str, Any]:
 
 
 def try_import_legacy_sqlserver(profile_id: Any = None) -> dict[str, Any]:
-    """Read-only, idempotent legacy import; missing pyodbc/SQL is benign."""
+    """只读且幂等的旧库导入；缺少 pyodbc/SQL 时正常跳过。"""
     pk = _profile_pk(profile_id)
     import_key = "sqlserver:%s" % _normalise_profile_hash(profile_id)
     conn = get_connection()

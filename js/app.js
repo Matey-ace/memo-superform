@@ -165,9 +165,8 @@ const App = (function() {
         if (uiStyleSelect) uiStyleSelect.value = window.MemoUIStyle.name;
         const companionLanguageSelect = document.getElementById('companionLanguageSelect');
         if (companionLanguageSelect) {
-            // Companion replies are a browser-local AI preference, just like
-            // the provider/model configuration above.  Older installations
-            // and malformed values intentionally fall back to Chinese.
+            // 陪伴回复语言与上方服务商/模型配置一样，是浏览器本地 AI 偏好。
+            // 旧安装和畸形值统一回退为中文。
             companionLanguageSelect.value = localStorage.getItem('companion_language') === 'ja' ? 'ja' : 'zh';
             companionLanguageSelect.addEventListener('change', function() {
                 localStorage.setItem('companion_language', companionLanguageSelect.value === 'ja' ? 'ja' : 'zh');
@@ -558,9 +557,8 @@ const App = (function() {
         if (autoRead) autoRead.checked = localStorage.getItem('tts_auto_read') === 'true';
         if (companionRead) {
             const savedCompanionRead = localStorage.getItem('tts_companion_enabled');
-            // A freshly upgraded installation should not look fully enabled
-            // while every character touch is intentionally silent.  Preserve
-            // an explicit user opt-out, but enable companion speech by default.
+            // 刚升级的安装不应显示为全部启用，却让所有角色触摸刻意静音。保留用户
+            // 明确关闭的选择，其余情况默认启用陪伴朗读。
             companionRead.checked = savedCompanionRead === null ? true : savedCompanionRead === 'true';
             if (savedCompanionRead === null) localStorage.setItem('tts_companion_enabled', 'true');
         }
@@ -622,7 +620,7 @@ const App = (function() {
             localStorage.setItem('tts_parallel_infer', parallelInfer.checked ? 'true' : 'false');
         });
 
-        // ---- Explicit character role packages (TTS + reference + Live2D) ----
+        // ---- 显式角色资料包（TTS + 参考资料 + Live2D）----
         let roleList = [], activeRoleId = '';
         let packMountInFlight = false;
         const roleStatus = document.getElementById('ttsRoleStatus');
@@ -714,9 +712,8 @@ const App = (function() {
             setPackMountMessage('正在传输并校验 ' + label + '（' + describePackSize(file.size) + '），大包需要一些时间…');
             if (actionEl) { actionEl.textContent = '正在挂载语音包…'; actionEl.className = 'status-text'; }
             try {
-                // Keep the File as the request body.  Unlike arrayBuffer(),
-                // this lets the WebView stream a multi-GB runtime pack instead
-                // of duplicating it in browser memory.
+                // 直接以 File 作为请求体。与 arrayBuffer() 不同，WebView 可流式
+                // 传输数 GB 的运行包，不在浏览器内存中再复制一份。
                 const response = await fetch('/api/tts/mount-pack?name=' + encodeURIComponent(label), {
                     method: 'POST',
                     headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/zip' }),
@@ -924,8 +921,7 @@ const App = (function() {
             const base = (normalized || ('role-' + Date.now())).slice(0, 64);
             let candidate = base;
             let suffix = 2;
-            // A new editor must never turn an identically named role into an
-            // accidental overwrite of an existing package.
+            // 新建编辑器绝不能因角色同名而意外覆盖已有资料包。
             while (roleList.some(function(role) { return role.role_id === candidate; })) {
                 const tail = '-' + suffix++;
                 candidate = base.slice(0, 64 - tail.length) + tail;
@@ -969,17 +965,14 @@ const App = (function() {
             roleSaveInFlight = true;
             setRoleSaveLock(true);
             try {
-                // Assign this once before the metadata request.  A retry after a
-                // failed asset upload must keep writing to the same role package.
+                // 在元数据请求前只赋值一次；资源上传失败后的重试必须继续写入同一角色包。
                 const id = (roleId && roleId.value) || newRoleId(roleName && roleName.value);
                 if (roleId) roleId.value = id;
                 const body = { role_id: id, name: roleName && roleName.value, reference_language: roleLanguage && roleLanguage.value,
                     reference_text: roleText && roleText.value, live2d_model_id: roleLive2D && roleLive2D.value };
 
-                // Uploads have a stable order.  Existing roles use an isolated
-                // staging batch, so the old package remains intact until all
-                // selected files, text, language and Live2D binding can commit
-                // together.
+                // 上传顺序固定。已有角色使用隔离暂存批次，所有所选文件、文本、语言
+                // 和 Live2D 绑定能一起提交前，旧资料包保持完整。
                 const assets = [
                     { inputId: 'ttsRoleGptFile', kind: 'ckpt', label: 'GPT 模型' },
                     { inputId: 'ttsRoleSovitsFile', kind: 'pth', label: 'SoVITS 模型' },
@@ -1018,8 +1011,7 @@ const App = (function() {
                         throw error;
                     }
                 } else {
-                    // A new/inactive role is a draft until explicitly enabled,
-                    // so it may safely receive assets after its metadata exists.
+                    // 新建或未启用角色在明确启用前都是草稿，因此元数据建立后可安全接收资源。
                     const saved = await postRoleJson('/api/tts/roles', body);
                     savedRole = saved.role || body;
                     await uploadSelectedAssets();
@@ -1130,8 +1122,7 @@ const App = (function() {
                 const resp = await fetch('/api/tts/preload', {
                     method: 'POST',
                     headers: roleHeaders(true),
-                    // The server resolves the active role.  The dropdown is only
-                    // an editing/upload target and must not select a voice here.
+                    // 当前角色由服务端解析；下拉框只用于选择编辑/上传目标，不能在此选音色。
                     body: JSON.stringify({})
                 });
                 const data = await resp.json();

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""OpenAI Codex (ChatGPT OAuth) login and Responses transport.
+"""OpenAI Codex（ChatGPT OAuth）登录与 Responses 传输。
 
-This follows the same integration shape used by Cherry Studio: PKCE login,
-OAuth token refresh, ChatGPT account routing, and the Codex Responses endpoint.
-Only Python's standard library is required.
+参考 Cherry Studio 公开的 Codex 提供商集成方式后，以 Python 独立实现 PKCE 登录、
+OAuth 令牌刷新、ChatGPT 账户路由和 Codex Responses 传输；仅依赖标准库。
 """
 
 import base64

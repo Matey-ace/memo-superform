@@ -1,6 +1,5 @@
--- Memo Superform SQLite schema (v0.70)
--- This file is the runtime source of truth.  schema.sql is retained only for
--- read-only imports from the legacy SQL Server database.
+-- Memo Superform SQLite 架构（v0.70）。
+-- 本文件是运行时唯一事实来源；schema.sql 仅为旧 SQL Server 数据库的只读导入保留。
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -16,8 +15,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     updated_at TEXT NOT NULL
 );
 
--- The current state of a word.  The stable upstream voc_id, not its spelling,
--- is the identity so that duplicate spellings remain distinct.
+-- 单词当前状态。以稳定的上游 voc_id 而非拼写作为身份，确保相同拼写仍可区分。
 CREATE TABLE IF NOT EXISTS study_records (
     profile_id INTEGER NOT NULL,
     voc_id TEXT NOT NULL,
@@ -41,8 +39,7 @@ CREATE TABLE IF NOT EXISTS study_records (
     FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
 
--- Daily snapshots are append-only once their date has passed.  They allow old
--- charts/statistics to stay stable while study_records keeps the current state.
+-- 日期过去后每日快照只追加不改写，使旧图表/统计保持稳定，而 study_records 保留当前状态。
 CREATE TABLE IF NOT EXISTS study_record_snapshots (
     profile_id INTEGER NOT NULL,
     snapshot_date TEXT NOT NULL,
@@ -62,7 +59,7 @@ CREATE TABLE IF NOT EXISTS study_record_snapshots (
     FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
 
--- A marker makes an empty array a valid, completed daily snapshot.
+-- 使用标记使空数组也能成为有效且已完成的每日快照。
 CREATE TABLE IF NOT EXISTS snapshot_runs (
     profile_id INTEGER NOT NULL,
     snapshot_date TEXT NOT NULL,
@@ -161,7 +158,7 @@ CREATE TABLE IF NOT EXISTS sync_segments (
     FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
 
--- Hashes and metadata of records returned by the cheap "today" probe.
+-- 轻量“今日”探测返回记录的哈希与元数据。
 CREATE TABLE IF NOT EXISTS sync_today_items (
     profile_id INTEGER NOT NULL,
     sync_date TEXT NOT NULL,
@@ -181,8 +178,7 @@ CREATE TABLE IF NOT EXISTS legacy_imports (
     error_text TEXT
 );
 
--- Model bytes are stored only under data/live2d/models. SQLite stores the
--- verified registry and the selected model for each profile.
+-- 模型二进制仅存于 data/live2d/models；SQLite 保存已校验注册表和每个资料的选定模型。
 CREATE TABLE IF NOT EXISTS live2d_models (
     model_id TEXT PRIMARY KEY,
     source TEXT NOT NULL,

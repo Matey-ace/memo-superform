@@ -1,6 +1,6 @@
-// Memo Superform - Live2D companion learning mode.
-// This module keeps study events local and only asks the configured AI at
-// deliberate learning milestones.  It never changes StudyWeb's answer flow.
+// Memo Superform - Live2D 陪伴学习模式。
+// 本模块把学习事件留在本地，只在明确的学习节点请求已配置 AI；
+// 绝不改变 StudyWeb 的答题流程。
 
 const COMPANION_LANGUAGE_STORAGE_KEY = 'companion_language';
 const COMPANION_REMINDER_ENABLED_STORAGE_KEY = 'companion_reminder_enabled';
@@ -135,9 +135,8 @@ function personaKey(characterId) {
 function personaTemplateForRole(role) {
     const key = personaKey(role && role.live2d_character_id);
     const base = DEFAULT_PERSONAS[key] || DEFAULT_PERSONAS._default;
-    // One-time migration preserves the old character-id customization as the
-    // starting point of each role package.  Runtime lookup below never uses
-    // this browser-local map once the role manifest has a full persona.
+    // 一次性迁移把旧角色 ID 自定义值保留为各角色包的起点。角色清单拥有完整
+    // 人设后，下方运行时查找不再使用这份浏览器本地映射。
     const legacy = getPersonaOverrides()[key] || {};
     const persona = {};
     ['name', 'background', 'tone', 'avoid', 'examples'].forEach(function(field) {
@@ -157,8 +156,8 @@ function getActivePersona() {
     const binding = typeof Live2DModelManager !== 'undefined' && Live2DModelManager && Live2DModelManager.roleBinding
         ? Live2DModelManager.roleBinding() : null;
     if (binding && hasCompletePersona(binding.persona)) return Object.assign({}, binding.persona);
-    // Transitional fallback only: existing browsers may still carry a legacy
-    // character-id persona until PersonaSettings writes it into each role.
+    // 仅作过渡兜底：在 PersonaSettings 把人设写入每个角色前，已有浏览器可能
+    // 仍保存旧角色 ID 人设。
     return personaTemplateForRole({
         name: binding && binding.active_role_name,
         live2d_character_id: binding && binding.model_character_id,
@@ -332,8 +331,7 @@ const PersonaSettings = (function() {
 const Live2DModelManager = (function() {
     let currentModels = [];
     let preference = { active_model_id: null, companion_enabled: false };
-    // The persisted preference exists for old versions, but a current role
-    // binding is the runtime authority for both the renderer and persona.
+    // 持久化偏好为兼容旧版本保留；当前角色绑定才是渲染器和人设的运行时权威。
     let roleBinding = null;
     let activeJob = null;
 
@@ -359,15 +357,13 @@ const Live2DModelManager = (function() {
         return data;
     }
     function markUnavailable(reason) {
-        // Do not let a previous successful fetch keep rendering a stale role
-        // after the current model-list request failed.
+        // 当前模型列表请求失败后，不要因上一次请求成功而继续渲染过期角色。
         roleBinding = { enforced: true, ready: false, reason: String(reason || '读取角色绑定的 Live2D 模型失败') };
         renderSettings();
     }
     function runtimeModelId() {
         if (roleBinding && roleBinding.enforced) return roleBinding.ready ? (roleBinding.active_model_id || null) : null;
-        // Graceful display compatibility when a new page is temporarily paired
-        // with an older server.  Current servers always return `enforced`.
+        // 新页面暂时连接旧服务端时保持显示兼容；当前服务端始终返回 `enforced`。
         return preference.active_model_id || null;
     }
     async function searchCatalog(query, refresh) {
@@ -479,9 +475,8 @@ const Live2DModelManager = (function() {
         renderRoleBindingHint();
         const roleId = roleBinding && roleBinding.active_role_id;
         PersonaSettings.setRole(roleId);
-        // The model list contains only renderer metadata.  Refresh the role
-        // list separately so the persona editor always writes by role_id,
-        // including two different voices that share one Live2D model.
+        // 模型列表仅含渲染元数据；单独刷新角色列表，使人设编辑器始终按 role_id
+        // 写入，也能区分共用同一 Live2D 模型的两套音色。
         if (PersonaSettings.refreshRoles) {
             PersonaSettings.refreshRoles(roleId).catch(function(error) {
                 console.warn('读取角色人设失败：', error);
@@ -522,8 +517,7 @@ const CompanionSession = (function() {
             if (next.signature === reminderSignature) return false;
             reminderSettings = next;
             reminderSignature = next.signature;
-            // A changed interval always starts fresh.  Do not replay the
-            // intervals that elapsed under the old value.
+            // 间隔变更后一律重新计时，不补播旧设定期间已经过去的周期。
             nextReminderAt = active && records.length && next.enabled ? now + next.interval_ms : 0;
             return true;
         }
@@ -575,9 +569,8 @@ const CompanionSession = (function() {
                 syncReminderSettings(now);
                 armReminder(now);
                 if (records.length && reminderSettings.enabled && nextReminderAt && now >= nextReminderAt) {
-                    // Trigger at most once per tick, then schedule from now.
-                    // This prevents a resumed tab or a changed setting from
-                    // generating a burst of overdue reminders.
+                    // 每次计时检查最多触发一次，并从当前时刻重新排期，避免恢复标签页
+                    // 或更改设置后集中生成大量逾期提醒。
                     nextReminderAt = now + reminderSettings.interval_ms;
                     notify('reminder');
                 }
@@ -626,8 +619,8 @@ const Live2DCompanion = (function() {
     }
     function safeDiagnosticError(error) {
         let text = error && error.message ? error.message : String(error || '未知错误');
-        // Browsers occasionally include an absolute local path in a loader error.
-        // Keep the error category, but never surface a user directory in the UI.
+        // 浏览器偶尔会在加载错误中包含本地绝对路径。保留错误类别，但绝不在界面
+        // 显示用户目录。
         text = text.replace(/file:\/\/\/[^\s"'`<>]+/gi, '[本地文件]');
         text = text.replace(/\b[A-Za-z]:[\\/][^"'`<>\r\n]*/g, '[本地路径]');
         text = text.replace(/\/(?:Users|home|private|var|tmp|AppData|Documents)(?:\/[^\s"'`<>]*)*/gi, '[本地路径]');
@@ -676,9 +669,8 @@ const Live2DCompanion = (function() {
             const webgl = webgl2 || probe.getContext('webgl') || probe.getContext('experimental-webgl');
             capability.webglAvailable = !!webgl;
             capability.webgl = webgl2 ? 'WebGL2 可用' : (webgl ? 'WebGL 可用' : '不可用');
-            // This is only a short-lived probe context. Release it when the
-            // browser offers the standard extension so repeated diagnostics do
-            // not consume renderer context slots.
+            // 这里只是短期探测上下文；浏览器提供标准扩展时立即释放，避免重复诊断
+            // 占用渲染上下文名额。
             const loseContext = webgl && webgl.getExtension ? webgl.getExtension('WEBGL_lose_context') : null;
             if (loseContext && loseContext.loseContext) loseContext.loseContext();
         } catch (error) {
@@ -815,10 +807,9 @@ const Live2DCompanion = (function() {
         catch (error) { return false; }
     }
     function preloadCompanionVoice() {
-        // Model loading starts while the companion screen opens, rather than
-        // on the first approved spoken reaction.  The TTS worker stays alive
-        // after preload, so head touches, manual checks and reminders reuse
-        // the same process without launching a new console window each time.
+        // 打开陪伴界面时就开始加载模型，而不是等到首次允许朗读的反应。预加载后
+        // TTS worker 保持存活，因此摸头、手动“让她看看”和定时提醒会复用同一
+        // 进程，不会每次都打开新的控制台窗口。
         if (!companionVoiceIsEnabled()) return;
         const tts = window.TTS;
         if (!tts || typeof tts.refresh !== 'function' || typeof tts.isReady !== 'function' || typeof tts.preload !== 'function') return;
@@ -827,8 +818,7 @@ const Live2DCompanion = (function() {
             if (!open || requestId !== companionVoicePreloadRequest || !companionVoiceIsEnabled() || !tts.isReady()) return false;
             return tts.preload();
         }).catch(function() {
-            // Voice is optional in companion mode.  Preload failures should
-            // never interrupt study or create a visible error notification.
+            // 陪伴模式可不使用语音；预加载失败不应中断学习或弹出可见错误通知。
             return false;
         });
     }
@@ -852,9 +842,8 @@ const Live2DCompanion = (function() {
         if (normalized === lastSpokenCompanion) return;
         const requestId = ++companionVoiceRequest;
         try {
-            // TTS uses the active role's manifest for its model/reference
-            // assets.  This one request option only tells GPT-SoVITS whether
-            // the companion sentence itself is Chinese or Japanese.
+            // TTS 从当前角色清单读取模型和参考资料；此请求选项只告诉 GPT-SoVITS
+            // 陪伴句子本身是中文还是日文。
             Promise.resolve(tts.speak(normalized, { language: companionLanguageConfig(language || getCompanionLanguage()).ttsLanguage })).then(function(ok) {
                 if (requestId !== companionVoiceRequest) return;
                 if (ok) {
@@ -921,9 +910,8 @@ const Live2DCompanion = (function() {
     function onSessionSignal(kind, summary) {
         updateSummary(summary);
         if (kind === 'milestone' && isAnonBirthday()) showBirthdayCard();
-        // Regular study feedback remains visible, but it never asks TTS to
-        // speak.  The only session paths allowed to speak are a manual check
-        // and the configured reminder; head touches are handled separately.
+        // 普通学习反馈仍会显示，但不请求 TTS 朗读。会话中只有手动“让她看看”
+        // 和已配置定时提醒可朗读；摸头由独立路径处理。
         if (kind === 'started' || kind === 'state') {
             const language = getCompanionLanguage();
             setMessage(randomLine(kind === 'started' ? 'started' : 'state', language), 'thinking', language, false);
@@ -1092,8 +1080,7 @@ const Live2DCompanion = (function() {
         const reaction = TOUCH_REACTIONS[region] || TOUCH_REACTIONS.lower;
         const language = getCompanionLanguage();
         const speak = region === 'head';
-        // React physically immediately (mood/motion) so the touch still lands,
-        // but don't paint a local text bubble -- the AI reply is the single response.
+        // 立即执行表情/动作，让触摸保持反馈；不显示本地文本气泡，AI 回复是唯一文案。
         setMoodLabel(reaction.mood);
         playMood(reaction.mood);
         if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) {
@@ -1117,7 +1104,7 @@ const Live2DCompanion = (function() {
             const replyText = String(parsed.text || '').trim();
             setReply((isMeaningfulCompanionReply(replyText, language) ? replyText : randomTouchLine(region, language)).slice(0, 80), reaction.mood, language, speak);
         } catch (error) {
-            // If the AI call failed, fall back to a single local reaction line.
+            // AI 调用失败时，只回退到一条本地反应文案。
             setMessage(randomTouchLine(region, language), reaction.mood, language, speak);
         }
     }
@@ -1287,8 +1274,8 @@ const Live2DCompanion = (function() {
     };
 })();
 
-// Top-level const bindings are not properties of window.  App.init() and the
-// page entry use window.* so expose the three public modules explicitly.
+// 顶层 const 绑定不是 window 属性；App.init() 和页面入口使用 window.*，
+// 因此显式公开这三个模块。
 window.Live2DModelManager = Live2DModelManager;
 window.CompanionSession = CompanionSession;
 window.Live2DCompanion = Live2DCompanion;

@@ -77,7 +77,7 @@ const LayoutManager = (function() {
             const inst = ChartManager.getInstance(tileIndex);
             if (!inst) return;
             if (chartType === 'study-web') {
-                // study-web tile is not an ECharts chart; show the iframe fullscreen
+                // study-web 磁贴不是 ECharts 图表，直接全屏显示 iframe。
                 const fsEl = document.getElementById('fullscreenChart');
                 fsEl.innerHTML = '';
                 const tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
@@ -91,7 +91,7 @@ const LayoutManager = (function() {
                 return;
             }
             if (typeof inst.getOption !== 'function') {
-                // non-ECharts instance (recommend / memory-diary): clone chart DOM into fullscreen
+                // 非 ECharts 实例（推荐/记忆日记）：把图表 DOM 克隆到全屏层。
                 const fsEl = document.getElementById('fullscreenChart');
                 fsEl.innerHTML = '';
                 const tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
@@ -519,7 +519,7 @@ const LayoutManager = (function() {
             finalized = true;
 
             // === FLIP 技术核心 ===
-            // First: 记录 DOM 交换前的视觉位置
+            // 第一步（First）：记录 DOM 交换前的视觉位置。
             var tileFirst = tile.getBoundingClientRect();
             var targetFirst = target.getBoundingClientRect();
 
@@ -534,11 +534,11 @@ const LayoutManager = (function() {
             target.classList.add('settling');
             swapPositions(tile, target);
 
-            // Last: DOM 交换后磁贴的新位置
+            // 最后（Last）：记录 DOM 交换后磁贴的新位置。
             var tileLast = tile.getBoundingClientRect();
             var targetLast = target.getBoundingClientRect();
 
-            // Invert: 计算位置差，用 transform 反转回交换前的视觉位置
+            // 反转（Invert）：计算位置差，用 transform 回到交换前的视觉位置。
             var tileDx = tileFirst.left - tileLast.left;
             var tileDy = tileFirst.top - tileLast.top;
             var targetDx = targetFirst.left - targetLast.left;
@@ -551,7 +551,7 @@ const LayoutManager = (function() {
             void tile.offsetWidth;
             void target.offsetWidth;
 
-            // Play: 平滑过渡到最终位置（transform 归零）
+            // 播放（Play）：平滑过渡到最终位置（transform 归零）。
             var settleDuration = 200;
             var settleEase = 'cubic-bezier(0.22, 1, 0.36, 1)';
             tile.classList.remove('settling');
@@ -624,4 +624,3 @@ const LayoutManager = (function() {
         setDragEndCallback
     };
 })();
-

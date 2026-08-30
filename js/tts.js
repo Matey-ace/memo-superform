@@ -124,16 +124,14 @@ var TTS = (function() {
     }
 
     async function requestSpeech(text, controller, requestGeneration, options) {
-        // The worker intentionally processes one GPU synthesis at a time.  A
-        // previous browser request can be cancelled locally while the worker
-        // continues running, so retry a short "正在合成中" window instead of
-        // treating rapid interactions as permanently silent.
+        // worker 有意一次只处理一个 GPU 合成任务。浏览器可在本地取消前一请求，
+        // 但 worker 仍会继续运行；因此遇到短暂“正在合成中”时重试，不把快速交互
+        // 误判为永久静音。
         for (let attempt = 0; attempt < 18; attempt += 1) {
             const requestBody = {
                 text: text,
-                // The backend resolves the single enabled role from its
-                // manifest.  Do not let browser state choose another
-                // character's model or reference audio.
+                // 后端从清单解析唯一启用角色；不允许浏览器状态另选其他角色的模型
+                // 或参考音频。
                 speed: parseFloat(localStorage.getItem('tts_speed') || '1.0'),
                 top_k: numSetting('tts_top_k', 15, 1, 100),
                 fragment_interval: numSetting('tts_fragment_interval', 0.5, 0, 5),
@@ -142,9 +140,8 @@ var TTS = (function() {
                 use_cuda_graph: boolSetting('tts_cuda_graph', false),
                 parallel_infer: boolSetting('tts_parallel_infer', false)
             };
-            // Most callers rely on the resource pack's default text language.
-            // Companion mode supplies this per utterance so a Japanese reply
-            // does not inherit a stale Chinese text-language preference.
+            // 大多数调用方使用资源包默认文本语言；陪伴模式按每句话传入，避免日文
+            // 回复继承过期的中文文本语言偏好。
             if (options && (options.language === '中文' || options.language === '日文')) {
                 requestBody.language = options.language;
             }
@@ -177,12 +174,10 @@ var TTS = (function() {
         synthesisController = controller;
         synthesisInFlight = true;
         lastError = '';
-        // GPT-SoVITS' first request after launch loads model weights and can
-        // legitimately take well over the normal speech timeout.  Do not
-        // abort that cold request at 45 seconds: the server cannot cancel GPU
-        // work safely, and killing the browser request used to make touches
-        // appear permanently silent.  Once a response succeeds, later turns
-        // retain the tighter warm-path guard.
+        // GPT-SoVITS 启动后的首个请求需要加载模型权重，合理耗时可能远超普通语音
+        // 超时。不要在 45 秒终止这个冷请求：服务端不能安全取消 GPU 工作，过去
+        // 中止浏览器请求会让触摸看起来永久静音。首次成功后，后续请求继续使用
+        // 更严格的热路径保护。
         const requestTimeout = status.loaded ? 45000 : 210000;
         const timer = setTimeout(function() { if (controller) controller.abort(); }, requestTimeout);
         try {
@@ -191,9 +186,8 @@ var TTS = (function() {
                 settle(waiters, false);
             } else if (result.audio_url) {
                 status.loaded = true;
-                // A newer touch arrived while this GPU job was running.  Do
-                // not play the stale response over it; finish this worker job
-                // and synthesize only the most recent pending reaction.
+                // 本次 GPU 任务运行期间又发生了新触摸。不要播放过期回复；完成当前
+                // worker 任务后，只合成队列中最新的反应。
                 if (queuedSynthesis) settle(waiters, false);
                 else settle(waiters, await play(result.audio_url));
             } else {
@@ -209,8 +203,7 @@ var TTS = (function() {
             clearTimeout(timer);
             if (synthesisController === controller) synthesisController = null;
             synthesisInFlight = false;
-            // Only an explicit stop increments the generation while a request
-            // is active.  New touches are deliberately queued, never aborted.
+            // 请求活动期间只有明确停止才递增代次；新触摸有意入队，不中止当前请求。
             const next = queuedSynthesis;
             queuedSynthesis = null;
             if (next && requestGeneration === synthesisGeneration && isReady()) {
@@ -226,9 +219,8 @@ var TTS = (function() {
         lastError = '';
         return new Promise(function(resolve) {
             if (synthesisInFlight) {
-                // Keep the latest meaningful touch only.  The server cannot
-                // cancel an already-running inference, so replacing the queue
-                // prevents a burst of clicks from piling up stale speeches.
+                // 只保留最新一次有效触摸。服务端不能取消已运行的推理，替换队列可
+                // 避免连点积压大量过期语音。
                 if (queuedSynthesis) settle(queuedSynthesis.waiters, false);
                 queuedSynthesis = { text: text, waiters: [resolve], options: options };
                 return;
@@ -238,10 +230,8 @@ var TTS = (function() {
     }
 
     function preload() {
-        // Model preloading starts the same persistent backend worker used by
-        // synthesis, but deliberately sends no text and never plays audio.
-        // A companion-mode entry can therefore pay the cold-start cost once,
-        // before the user touches the character.
+        // 模型预加载启动与合成共用的常驻后端 worker，但不发送文本也不播放音频。
+        // 因而进入陪伴模式时可在用户触摸角色前一次性完成冷启动。
         if (status.loaded && !status.busy) return Promise.resolve(true);
         if (preloadInFlight) return preloadInFlight;
         if (synthesisInFlight) return Promise.resolve(false);

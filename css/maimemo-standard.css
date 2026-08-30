@@ -1,4 +1,4 @@
-/* Memo Superform - standard iframe theme.  Only restores semantic navigation. */
+/* Memo Superform - 标准 iframe 主题；只恢复语义导航。 */
 html.memo-standard #taro-navigation-bar.taro-navigation-bar-show {
     position:sticky !important; top:0 !important; z-index:520 !important;
     min-height:48px; background:#fff !important; border-bottom:1px solid #e5e7eb;
@@ -25,7 +25,7 @@ html.memo-standard.memo-dark #taro-navigation-bar.memo-navigation-back-fallback>
 html.memo-standard.memo-dark #taro-navigation-bar.taro-navigation-bar-back-icon>.taro-navigation-bar-back,
 html.memo-standard.memo-dark #taro-navigation-bar.taro-navigation-bar-home-icon>.taro-navigation-bar-home { background:#292b2d !important; border-color:#475569; color:#dbeafe !important; }
 
-/* Memo-owned exit for the upstream TTS page, which has no reliable back UI. */
+/* 为缺少可靠返回界面的上游 TTS 页面提供 Memo 自有退出入口。 */
 html.memo-standard #memo-tts-exit {
     position:fixed; top:max(14px,env(safe-area-inset-top));
     left:max(14px,calc((100vw - 760px)/2 + 14px)); z-index:10020;

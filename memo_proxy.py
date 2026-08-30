@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Declarative route resolution for the Maimemo reverse proxy."""
+"""墨墨反向代理的声明式路由解析。"""
 from dataclasses import dataclass
 
 MAIMEMO_BASE = "https://open.maimemo.com/open"

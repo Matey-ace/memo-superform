@@ -6,12 +6,10 @@ a = Analysis(
     ['launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[('index.html', '.'), ('css', 'css'), ('js', 'js'), ('vendor', 'vendor'), ('index-anon.html', '.'), ('img', 'img'), ('fonts', 'fonts'), ('LICENSE', '.'), ('README.md', '.'), ('CHANGELOG.md', '.'), ('schema.sql', '.'), ('sqlite_schema.sql', '.')],
-    # ``webview`` chooses its Windows backend dynamically.  Listing the
-    # runtime modules here keeps the desktop executable self-contained rather
-    # than producing a browser-only package that fails after launch.
+    datas=[('index.html', '.'), ('css', 'css'), ('js', 'js'), ('vendor', 'vendor'), ('index-anon.html', '.'), ('img', 'img'), ('fonts', 'fonts'), ('LICENSE', '.'), ('THIRD_PARTY_NOTICES.md', '.'), ('README.md', '.'), ('CHANGELOG.md', '.'), ('schema.sql', '.'), ('sqlite_schema.sql', '.')],
+    # ``webview`` 会动态选择 Windows 后端。这里显式列出运行时模块，确保桌面
+    # 可执行文件自包含，避免产出启动后只能使用浏览器模式的残缺包。
     hiddenimports=[
-        'pyodbc',
         'windows_tray',
         'webview',
         'webview.guilib',
@@ -22,7 +20,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # 旧 SQL Server 迁移器在源码模式可按需导入 pyodbc，但发布 EXE 明确不携带
+    # 这个可选 C 扩展，以控制包体；常规 SQLite 运行不受影响。
+    excludes=['pyodbc'],
     noarchive=False,
     optimize=0,
 )

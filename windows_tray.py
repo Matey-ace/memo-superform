@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Windows notification-area (system tray) indicator for Memo Superform.
+"""Memo Superform 的 Windows 通知区域（系统托盘）指示器。
 
 The module deliberately uses only the Win32 APIs exposed by :mod:`ctypes` so it
 can be bundled with the existing executable without adding a runtime dependency.
@@ -16,7 +16,7 @@ Typical desktop launcher usage::
     )
     tray.start()
     tray.set_status("正在运行")
-    # ... on every normal shutdown path
+    # ……在所有正常关闭路径上执行。
     tray.stop()
 
 The native tray host owns a tiny hidden message window on a daemon thread.  All
@@ -39,17 +39,16 @@ from typing import Callable, Optional
 _LOG = logging.getLogger(__name__)
 _IS_WINDOWS = sys.platform == "win32"
 
-# The shell silently truncates NOTIFYICONDATAW.szTip after 127 characters.
+# Shell 会静默截断超过 127 个字符的 NOTIFYICONDATAW.szTip。
 _MAX_TOOLTIP_LENGTH = 127
 
-# Publicly useful status label for an app that has started but has not supplied a
-# more specific lifecycle state yet.
+# 应用已启动但尚未给出更具体生命周期状态时，对外显示的通用状态标签。
 DEFAULT_STATUS = "正在运行"
 
 
 if _IS_WINDOWS:
-    # ctypes.wintypes does not expose all of these consistently across Python
-    # versions, hence the explicit pointer-sized declarations.
+    # 不同 Python 版本的 ctypes.wintypes 并未一致公开这些类型，因此显式声明
+    # 指针宽度。
     _LRESULT = ctypes.c_ssize_t
     _UINT_PTR = ctypes.c_size_t
     _HICON = ctypes.c_void_p
@@ -73,7 +72,7 @@ if _IS_WINDOWS:
 
 
     class _NOTIFYICONDATAW(ctypes.Structure):
-        """Full Vista+ NOTIFYICONDATAW layout (safe with older shell versions)."""
+        """完整的 Vista+ NOTIFYICONDATAW 布局，也兼容较旧 Shell。"""
 
         _fields_ = [
             ("cbSize", wintypes.DWORD),
@@ -118,9 +117,9 @@ if _IS_WINDOWS:
 
 
 class _WindowsTrayBackend:
-    """Thin Win32 binding kept separate from the portable public facade."""
+    """轻量 Win32 绑定，与跨平台公开外观层分离。"""
 
-    # Shell_NotifyIconW operations and flags.
+    # Shell_NotifyIconW 操作与标志。
     NIM_ADD = 0x00000000
     NIM_MODIFY = 0x00000001
     NIM_DELETE = 0x00000002
@@ -130,7 +129,7 @@ class _WindowsTrayBackend:
     NIF_ICON = 0x00000002
     NIF_TIP = 0x00000004
 
-    # Window and menu messages/flags.
+    # 窗口和菜单消息/标志。
     WM_NULL = 0x0000
     WM_DESTROY = 0x0002
     WM_CLOSE = 0x0010
@@ -233,7 +232,7 @@ class _WindowsTrayBackend:
             wintypes.UINT,
         ]
         self.user32.LoadImageW.restype = ctypes.c_void_p
-        # The resource identifier passed to LoadIconW is an integer pointer.
+        # 传给 LoadIconW 的资源标识符是整数指针。
         self.user32.LoadIconW.argtypes = [_HINSTANCE, ctypes.c_void_p]
         self.user32.LoadIconW.restype = _HICON
         self.user32.DestroyIcon.argtypes = [_HICON]
@@ -285,9 +284,8 @@ class _WindowsTrayBackend:
             raise self._last_error("RegisterClassW")
         self._class_registered = True
 
-        # A non-visible top-level window avoids taskbar presence while remaining
-        # compatible with Shell_NotifyIcon callbacks on all supported Windows
-        # versions (unlike a message-only window on older Shell builds).
+        # 不可见的顶层窗口不会出现在任务栏，同时兼容所有受支持 Windows 版本的
+        # Shell_NotifyIcon 回调；旧版 Shell 的纯消息窗口做不到这一点。
         hwnd = self.user32.CreateWindowExW(
             0,
             self.class_name,
@@ -323,7 +321,7 @@ class _WindowsTrayBackend:
                 return handle
             _LOG.warning("Unable to load tray icon %s; using application icon", icon_path)
 
-        # IDI_APPLICATION is a shared system resource and must not be destroyed.
+        # IDI_APPLICATION 是共享系统资源，不得销毁。
         handle = self.user32.LoadIconW(None, ctypes.c_void_p(self.IDI_APPLICATION))
         if not handle:
             raise self._last_error("LoadIconW")
@@ -352,8 +350,8 @@ class _WindowsTrayBackend:
     def set_version(self, hwnd) -> None:
         data = self._notification_data(hwnd, 0)
         data.uVersion = self.NOTIFYICON_VERSION_4
-        # NIM_SETVERSION failure is non-fatal: the icon still works with the
-        # legacy callback contract, handled by _window_proc below.
+        # NIM_SETVERSION 失败并非致命：图标仍可使用旧回调约定，由下方
+        # _window_proc 处理。
         self.shell32.Shell_NotifyIconW(self.NIM_SETVERSION, ctypes.byref(data))
 
     def update_icon(self, hwnd) -> bool:
@@ -386,8 +384,7 @@ class _WindowsTrayBackend:
             point = wintypes.POINT()
             if not self.user32.GetCursorPos(ctypes.byref(point)):
                 raise self._last_error("GetCursorPos")
-            # Required by the shell for a popup menu that is dismissed by a
-            # subsequent click instead of remaining highlighted/frozen.
+            # Shell 要求如此处理，弹出菜单才能在后续点击时关闭，而不会保持高亮或卡住。
             self.user32.SetForegroundWindow(hwnd)
             command = self.user32.TrackPopupMenu(
                 menu,
@@ -445,14 +442,13 @@ class _WindowsTrayBackend:
         try:
             return self.owner._handle_window_message(hwnd, message, wparam, lparam)
         except Exception:
-            # A Python exception must never escape a Win32 callback.  Doing so
-            # can corrupt the message loop and leaves a stale tray icon behind.
+            # Python 异常绝不能越出 Win32 回调，否则可能破坏消息循环并留下失效托盘图标。
             _LOG.exception("Unhandled exception in Windows tray window procedure")
             return self.user32.DefWindowProcW(hwnd, message, wparam, lparam)
 
 
 class WindowsTray:
-    """Native Windows taskbar notification-area indicator.
+    """原生 Windows 任务栏通知区域指示器。
 
     Parameters
     ----------
@@ -508,12 +504,12 @@ class WindowsTray:
 
     @property
     def supported(self) -> bool:
-        """Whether this instance will create a native tray icon on this host."""
+        """本实例是否会在当前主机创建原生托盘图标。"""
         return self._enabled
 
     @property
     def is_running(self) -> bool:
-        """Whether the shell has accepted and currently owns this tray icon."""
+        """Shell 是否已接受并正在管理此托盘图标。"""
         with self._lock:
             return bool(self._icon_added and self._thread and self._thread.is_alive())
 
@@ -528,7 +524,7 @@ class WindowsTray:
             return self._last_error
 
     def start(self, timeout: float = 3.0) -> bool:
-        """Start the hidden Win32 message thread and add the notification icon."""
+        """启动隐藏的 Win32 消息线程并添加通知图标。"""
         if not self._enabled:
             return False
 
@@ -547,13 +543,13 @@ class WindowsTray:
             )
             self._thread.start()
 
-        # Do not make app startup fragile: a missing shell/Explorer only makes
-        # the indicator unavailable; the launcher may continue normally.
+        # 不让托盘组件拖垮应用启动：Shell/Explorer 缺失只会使指示器不可用，
+        # 启动器仍可正常继续。
         self._started_event.wait(max(0.0, float(timeout)))
         return self.is_running
 
     def stop(self, timeout: float = 2.0) -> bool:
-        """Remove the icon and stop the message thread (idempotent)."""
+        """移除图标并停止消息线程；可重复调用。"""
         if not self._enabled:
             return False
 
@@ -570,14 +566,13 @@ class WindowsTray:
             except Exception:
                 _LOG.debug("Unable to post WM_CLOSE to tray window", exc_info=True)
 
-        # Never join the message thread from itself (for example after clicking
-        # the native Exit menu item).
+        # 绝不从消息线程自身等待该线程（例如点击原生“退出”菜单项之后）。
         if active and thread is not threading.current_thread():
             thread.join(max(0.0, float(timeout)))
         return active
 
     def wait_stopped(self, timeout: Optional[float] = None) -> bool:
-        """Wait for native icon removal and message-thread termination.
+        """等待原生图标移除和消息线程结束。
 
         This is useful for an application shutdown path that wants to make sure
         the taskbar indicator has disappeared before it releases other process
@@ -587,7 +582,7 @@ class WindowsTray:
         return self._stopped_event.wait(timeout)
 
     def set_status(self, status: str) -> None:
-        """Update the runtime-status tooltip without recreating the icon."""
+        """更新运行状态提示，不重建图标。"""
         with self._lock:
             self._status = self._coerce_status(status)
             backend = self._backend
@@ -604,7 +599,7 @@ class WindowsTray:
         on_open: Optional[Callable[[], None]] = None,
         on_exit: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Replace the menu/click callbacks while the tray host is running."""
+        """托盘宿主运行期间替换菜单和点击回调。"""
         with self._lock:
             self._on_open = on_open
             self._on_exit = on_exit
@@ -677,9 +672,8 @@ class WindowsTray:
             return 0
 
         if message == backend.WM_TRAY_CALLBACK:
-            # NOTIFYICON_VERSION_4 stores the event in LOWORD(lParam).  The
-            # legacy protocol stores it in lParam directly; this form handles
-            # both because all relevant values fit in the low word.
+            # NOTIFYICON_VERSION_4 把事件放在 LOWORD(lParam)，旧协议则直接放入
+            # lParam；相关值都能装入低位字，因此此写法兼容两者。
             event = int(lparam) & 0xFFFF
             if event in (backend.WM_LBUTTONUP, backend.WM_LBUTTONDBLCLK):
                 self._invoke_open()
@@ -727,16 +721,14 @@ class WindowsTray:
         if backend and command == backend.CMD_OPEN:
             self._invoke_open()
         elif backend and command == backend.CMD_EXIT:
-            # TrackPopupMenu normally closes before this handler runs, but a
-            # keyboard repeat or a second shell notification can still arrive
-            # before WM_CLOSE removes the icon.  Invoke application shutdown
-            # once per tray lifecycle, never once per menu message.
+            # TrackPopupMenu 通常会在处理器运行前关闭，但键盘连发或第二次 Shell
+            # 通知仍可能在 WM_CLOSE 移除图标前到达。每个托盘生命周期只触发一次
+            # 应用关闭，而不是每条菜单消息都触发。
             with self._lock:
                 if self._exit_dispatched:
                     return
                 self._exit_dispatched = True
-            # Request icon removal before application shutdown starts, so the
-            # user never keeps a stale "running" indicator after selecting Exit.
+            # 应用关闭开始前先请求移除图标，避免用户选择退出后仍看到过期的“运行中”标记。
             self.stop(timeout=0.0)
             self._dispatch_callback(self._on_exit, "exit")
 

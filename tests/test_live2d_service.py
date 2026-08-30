@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import db
 from live2d_service import DownloadJob, Live2DError, Live2DService
@@ -105,6 +106,37 @@ class Live2DServiceTests(unittest.TestCase):
             self.service.validate_model(row["model_id"])
         with self.assertRaisesRegex(Live2DError, "模型引用文件不存在"):
             self.service.set_active("profile", row["model_id"], True)
+
+    def test_failed_reimport_keeps_previous_valid_model_and_registry(self):
+        source = self._c2_model("replace-safely")
+        row = self.service.import_directory(str(source), "profile")
+        installed = self.service.models_root / row["relative_path"]
+        old_texture = installed / "data" / "textures" / "texture_00.png"
+        self.assertEqual(old_texture.read_bytes(), b"png")
+
+        # 入口文件未改变，所以重复导入会使用相同 model_id；候选副本缺少
+        # 贴图时必须在动旧目录之前失败。
+        (source / "data" / "textures" / "texture_00.png").unlink()
+        with self.assertRaisesRegex(Live2DError, "模型引用文件不存在"):
+            self.service.import_directory(str(source), "profile")
+
+        self.assertEqual(old_texture.read_bytes(), b"png")
+        self.assertEqual(db.get_live2d_model(row["model_id"])["model_id"], row["model_id"])
+        self.assertTrue(self.service.validate_model(row["model_id"])["complete"])
+
+    def test_database_failure_rolls_back_promoted_model_directory(self):
+        source = self._c2_model("rollback-database")
+        row = self.service.import_directory(str(source), "profile")
+        installed_texture = self.service.models_root / row["relative_path"] / "data" / "textures" / "texture_00.png"
+        (source / "data" / "textures" / "texture_00.png").write_bytes(b"replacement")
+
+        with mock.patch.object(db, "upsert_live2d_model", side_effect=RuntimeError("database failure")):
+            with self.assertRaisesRegex(RuntimeError, "database failure"):
+                self.service.import_directory(str(source), "profile")
+
+        self.assertEqual(installed_texture.read_bytes(), b"png")
+        self.assertEqual(db.get_live2d_model(row["model_id"])["model_id"], row["model_id"])
+        self.assertTrue(self.service.validate_model(row["model_id"])["complete"])
 
     def test_delete_fails_closed_when_role_registry_is_corrupt(self):
         row = self.service.import_directory(str(self._c2_model("unknown-binding")), "profile")

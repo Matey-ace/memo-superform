@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""SQLite-backed review recommendation engine (score-compatible with v0.69)."""
+"""基于 SQLite 的复习推荐引擎，评分与 v0.69 兼容。"""
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
@@ -38,7 +38,7 @@ def _risk_row(row, today: date) -> dict[str, Any]:
 
 
 def generate_recommendations(top_n: int = 30, profile_id: Any = None) -> int:
-    """Generate today's top-N atomically while preserving reviewed state."""
+    """原子生成今日前 N 条推荐，并保留已复习状态。"""
     pk, today = db._profile_pk(profile_id), db.beijing_today()
     today_text, horizon = today.isoformat(), (today + timedelta(days=7)).isoformat()
     conn = db.get_connection()
@@ -70,7 +70,7 @@ def generate_recommendations(top_n: int = 30, profile_id: Any = None) -> int:
                          (pk, today_text, item["voc_id"], item["word"], item["definition"], item["risk_score"],
                           item["overdue_days"], item["gap_days"], item["last_response"], item["next_study_date"],
                           status, reviewed_at, now, now))
-        # Obsolete pending rows are derived data; reviewed rows remain as an audit trail.
+        # 过期待处理行属于派生数据；已复习行保留作为审计轨迹。
         if selected_ids:
             marks = ",".join("?" for _ in selected_ids)
             conn.execute("DELETE FROM recommendations WHERE profile_id=? AND recommend_date=? AND status='pending' AND voc_id NOT IN (%s)" % marks,

@@ -115,9 +115,8 @@ html.memo-notebook .rev-top-stats {
     font-family: 'M PLUS Rounded 1c', sans-serif;
 }
 
-/* Keep Maimemo's native top actions reachable.  The three-dot action opens
-   the note/example-sentence editing commands, so theme layers must never
-   make it transparent or swallow its pointer events. */
+/* 保持墨墨原生顶部操作可用。三点菜单会打开笔记/例句编辑命令，主题层绝不能
+   把它变透明或吞掉其指针事件。 */
 html.memo-notebook #rev-top-menu,
 html.memo-notebook .rev-top-stats .rev-search,
 html.memo-notebook .rev-top-stats .rev-shortcut {

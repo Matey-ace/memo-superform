@@ -188,6 +188,18 @@ memo-superform/
 
 ## 致谢
 
+### Bestdori Live2D 下载器与渲染组件
+
+Memo Superform 的 Bestdori 目录读取、Cubism 2 资源下载和 `model.json` 组装流程，参考并以 Python 重新实现了 [A-kirami/bestdori-live2d-downloader](https://github.com/A-kirami/bestdori-live2d-downloader) 的相应逻辑。具体参考范围是：读取 Bestdori 角色/资源目录、筛选 `_general` 模型、下载 moc/贴图/动作/表情/物理文件，以及生成 Cubism 2 描述文件。
+
+Memo Superform 自行实现了本地 HTTP API、SQLite 模型注册表、路径/引用/体积校验、下载取消和轮询、原子安装与失败回滚、角色资料包绑定及设置界面。上游下载器按 MIT 许可证发布，版权声明为 Copyright (c) 2023 Akirami。[Bestdori](https://bestdori.com/) 提供可选下载功能使用的远程目录与资源服务；本项目不随包提供任何角色模型，下载资源的版权和使用条件仍归各权利方及来源服务约束。
+
+随包渲染组件包括 Apache ECharts 5.5.0（Apache-2.0）、PixiJS 6.5.10（MIT）、pixi-live2d-display 0.4.0（MIT）以及适用 Live2D 自有许可条款的 Cubism Core/旧 Cubism 2 运行时；本地 Noto 与 M PLUS 字体子集按 SIL OFL 1.1 分发。完整版权、许可证文本和使用边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+### Cherry Studio 的 Codex 集成参考
+
+`codex_auth.py` 的 Codex 提供商接入流程参考了 [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) 公开实现中的 PKCE 登录、令牌刷新、ChatGPT 账户路由与 Responses 请求组织方式。Memo Superform 使用 Python 标准库独立实现本地回调服务、凭据存储和 HTTP/SSE 传输，不随包携带 Cherry Studio 的 Electron/TypeScript 运行时。Cherry Studio 社区版按 AGPL-3.0 发布；具体参考边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ### D_sakiko 与 GPT-SoVITS 语音资源
 
 Memo Superform 的本地 TTS 资源包接入并适配了 [D_sakiko](https://github.com/MacchaPafe/D_sakiko) 的 GPT-SoVITS 推理相关内容，实际使用范围如下：
@@ -380,6 +392,18 @@ Double-click `dist/MemoSuperform.exe` to run. The exe bundles ECharts and SQLite
 This project is open-sourced under [AGPL v3](LICENSE). You are free to use, modify, and distribute it, but any derivative work (including services provided over a network) must be open-sourced under the same license.
 
 ## Acknowledgements
+
+### Bestdori Live2D downloader and rendering components
+
+Memo Superform's Bestdori catalogue parsing, Cubism 2 asset download, and `model.json` assembly flow was reimplemented in Python with reference to the corresponding logic in [A-kirami/bestdori-live2d-downloader](https://github.com/A-kirami/bestdori-live2d-downloader). The referenced scope is reading the Bestdori character/asset catalogue, selecting `_general` models, downloading moc/textures/motions/expressions/physics files, and assembling a Cubism 2 descriptor.
+
+Memo Superform independently implements the local HTTP API, SQLite model registry, path/reference/size validation, cancellation and polling, atomic installation and rollback, role-package binding, and settings UI. The upstream downloader is MIT-licensed, Copyright (c) 2023 Akirami. [Bestdori](https://bestdori.com/) provides the remote catalogue and asset service used by the optional downloader. No character model is bundled; downloaded assets remain subject to their respective rights holders' and source service's terms.
+
+Bundled rendering components include Apache ECharts 5.5.0 (Apache-2.0), PixiJS 6.5.10 (MIT), pixi-live2d-display 0.4.0 (MIT), and the Cubism Core/legacy Cubism 2 runtimes under the applicable Live2D proprietary terms. Local Noto and M PLUS font subsets are distributed under SIL OFL 1.1. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for complete notices, license texts, and integration boundaries.
+
+### Cherry Studio Codex integration reference
+
+The Codex provider flow in `codex_auth.py` was implemented with reference to the public [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) integration design for PKCE sign-in, token refresh, ChatGPT account routing, and Responses requests. Memo Superform independently implements its local callback server, credential storage, and HTTP/SSE transport with Python's standard library; Cherry Studio's Electron/TypeScript runtime is not bundled. The Cherry Studio Community Edition is released under AGPL-3.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the precise reference boundary.
 
 ### D_sakiko and GPT-SoVITS voice resources
 

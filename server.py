@@ -77,7 +77,7 @@ from memo_injection import (
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Do not follow HTTP redirects; return them to the browser instead.
+    """不在服务端跟随 HTTP 重定向，而是把响应交还浏览器。
 
     The OIDC login flow (auth/login -> oidc/auth -> interaction -> callback)
     relies on the browser following each 302/303 step through the proxy so
@@ -127,7 +127,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
     def _rewrite_content(self, body, content_type, proxy_prefix=None):
-        """Rewrite maimemo domain URLs in content to proxy paths.
+        """把内容中的墨墨域名 URL 重写为本地代理路径。
 
         - HTML/CSS: rewrite domain URLs to relative proxy paths + rewrite
           absolute paths (/xxx) to /proxy-prefix/xxx for pages served via
@@ -147,10 +147,9 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         text = body.decode('utf-8', errors='replace') if isinstance(body, bytes) else body
 
         if is_js:
-            # Rewrite config api_host and memo_host to absolute proxy URLs
-            # so new URL(config.api_host) works AND _() returns a proxy URL
-            # for window.location.replace() ? no need for interceptor to
-            # catch the navigation.
+            # 把配置中的 api_host 和 memo_host 重写为绝对代理 URL，使
+            # new URL(config.api_host) 与 window.location.replace() 都直接
+            # 获得代理地址，无需再由拦截器捕获跳转。
             text = text.replace(
                 'api_host:"https://tc-apis.maimemo.com"',
                 'api_host:window.location.origin+"/memo-tc"'
@@ -159,40 +158,36 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 'memo_host:"https://api.maimemo.com"',
                 'memo_host:window.location.origin+"/memo-api"'
             )
-            # Rewrite ws_host to the local proxy so the study WebSocket goes
-            # through us instead of connecting directly to tc-apis (which
-            # the user's network cannot reach). The +"/memo-tc" prefix makes
-            # the browser send the tc-apis session cookie (sid, Path=/memo-tc/study)
-            # on the WebSocket handshake; without it the WS gets close code
-            # 3401 (Unauthorized) even with a valid login session.
+            # 把 ws_host 重写到本地代理，使学习 WebSocket 经由本服务而非直接
+            # 连接用户网络可能访问不到的 tc-apis。附加 "/memo-tc" 前缀后，浏览器
+            # 会在 WebSocket 握手时发送 tc-apis 会话 Cookie
+            # （sid，Path=/memo-tc/study）；缺少它时，即使登录有效也会收到 3401。
             text = text.replace(
                 'ws_host:"wss://tc-apis.maimemo.com"',
                 'ws_host:(location.protocol==="https:"?"wss://":"ws://")+location.host+"/memo-tc"'
             )
-            # NOTE: login_return_url MUST stay as the original
-            # https://tc-apis.maimemo.com/webstudy/app. tc-apis rejects
-            # non-maimemo return_url with login_initiation_failed.
+            # 注意：login_return_url 必须保持原始
+            # https://tc-apis.maimemo.com/webstudy/app；tc-apis 会以
+            # login_initiation_failed 拒绝非墨墨域名的 return_url。
         else:
-            # HTML/CSS: rewrite domain URLs to relative proxy paths
+            # HTML/CSS：把域名 URL 重写为相对代理路径。
             text = text.replace('https://tc-apis.maimemo.com', '/memo-tc')
             text = text.replace('https://api.maimemo.com', '/memo-api')
             text = text.replace('https://www.maimemo.com', '/memo-www')
             text = text.replace('https://accounts.maimemo.com', '/memo-accounts')
 
-            # For HTML pages served via cross-domain redirect (e.g. login
-            # page at accounts.maimemo.com loaded via /memo-tc/ redirect),
-            # rewrite absolute paths to include the proxy prefix.
+            # 对跨域重定向得到的 HTML 页面（例如经 /memo-tc/ 重定向加载的
+            # accounts.maimemo.com 登录页），为绝对路径补上代理前缀。
             if is_html and proxy_prefix and proxy_prefix != '/memo-tc':
-                # Rewrite href="/xxx", src="/xxx", action="/xxx" to
-                # href="/proxy-prefix/xxx" etc. - but skip paths that
-                # already start with /memo- (already proxied).
+                # 把 href="/xxx"、src="/xxx"、action="/xxx" 等重写为
+                # "/代理前缀/xxx"；已以 /memo- 开头的代理路径跳过。
                 text = re.sub(
                     r'((?:href|src|action)\s*=\s*["\'])(/(?!memo-))',
                     r'\1' + proxy_prefix + r'\2',
                     text
                 )
-                # Rewrite relative URLs in inline JavaScript (e.g. fetch calls)
-                # so /interaction/xxx becomes /memo-accounts/interaction/xxx
+                # 重写内联 JavaScript 中的相对 URL（例如 fetch 调用），使
+                # /interaction/xxx 变为 /memo-accounts/interaction/xxx。
                 for pfx in ['/interaction/', '/oidc/', '/static/']:
                     text = text.replace("'" + pfx + "'", "'" + proxy_prefix + pfx + "'")
                     text = text.replace('"' + pfx + '"', '"' + proxy_prefix + pfx + '"')
@@ -213,10 +208,9 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             lk = key.lower()
             if lk not in skip_headers:
                 val = self.headers[key]
-                # Browsers refuse to store __Host-* cookies over plain HTTP,
-                # so the proxy renames __Host-x-csrf-token -> x-csrf-token in
-                # Set-Cookie. When forwarding the request, rename it back so
-                # accounts.maimemo.com finds the cookie it expects.
+                # 浏览器拒绝通过纯 HTTP 保存 __Host-* Cookie，因此代理在
+                # Set-Cookie 中把 __Host-x-csrf-token 改为 x-csrf-token；
+                # 转发请求时再改回，让 accounts.maimemo.com 找到预期 Cookie。
                 if lk == 'cookie':
                     val = re.sub(r'(^|;\s*)x-csrf-token=', r'\1__Host-x-csrf-token=', val)
                 req.add_header(key, val)
@@ -241,9 +235,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
             return
 
-        # Derive proxy prefix from the current request path so relative
-        # Location headers (e.g. /interaction/xxx) and absolute HTML paths
-        # can be rewritten to the matching proxy prefix.
+        # 根据当前请求路径推导代理前缀，使相对 Location 头（如
+        # /interaction/xxx）和 HTML 绝对路径都能重写到匹配前缀。
         proxy_prefix = None
         if self.path.startswith('/memo-tc/') or self.path.startswith('/webstudy/'):
             proxy_prefix = '/memo-tc'
@@ -258,9 +251,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         if inject_interceptor and 'text/html' in content_type:
             resp_body = self._rewrite_content(resp_body, content_type, proxy_prefix)
             html = resp_body.decode('utf-8', errors='replace')
-            # Cache-bust: append ?v=<timestamp> to script/link src/href to
-            # force browsers to load fresh JS/CSS instead of cached old
-            # versions that still point to real maimemo domains.
+            # 缓存失效：为 script/link 的 src/href 附加 ?v=<时间戳>，强制浏览器
+            # 加载最新 JS/CSS，避免复用仍指向真实墨墨域名的旧缓存。
             import time as _time
             _bv = str(int(_time.time()))
             html = re.sub(r'(<script[^>]*src=")([^"]*)(")', lambda m: m.group(1) + m.group(2) + ('&' if '?' in m.group(2) else '?') + 'v=' + _bv + m.group(3), html)
@@ -278,8 +270,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         self.send_response(status)
         self._send_cors_headers()
 
-        # Force no-cache for HTML/JS so browsers never reuse an older
-        # rewritten bundle that would navigate directly to maimemo.com.
+        # 对 HTML/JS 强制禁用缓存，避免浏览器复用会直接跳转 maimemo.com 的旧重写包。
         if 'text/html' in content_type or 'javascript' in content_type:
             self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
             self.send_header('Pragma', 'no-cache')
@@ -297,16 +288,15 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             if lk == 'set-cookie':
                 val = val.replace('Domain=maimemo.com;', '').replace('Domain=maimemo.com', '')
                 val = val.replace('domain=maimemo.com;', '').replace('domain=maimemo.com', '')
-                # Strip Secure flag so cookies work over HTTP proxy
+                # 去掉 Secure 标记，使 Cookie 可用于 HTTP 代理。
                 val = val.replace('; Secure', '').replace('; secure', '')
                 val = val.replace(';Secure', '').replace(';secure', '')
-                # __Host- prefix forces Secure + Path=/ ; since we strip Secure,
-                # rename the cookie so browsers accept it.
+                # __Host- 前缀强制 Secure + Path=/；既然已去掉 Secure，就同步
+                # 重命名 Cookie，确保浏览器接受。
                 val = val.replace('__Host-', '')
-                # Prefix cookie Path with the proxy prefix so cookies set by
-                # e.g. accounts.maimemo.com (Path=/interaction/xxx) are sent
-                # to our proxied paths (/memo-accounts/interaction/xxx).
-                # Keep root Path=/ untouched (matches only /xxx sub-paths).
+                # 为 Cookie Path 加上代理前缀，使 accounts.maimemo.com 等设置的
+                # Path=/interaction/xxx 会发送到 /memo-accounts/interaction/xxx。
+                # 根 Path=/ 保持不变（仅匹配 /xxx 子路径）。
                 if proxy_prefix:
                     val = re.sub(r'[Pp]ath=/(?=[^/;])', 'path=' + proxy_prefix + '/', val)
                 self.send_header('Set-Cookie', val)
@@ -323,7 +313,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 val = val.replace('https://api.maimemo.com', '/memo-api')
                 val = val.replace('https://www.maimemo.com', '/memo-www')
                 val = val.replace('https://accounts.maimemo.com', '/memo-accounts')
-                # Relative Location (e.g. /interaction/xxx) -> prefix it
+                # 相对 Location（如 /interaction/xxx）需要补代理前缀。
                 if proxy_prefix and val.startswith('/') and not val.startswith('/memo-'):
                     val = proxy_prefix + val
                 self.send_header('Location', val)
@@ -336,7 +326,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self.wfile.write(resp_body)
 
     def _ws_proxy(self, path, query):
-        """Proxy a WebSocket connection to tc-apis.maimemo.com.
+        """把 WebSocket 连接代理到 tc-apis.maimemo.com。
 
         The web study SPA keeps a WebSocket open to
         wss://tc-apis.maimemo.com/study/ws/webstudy?token=... . The user's
@@ -346,9 +336,9 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         target_host = "tc-apis.maimemo.com"
         target_port = 443
         target_path = path + ("?" + query if query else "")
-        # The browser now connects to /memo-tc/study/ws/webstudy so the sid
-        # session cookie (Path=/memo-tc/study) is sent. Strip the proxy prefix
-        # before forwarding upstream, where the path is /study/ws/webstudy.
+        # 浏览器连接 /memo-tc/study/ws/webstudy 后会发送会话 Cookie sid
+        #（Path=/memo-tc/study）。向上游转发前去掉代理前缀，恢复为
+        # /study/ws/webstudy。
         if target_path.startswith("/memo-tc/"):
             target_path = target_path[len("/memo-tc"):]
 
@@ -384,7 +374,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self.send_error(502, "Bad Gateway: %s" % exc)
             return
 
-        # Forward the browser's handshake headers upstream
+        # 向上游转发浏览器的握手请求头。
         lines = ["GET %s HTTP/1.1" % target_path, "Host: %s" % target_host]
         for h in ('Upgrade', 'Connection', 'Sec-WebSocket-Key', 'Sec-WebSocket-Version',
                   'Sec-WebSocket-Extensions', 'Sec-WebSocket-Protocol', 'Origin',
@@ -405,7 +395,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self.send_error(502, "Bad Gateway: %s" % exc)
             return
 
-        # Read upstream handshake response
+        # 读取上游握手响应。
         resp = b""
         while b"\r\n\r\n" not in resp:
             try:
@@ -430,7 +420,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             return
         _wlog("WS handshake OK, relaying")
 
-        # Handshake accepted - send 101 + headers to the browser, then relay
+        # 握手成功：向浏览器发送 101 和响应头，然后开始双向转发。
         last_up = b""
         last_down = b""
         try:
@@ -519,7 +509,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _dispatch_web_proxy(self, parsed, method):
-        """Resolve and forward one Maimemo SPA route; return whether matched."""
+        """解析并转发一条墨墨 SPA 路由，返回是否匹配。"""
         resolved = resolve_web_route(parsed.path, parsed.query, method)
         if not resolved:
             return False
@@ -541,7 +531,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        # WebSocket upgrade (study connection) -> relay to tc-apis
+        # WebSocket 升级（学习连接）→ 转发到 tc-apis。
         if self.headers.get('Upgrade', '').lower() == 'websocket':
             self._ws_proxy(path, parsed.query)
             return
@@ -560,7 +550,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self._proxy_request(target_url, method="GET")
             return
 
-        # ---- Maimemo web study reverse proxy ----
+        # ---- 墨墨网页版学习反向代理 ----
         if self._dispatch_web_proxy(parsed, "GET"):
             return
 
@@ -679,7 +669,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 self._send_json(400, {"error": "Invalid JSON body"})
             return
 
-        # ---- Maimemo web study reverse proxy (POST) ----
+        # ---- 墨墨网页版学习反向代理（POST）----
         if self._dispatch_web_proxy(parsed, "POST"):
             return
 
@@ -695,7 +685,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             return
         self.send_error(404, "Not Found")
 
-    # ===================== helpers =====================
+    # ===================== 辅助方法 =====================
     def _safe_content_length(self):
         """安全读取 Content-Length 头。畸形值(非数字/空串等)返回 0，避免
         int() 抛出未捕获的 ValueError/TypeError 导致请求被丢弃。"""
@@ -764,8 +754,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 return
         except Exception:
             pass
-        # Windowed EXE builds have no console stream.  HTTP logging must never
-        # abort a response merely because the app is running from the tray.
+        # 窗口版 EXE 没有控制台输出流；应用从托盘运行时，HTTP 日志绝不能因此
+        # 中断响应。
         try:
             with open(os.path.join(DATA_DIR, "server.log"), "a", encoding="utf-8") as handle:
                 handle.write(line)

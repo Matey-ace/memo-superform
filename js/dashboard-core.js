@@ -1,4 +1,4 @@
-// Memo Superform - shared dashboard contracts and behavior-neutral helpers.
+// Memo Superform - 仪表盘共享契约与不改变行为的辅助方法。
 const MemoDashboard = (function() {
     const layoutTileCount = { single: 1, split2: 2, split3: 3, grid4: 4 };
     const chartConfig = {

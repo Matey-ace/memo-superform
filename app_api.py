@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Local Memo Superform API handlers, separated from proxy transport."""
+"""Memo Superform 本地 API 处理器，与代理传输层分离。"""
 import json
 import os
 import sys
@@ -12,9 +12,8 @@ import study_sync
 
 _legacy_attempted = set()
 _legacy_lock = threading.Lock()
-# Role manifests and the Live2D preference are stored by different services.
-# Serialize their coupled changes in the HTTP process so two rapid activate/
-# edit requests cannot commit TTS role A with renderer preference B.
+# 角色清单和 Live2D 偏好由不同服务保存。HTTP 进程串行处理它们的耦合变更，
+# 避免两个连续启用/编辑请求提交 TTS 角色 A 却留下渲染器偏好 B。
 _role_live2d_lock = threading.RLock()
 
 
@@ -38,12 +37,11 @@ class LocalApiMixin:
         return study_sync.token_profile_id(token) if token else None
 
     def _active_role_live2d_binding(self, live2d):
-        """Expose the active role as the only Live2D runtime source.
+        """只把当前角色公开为 Live2D 运行时来源。
 
-        ``live2d_preferences.active_model_id`` predates role packages and can
-        still contain a stale manually selected model.  Keep it as a storage
-        detail for compatibility, but never let it override the enabled role
-        while rendering the companion.
+        ``live2d_preferences.active_model_id`` 早于角色包，可能仍保存过期的
+        手工选择模型。为兼容保留此存储细节，但陪伴渲染时绝不允许它覆盖
+        已启用角色。
         """
         result = {
             "enforced": True,
@@ -95,7 +93,7 @@ class LocalApiMixin:
         threading.Thread(target=db.try_import_legacy_sqlserver, args=(profile_id,),
                          name="memo-legacy-readonly-import", daemon=True).start()
 
-    # ===================== /api/* GET =====================
+    # ===================== /api/* 查询 =====================
     def _handle_api_get(self, path, parsed):
         # 与数据库无关的本地接口（运行模式 / 语音资源包状态）
         if path == "/api/app/current-mode":
@@ -128,10 +126,8 @@ class LocalApiMixin:
                         continue
                     try:
                         model = live2d.validate_model(model_id)
-                        # This read-only annotation lets the browser migrate
-                        # legacy character-id personas into distinct role
-                        # manifests without letting a Live2D model define the
-                        # active persona at runtime.
+                        # 这个只读标注让浏览器把旧角色 ID 人设迁入各自的角色清单，
+                        # 同时不允许 Live2D 模型在运行时决定当前人设。
                         role["live2d_character_id"] = str(model.get("character_id") or "")
                     except Exception:
                         missing = list(role.get("missing") or [])
@@ -235,7 +231,7 @@ class LocalApiMixin:
                 }
                 result = dict(persistent)
                 result.update(live)
-                # records_count is the full committed SQLite state, not merely this run's fetched count.
+                # records_count 是 SQLite 已提交的完整状态，不只是本次拉取数量。
                 result["records_count"] = len(db.get_records(profile_id))
                 if persistent.get("needs_reconcile"):
                     result["needs_reconcile"] = True
@@ -264,7 +260,7 @@ class LocalApiMixin:
             traceback.print_exc()
             return self._send_json(500, {"error": str(e)})
 
-    # ===================== /api/* POST =====================
+    # ===================== /api/* 写入 =====================
     def _handle_api_post(self, path, parsed):
         try:
             # 写接口 CSRF 防护：要求自定义头（跨域简单请求无法携带，
@@ -272,9 +268,8 @@ class LocalApiMixin:
             if self.headers.get("X-Requested-With") != "XMLHttpRequest":
                 return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
             if path == "/api/tts/import-model":
-                # Pre-role-package clients could write to an arbitrary
-                # pack.json voice directory here.  Keeping that endpoint alive
-                # would reintroduce model/reference-audio cross-contamination.
+                # 角色包之前的客户端可在此写入任意 pack.json 音色目录；继续保留
+                # 该入口会重新引入模型与参考音频混用。
                 return self._send_json(410, {
                     "error": "旧模型上传入口已移除；请在角色编辑器中上传模型文件",
                     "migration": "使用 /api/tts/roles/<role_id>/upload",
@@ -338,10 +333,8 @@ class LocalApiMixin:
                             return self._send_json(400, {"error": "当前已启用角色必须绑定可用的 Live2D 模型"})
 
                         def sync_live2d(role):
-                            # This callback runs under both the coordinator and
-                            # tts.py's role lock.  It therefore observes the
-                            # exact manifest being committed, not a stale
-                            # active-role snapshot from a concurrent request.
+                            # 此回调同时处于协调锁和 tts.py 角色锁内，因而读取的是
+                            # 正在提交的准确清单，而非并发请求留下的过期当前角色快照。
                             committed_active = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
                             if role["role_id"] == committed_active:
                                 if not live2d:
@@ -390,9 +383,8 @@ class LocalApiMixin:
                 live2d = globals().get("LIVE2D_SERVICE")
                 try:
                     with _role_live2d_lock:
-                        # Validate both halves before changing either one.  This is
-                        # especially important for editing the active role, which
-                        # must keep its TTS and Live2D bindings in lockstep.
+                        # 任一侧变化前先同时校验两侧；编辑当前角色时尤其重要，
+                        # TTS 与 Live2D 绑定必须同步推进。
                         preview = tts.preview_role_save(TTS_PACK_DIR, body)
                         active_id = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
                         is_active = preview["role_id"] == active_id
@@ -411,9 +403,8 @@ class LocalApiMixin:
                         role = tts.save_role(TTS_PACK_DIR, body, after_commit=sync_live2d if is_active else None)
                     return self._send_json(200, {"ok": True, "role": role})
                 except Exception as exc:
-                    # This route is validation-driven; retain an actionable 4xx
-                    # response for unavailable/stale model bindings rather than
-                    # presenting a generic server failure to the role editor.
+                    # 此路由以校验为主；模型绑定不可用或过期时返回可操作的 4xx，
+                    # 不向角色编辑器显示笼统的服务端失败。
                     return self._send_json(400, {"error": str(exc)})
 
             if path.startswith("/api/tts/roles/") and path.endswith("/activate"):
@@ -425,9 +416,8 @@ class LocalApiMixin:
                         live2d = globals().get("LIVE2D_SERVICE")
                         if not live2d:
                             return self._send_json(503, {"error": "Live2D 服务未就绪"})
-                        # Validate before committing.  ``after_commit`` runs
-                        # under tts.py's role lock and rolls the manifest back
-                        # if the renderer preference write fails.
+                        # 提交前先校验。``after_commit`` 在 tts.py 的角色锁内运行；
+                        # 渲染器偏好写入失败时会一并回滚清单。
                         live2d.validate_model(candidate["live2d_model_id"])
                         role = tts.activate_role(
                             TTS_PACK_DIR,
@@ -452,9 +442,8 @@ class LocalApiMixin:
                         TTS_PACK_DIR,
                         DATA_DIR,
                         body.get("text", ""),
-                        # The active role is the only permitted synthesis
-                        # source.  Ignore a stale legacy client's `voice`
-                        # field instead of allowing it to select a pack.
+                        # 当前角色是唯一允许的合成来源。忽略旧客户端残留的 `voice`
+                        # 字段，绝不让它另选资料包。
                         voice=None,
                         language=body.get("language"),
                         speed=body.get("speed"),
@@ -541,9 +530,8 @@ class LocalApiMixin:
                         return self._send_json(409, {
                             "error": "Live2D 由当前已启用角色绑定；请在角色编辑器中更换模型后再启用角色",
                         })
-                    # Legacy clients may still use this route to open/close the
-                    # companion.  Keep that toggle, but always normalize the
-                    # stored preference back to the active role's model.
+                    # 旧客户端仍可能用此路由打开或关闭陪伴模式。保留该开关，但始终
+                    # 把保存的模型偏好归一到当前角色绑定。
                     return self._send_json(200, live2d.set_active(
                         self._profile_id(required=False), binding["active_model_id"], enabled
                     ))
@@ -565,9 +553,8 @@ class LocalApiMixin:
                     return self._send_json(413, {"error": "seed_records 数量过大"})
                 profile_id = study_sync.token_profile_id(token)
                 self._start_legacy_import_once(profile_id)
-                # The browser only sends startup-idle after checking visibility, drag,
-                # settings/fullscreen and active study state.  Server state decides
-                # whether seven days have actually elapsed.
+                # 浏览器仅在检查可见性、拖拽、设置/全屏和学习状态后发送 startup-idle；
+                # 是否确实已过七天由服务端状态决定。
                 sync_state = db.get_sync_state(profile_id)
                 if (mode == "incremental" and reason == "startup-idle" and
                         sync_state.get("bootstrap_complete") and
@@ -623,7 +610,7 @@ class LocalApiMixin:
             return self._send_json(500, {"error": str(e)})
 
     def _upload_tts_role_file(self, path, parsed):
-        """Write an uploaded role asset to its canonical, manifest-backed path."""
+        """把上传的角色资源写入清单支持的规范路径。"""
         import tts
         parts = path.strip("/").split("/")
         if len(parts) != 5 or parts[:3] != ["api", "tts", "roles"] or parts[4] != "upload":
@@ -649,13 +636,12 @@ class LocalApiMixin:
             return self._send_json(400, {"error": str(exc)})
 
     def _mount_tts_pack_archive(self, parsed):
-        """Receive a complete voice-pack ZIP without loading it into RAM."""
+        """流式接收语音包 ZIP，不把完整文件载入内存。"""
         import tts
         query = parse_qs(parsed.query)
         source_name = (query.get("name") or [""])[0]
-        # The name is display-only; the ZIP parser in tts.py validates actual
-        # contents.  Keep the extension check here so a mistaken drag is
-        # reported before the potentially multi-gigabyte upload begins.
+        # 名称只用于显示，实际内容由 tts.py 的 ZIP 解析器校验。此处保留扩展名
+        # 检查，让拖错文件在可能数 GB 的上传开始前就得到提示。
         if source_name and not source_name.lower().endswith(".zip"):
             return self._send_json(400, {"error": "请拖入完整的语音包 ZIP 文件"})
         try:
@@ -670,7 +656,7 @@ class LocalApiMixin:
         except tts.TTSException as exc:
             return self._send_json(400, {"error": str(exc)})
 
-    # ===================== /api/* DELETE =====================
+    # ===================== /api/* 删除 =====================
     def _handle_api_delete(self, path, parsed):
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
@@ -690,9 +676,8 @@ class LocalApiMixin:
             if not live2d:
                 return self._send_json(503, {"error": "Live2D 服务未就绪"})
             try:
-                # A role can bind a model while this request is in flight;
-                # coordinate deletion with all role/renderer transitions so
-                # validation and reference checks observe one consistent view.
+                # 请求执行期间角色可能绑定该模型；删除操作需与所有角色/渲染器切换
+                # 协调，使校验和引用检查始终观察同一份一致状态。
                 with _role_live2d_lock:
                     deleted = live2d.delete_model(path.rsplit("/", 1)[-1])
                 return self._send_json(200 if deleted else 404, {"ok": deleted})

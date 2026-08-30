@@ -1,4 +1,4 @@
-// Memo Superform - one lifecycle owner for study-page observation and fallback polling.
+// Memo Superform - 统一管理学习页观察与兜底轮询的生命周期。
 const StudyLifecycle = (function() {
     function create(iframe, detect, onChange) {
         var observer = null;

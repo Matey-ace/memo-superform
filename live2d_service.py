@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Local Live2D catalogue, model registry, and controlled asset delivery.
+"""本地 Live2D 目录、模型注册表和受控资源传输。
 
-The application never ships character models.  Models are explicitly fetched
-by the user into ``data/live2d/models`` or copied from a user-selected local
-folder.  The service deliberately exposes only registered model files rather
-than making the complete writable data directory web-accessible.
+应用不随包提供角色模型。模型由用户明确下载到 ``data/live2d/models``，或从
+用户选择的本地目录复制。服务只公开已注册的模型文件，不把完整可写数据目录
+暴露给网页访问。
 """
 from __future__ import annotations
 
@@ -71,7 +70,7 @@ class Live2DService:
         self._active_job: Optional[DownloadJob] = None
         self._jobs: dict[str, DownloadJob] = {}
 
-    # ---------------- catalog ----------------
+    # ---------------- 在线目录 ----------------
     @staticmethod
     def _fetch_json(url: str, timeout: int = 20) -> Any:
         request = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 MemoSuperform/0.74"})
@@ -168,7 +167,7 @@ class Live2DService:
             rows = [item for item in rows if self._matches_catalog_query(item, text)]
         return {"models": rows, "count": len(rows), "cached_at": payload.get("fetched_at")}
 
-    # ---------------- model descriptors ----------------
+    # ---------------- 模型描述文件 ----------------
     @staticmethod
     def _safe_relative(value: str) -> str:
         text = str(value or "").replace("\\", "/").lstrip("/")
@@ -259,7 +258,7 @@ class Live2DService:
         return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
     def _validate_entry(self, root: Path, entry_file: str, model_format: str) -> list[str]:
-        """Validate all descriptor paths before a model becomes selectable."""
+        """模型可选前校验描述文件中的所有路径。"""
         entry = root / entry_file
         try:
             raw = json.loads(entry.read_text(encoding="utf-8"))
@@ -300,24 +299,60 @@ class Live2DService:
                 raise Live2DError("模型引用文件不存在: " + relative)
         return refs
 
-    def _register(self, root: Path, *, model_id: str, source: str, character_id: str,
-                  display_name: str, catalog_name: str, entry_file: str, model_format: str) -> dict[str, Any]:
+    def _registration_metadata(self, root: Path, *, model_id: str, source: str, character_id: str,
+                               display_name: str, catalog_name: str, entry_file: str,
+                               model_format: str) -> dict[str, Any]:
+        """先校验候选目录并生成注册信息，不提前改动数据库。"""
         entry_file = self._safe_relative(entry_file)
         if not (root / entry_file).is_file():
             raise Live2DError("模型入口文件不存在")
         self._validate_entry(root, entry_file, model_format)
-        byte_size = self._directory_size(root)
-        if byte_size <= 0 or byte_size > MAX_MODEL_BYTES:
-            raise Live2DError("模型大小不在允许范围内")
         manifest = {"id": model_id, "format": model_format, "entry": entry_file,
                     "asset_base": "/api/live2d/assets/%s/" % model_id}
         (root / "memo-live2d.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        db.upsert_live2d_model({"model_id": model_id, "source": source, "character_id": character_id,
-                                "display_name": display_name, "catalog_name": catalog_name,
-                                "model_format": model_format, "relative_path": model_id,
-                                "entry_file": entry_file, "manifest": manifest, "byte_size": byte_size,
-                                "complete": True})
-        return db.get_live2d_model(model_id) or {}
+        byte_size = self._directory_size(root)
+        if byte_size <= 0 or byte_size > MAX_MODEL_BYTES:
+            raise Live2DError("模型大小不在允许范围内")
+        return {"model_id": model_id, "source": source, "character_id": character_id,
+                "display_name": display_name, "catalog_name": catalog_name,
+                "model_format": model_format, "relative_path": model_id,
+                "entry_file": entry_file, "manifest": manifest, "byte_size": byte_size,
+                "complete": True}
+
+    @staticmethod
+    def _remove_private_model_path(path: Path) -> None:
+        """只清理模型安装事务创建的受控私有路径。"""
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.exists():
+            shutil.rmtree(path)
+
+    def _install_staged_model(self, stage: Path, final: Path, **registration: Any) -> dict[str, Any]:
+        """原子提交候选模型；文件或数据库提交失败时恢复旧模型。"""
+        metadata = self._registration_metadata(stage, **registration)
+        rollback = self.partial_root / (".rollback-" + uuid.uuid4().hex)
+        promoted = False
+        with self._lock:
+            try:
+                if final.exists() or final.is_symlink():
+                    final.replace(rollback)
+                stage.replace(final)
+                promoted = True
+                db.upsert_live2d_model(metadata)
+            except Exception:
+                if promoted:
+                    self._remove_private_model_path(final)
+                if rollback.exists() or rollback.is_symlink():
+                    rollback.replace(final)
+                raise
+            else:
+                try:
+                    self._remove_private_model_path(rollback)
+                except OSError:
+                    # 新模型和数据库已经提交；残留的私有回滚目录不应把成功
+                    # 安装伪装成失败，后续维护可安全清理该目录。
+                    pass
+        return db.get_live2d_model(str(metadata["model_id"])) or metadata
 
     def _download_job(self, job: DownloadJob, item: dict[str, Any]) -> None:
         stage = self.partial_root / job.job_id
@@ -342,12 +377,12 @@ class Live2DService:
             digest = hashlib.sha256(item["catalog_name"].encode("utf-8")).hexdigest()[:12]
             model_id = "bestdori-" + re.sub(r"[^a-z0-9_-]+", "-", item["catalog_name"].lower())[:80] + "-" + digest
             final = self.models_root / model_id
-            if final.exists():
-                shutil.rmtree(final)
-            stage.replace(final)
-            self._register(final, model_id=model_id, source="bestdori-jp", character_id=item["character_id"],
-                           display_name=item["display_name"], catalog_name=item["catalog_name"],
-                           entry_file=descriptor, model_format="cubism2")
+            self._install_staged_model(
+                stage, final, model_id=model_id, source="bestdori-jp",
+                character_id=item["character_id"], display_name=item["display_name"],
+                catalog_name=item["catalog_name"], entry_file=descriptor,
+                model_format="cubism2",
+            )
             job.model_id, job.status = model_id, "completed"
         except Exception as exc:
             job.status, job.error = ("cancelled" if job.cancel.is_set() else "failed"), str(exc)
@@ -367,8 +402,7 @@ class Live2DService:
             job = DownloadJob(uuid.uuid4().hex, str(catalog_name), str(profile_id))
             self._active_job = job
             self._jobs[job.job_id] = job
-            # Keep a small terminal history so polling clients cannot miss a
-            # fast completion between two status requests.
+            # 保留少量终态历史，避免轮询客户端错过两次状态请求之间快速完成的任务。
             if len(self._jobs) > 24:
                 for key, prior in list(self._jobs.items()):
                     if prior.status not in {"queued", "fetching"} and key != job.job_id:
@@ -392,7 +426,7 @@ class Live2DService:
                 return {"ok": True, **job.snapshot()}
         return {"ok": False, "status": "unknown"}
 
-    # ---------------- imported models / serving ----------------
+    # ---------------- 本地导入与资源服务 ----------------
     def import_directory(self, source_path: str, profile_id: str) -> dict[str, Any]:
         source = Path(str(source_path or "")).expanduser().resolve()
         if not source.is_dir():
@@ -414,13 +448,12 @@ class Live2DService:
             shutil.copytree(source, stage, ignore=shutil.ignore_patterns("*.tmp", "__pycache__"))
             if self._directory_size(stage) > MAX_MODEL_BYTES:
                 raise Live2DError("导入模型超过 500 MB")
-            if final.exists():
-                shutil.rmtree(final)
-            stage.replace(final)
             relative_entry = entry.relative_to(source).as_posix()
-            return self._register(final, model_id=model_id, source="import", character_id="",
-                                  display_name=source.name, catalog_name="", entry_file=relative_entry,
-                                  model_format=model_format)
+            return self._install_staged_model(
+                stage, final, model_id=model_id, source="import", character_id="",
+                display_name=source.name, catalog_name="", entry_file=relative_entry,
+                model_format=model_format,
+            )
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise
@@ -430,7 +463,7 @@ class Live2DService:
         return {"models": db.list_live2d_models(), "preference": preference}
 
     def validate_model(self, model_id: str) -> dict[str, Any]:
-        """Revalidate every registered asset before a role can use the model."""
+        """角色使用模型前重新校验全部已注册资源。"""
         model = db.get_live2d_model(model_id)
         if not model or not model.get("complete"):
             raise Live2DError("所选模型不可用")
@@ -440,8 +473,7 @@ class Live2DService:
         entry_file = self._safe_relative(str(model["entry_file"]))
         if not (root / entry_file).is_file():
             raise Live2DError("所选模型不可用")
-        # Models can be removed or incompletely copied after registration.  Do
-        # not report them as ready merely because their entry JSON survived.
+        # 模型注册后仍可能被删除或只复制了一部分；不能仅因入口 JSON 尚在就报告可用。
         self._validate_entry(root, entry_file, str(model["model_format"]))
         return model
 
@@ -451,11 +483,10 @@ class Live2DService:
         return db.set_live2d_preference(profile_id, active_model_id=model_id, companion_enabled=companion_enabled)
 
     def role_references(self, model_id: str) -> list[dict[str, str]]:
-        """Find role manifests that would become incomplete after deletion."""
-        # Fail closed: an unreadable registry must never be treated as "no
-        # references", otherwise deleting a model could silently invalidate an
-        # active role package.  ``roles_referencing_live2d`` itself treats a
-        # missing registry as an empty list without creating one.
+        """找出删除后会变得不完整的角色清单。"""
+        # 保守失败：注册表不可读时绝不能视为“没有引用”，否则删除模型可能悄悄
+        # 破坏当前角色包。``roles_referencing_live2d`` 本身会把不存在的注册表
+        # 视为空列表，且不会为此创建文件。
         import tts
         try:
             return tts.roles_referencing_live2d(str(self.data_dir / "tts_pack"), model_id)

@@ -87,7 +87,7 @@ const ChartManager = (function() {
 
     // 生成月度热力图数据
     function generateMonthHeatmapData(records, monthStr) {
-        // monthStr: 'YYYY-MM'
+        // monthStr 格式：'YYYY-MM'
         const [year, month] = monthStr.split('-').map(Number);
         const daysInMonth = getDaysInMonth(year, month);
         const today = getTodayBeijing();
@@ -136,7 +136,7 @@ const ChartManager = (function() {
             }
         }
 
-        // ECharts 数据格式 [[date, count], ...]
+        // ECharts 数据格式：[[date, count], ...]
         const heatmapData = [];
         for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0');
@@ -1103,9 +1103,8 @@ const ChartManager = (function() {
         });
     }
     // 重新渲染所有可见图表（跳过 AI 分类，用于自动刷新）
-    // 从磁贴的下拉选择器读取当前图表类型，确保标题与内容始    
     // 根据磁贴下拉框的实际值渲染所有可见图表（统一入口，确保标题与内容始终一致）
-    // skipAI=true 时跳过 AI 分类（用于自动刷新）
+    // skipAI 为 true 时跳过 AI 分类（用于自动刷新）。
         // ========== 智能复习推荐 ==========
     function renderRecommendationChart(containerId) {
         var container = document.getElementById(containerId);

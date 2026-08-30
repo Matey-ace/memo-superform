@@ -29,19 +29,17 @@ const StudyWeb = (function() {
             return createMockInstance(container);
         }
 
-        // Check if user already has a token (logged in)
+        // 检查用户是否已有令牌（已登录）。
         var token = null;
         try { token = localStorage.getItem('token'); } catch(e) {}
 
         var iframeSrc;
         if (token) {
-            // Already logged in - load SPA directly
+            // 已登录：直接加载 SPA。
             iframeSrc = '/memo-tc/webstudy/app';
         } else {
-            // Not logged in - load login page directly through proxy.
-            // This bypasses the SPA's own window.location.replace() redirect
-            // which is unreliable inside an iframe.
-            // After login, the callback redirects to the SPA with a token.
+            // 未登录：通过代理直接加载登录页。这会绕过 SPA 自己在 iframe 中不可靠的
+            // window.location.replace() 重定向；登录后回调会携带令牌跳回 SPA。
             iframeSrc = '/memo-tc/study/api/v1/users/auth/login?return_url=' +
                 encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
         }
@@ -82,8 +80,7 @@ const StudyWeb = (function() {
         var studyAddWordOverlayOpen = false;
         var studyHomeFallbackPending = false;
 
-        // Companion mode receives only the current word and answer category.
-        // Its callback is inert for the normal dashboard study tile.
+        // 陪伴模式只接收当前单词和答案分类；普通仪表盘学习磁贴不会执行其回调。
         function currentStudyWord() {
             try {
                 var idoc = iframe.contentDocument;
@@ -190,8 +187,7 @@ const StudyWeb = (function() {
         var syncStudyScreen = studyWatch.sync;
         var startStudyScreenWatch = studyWatch.start;
 
-        // Listen for iframe load events to detect state changes
-        // (login page -> SPA after login)
+        // 监听 iframe 加载事件以检测状态变化（登录页 → 登录后的 SPA）。
         // 根据仪表盘暗色主题同步 iframe 样式
         function syncIframeTheme() {
             try {
@@ -204,9 +200,8 @@ const StudyWeb = (function() {
             } catch(e) {}
         }
 
-        // The upstream TTS settings route can be mounted without a working
-        // Taro back control.  Only the current, same-origin study iframe may
-        // request the hard fallback to the Maimemo home route.
+        // 上游 TTS 设置路由可能在 Taro 返回控件失效时挂载。只有当前同源学习
+        // iframe 可以请求强制回退到墨墨首页路由。
         function handleStudyNavigationMessage(event) {
             if (event.source !== iframe.contentWindow || event.origin !== window.location.origin) return;
             var message = event.data;
@@ -241,7 +236,7 @@ const StudyWeb = (function() {
             }
         });
 
-        // Bind button events
+        // 绑定按钮事件。
         updateShortcutLabels(container, shortcutMap);
             container.querySelectorAll('.study-web-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {

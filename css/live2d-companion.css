@@ -1,6 +1,5 @@
-/* Live2D companion learning mode.  Loaded in both visual styles; all rules are
-   scoped to the new feature, so existing dashboard and study controls retain
-   their dimensions and behavior. */
+/* Live2D 陪伴学习模式。两套视觉样式都会加载；所有规则仅作用于新功能，
+   现有仪表盘和学习控件的尺寸与行为保持不变。 */
 .companion-mode .topbar { box-shadow: var(--shadow-md); }
 .companion-mode-btn { margin-left: 9px; border: 1px solid var(--border-color); border-radius: 10px; padding: 7px 10px; background: var(--card-bg); color: var(--text-primary); font: inherit; font-size: 12px; cursor: pointer; }
 .companion-mode-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }

@@ -197,7 +197,7 @@ const MaimemoAPI = (function() {
     }
 
     // 按时间范围从学习记录中提取单词
-    // dateField: 'add_date' | 'first_study_date' | 'last_study_date'
+    // dateField 可选值：'add_date' | 'first_study_date' | 'last_study_date'
     async function getWordsFromStudyRecords(startDate, endDate, dateField, useCache, onProgress) {
         const allRecords = await getAllStudyRecords(useCache !== false, onProgress);
         

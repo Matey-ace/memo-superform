@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Browser injections used by the Maimemo reverse proxy."""
+"""墨墨反向代理使用的浏览器注入内容。"""
 
 INTERCEPTOR_JS = (
     '<script>(function(){'
@@ -13,11 +13,10 @@ INTERCEPTOR_JS = (
     + '})();</script>'
 )
 
-# Dark theme injection for the embedded maimemo webstudy SPA.
-# The dashboard stores its theme in localStorage('theme') and the iframe is
-# same-origin, so we read that and toggle html.memo-dark, then override the
-# SPA's own CSS variables (which natively support dark mode) plus a few
-# hard-coded colors so the study UI follows the dashboard's dark theme.
+# 为内嵌墨墨学习 SPA 注入暗色主题。仪表盘把主题保存在
+# localStorage('theme')，iframe 又与其同源，因此读取该值并切换
+# html.memo-dark，再覆盖 SPA 自带的暗色 CSS 变量和少量硬编码颜色，
+# 让学习界面跟随仪表盘暗色主题。
 MEMO_DARK_CSS = (
     '<style id="memo-dark-theme">'
     'html.memo-dark,html.memo-dark body{--text-color-primary:#DBDBDB;--text-color-secondary:#A1A1A1;'
@@ -48,8 +47,8 @@ MEMO_DARK_JS = (
     '})();</script>'
 )
 
-# Load exactly one iframe theme.  The standard branch never requests notebook
- # fonts or paper assets; the Anon的笔记本 branch never requests the standard skin.
+# iframe 始终只加载一个主题：标准分支不请求笔记本字体或纸张资源，
+# Anon 的笔记本分支也不请求标准皮肤。
 MEMO_STUDY_THEME = (
     '<script>(function(){'
     'var VERSION="20260825-unified-ui";'
@@ -67,11 +66,9 @@ MEMO_STUDY_THEME = (
     '})();</script>'
 )
 
-# Taro occasionally leaves the navigation bar in its root/no-icon state when
-# opening nested SPA settings.  Keep the native visual fallback for pages that
-# actually own a back handler, but give the TTS page a Memo-controlled exit:
-# try the native Taro stack first, then ask the embedding parent to reload the
-# Maimemo home route if the TTS page is still visible.
+# 打开嵌套 SPA 设置时，Taro 偶尔会让导航栏停留在根级/无图标状态。拥有返回
+# 处理器的页面继续使用原生视觉兜底；TTS 页则增加 Memo 控制的退出入口：先尝试
+# 原生 Taro 栈，若 TTS 页仍可见，再请求嵌入父页面重载墨墨首页路由。
 MEMO_NAV_GUARD_JS = (
     '<script>(function(){'
     'var EXIT_ID="memo-tts-exit",busy=false,fallbackTimer=0,resetTimer=0;'

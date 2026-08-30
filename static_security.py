@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static-file exposure rules shared by source and packaged servers."""
+"""源码服务器和打包服务器共用的静态文件暴露规则。"""
 from urllib.parse import unquote
 
 FORBIDDEN_STATIC_FILES = frozenset({

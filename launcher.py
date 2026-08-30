@@ -24,19 +24,17 @@ import webbrowser
 
 _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
-# Bump this with every packaged release.  Older releases used a fixed broker
-# port (8891), so an upgrade silently activated the old executable and exited
-# before any new code could run.  A build-scoped broker lets v0.77 start its
-# own window and report the shared TTS-pack lock honestly during an upgrade.
+# 每次打包发布都要更新此值。旧版本使用固定协调端口 8891，升级时会悄悄激活旧
+# 可执行文件，并在新代码运行前退出。按构建版本划分端口后，v0.77 能打开自己的
+# 窗口，并在升级期间准确报告共享 TTS 资料包锁。
 BUILD_VERSION = "0.77"
 
 
 class InstanceBroker:
-    """Local single-instance lock with an activate-existing-instance channel.
+    """带“激活已有实例”通道的本地单实例锁。
 
-    The socket remains the exclusive ownership lock, while its accept loop lets
-    a second launch restore the already-running app instead of showing a vague
-    "already running" error.  Only a fixed local JSON message is accepted.
+    socket 始终作为独占所有权锁，接收循环则让第二次启动恢复已有应用，而不是
+    显示含糊的“已在运行”错误。仅接受固定格式的本地 JSON 消息。
     """
 
     _REQUEST = {"app": "memo-superform", "version": 1, "action": "activate"}
@@ -123,7 +121,7 @@ class InstanceBroker:
 
 
 def _instance_port():
-    """Return a build-scoped broker port, with an explicit env override."""
+    """返回按构建版本划分的通信端口，并允许环境变量显式覆盖。"""
     try:
         configured = os.environ.get("MEMO_INSTANCE_PORT")
         if configured:
@@ -208,7 +206,7 @@ def _res_path(name):
 
 
 def create_windows_tray(mode, on_open, on_exit):
-    """Create the optional Windows notification-area lifecycle indicator."""
+    """创建可选的 Windows 通知区域生命周期指示器。"""
     try:
         from windows_tray import WindowsTray
         label = "桌面模式 · 正在运行" if mode == "desktop" else "网页模式 · 正在运行"
@@ -277,7 +275,7 @@ def acquire_single_instance(port=None):
 
 
 def activate_existing_instance(port=None, timeout=0.9):
-    """Ask the owner to restore/open itself; returns False for unrelated locks."""
+    """请求已有实例恢复/打开自身；无关锁会返回 False。"""
     if port is None:
         port = _instance_port()
     try:
@@ -436,8 +434,8 @@ def run_web(guard=None):
         tray_holder["tray"] = tray
         _set_tray(tray)
         threading.Timer(0.8, open_running_app).start()
-        # The server is running on its own thread.  Keeping this lifecycle loop
-        # alive makes the tray icon an honest indicator of a live background app.
+        # 服务端在独立线程运行；保持此生命周期循环存活，托盘图标才准确表示后台
+        # 应用仍在运行。
         shutdown_requested.wait()
     except KeyboardInterrupt:
         shutdown_requested.set()
@@ -514,9 +512,8 @@ def run_desktop(guard=None):
             tray.set_status("桌面模式 · 正在运行")
 
     def close_to_tray():
-        # pywebview treats a False return as cancellation of the native close.
-        # If the tray host is unavailable, retain the traditional close-to-exit
-        # behavior instead of leaving an unreachable background process.
+        # pywebview 把返回 False 视为取消原生关闭。托盘宿主不可用时保留传统的
+        # 关闭即退出行为，避免留下无法访问的后台进程。
         tray = tray_holder["tray"]
         if exit_requested.is_set() or not tray or not tray.is_running:
             return None
