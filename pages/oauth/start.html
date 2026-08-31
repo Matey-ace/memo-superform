@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>正在打开墨墨授权</title>
+  <style>body{font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif;text-align:center;padding:14vh 24px;color:#263238}</style>
+</head>
+<body>
+  <p id="message">正在安全地打开墨墨账号授权页…</p>
+  <script>
+  (function () {
+    'use strict';
+    var values = new URLSearchParams(location.search);
+    var required = ['client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'issuer'];
+    var valid = required.every(function (key) { return values.get(key); }) &&
+      values.get('issuer') === 'https://accounts.maimemo.com/oidc' &&
+      values.get('redirect_uri') === 'https://matey-ace.github.io/memo-superform/oauth/callback.html' &&
+      values.get('code_challenge_method') === 'S256';
+    if (!valid) {
+      document.getElementById('message').textContent = '授权请求无效，请返回桌面应用后重新发起连接。';
+      history.replaceState(null, '', location.pathname);
+      return;
+    }
+    var target = new URL('https://accounts.maimemo.com/oidc/auth');
+    ['client_id', 'redirect_uri', 'scope', 'state', 'code_challenge', 'code_challenge_method'].forEach(function (key) {
+      target.searchParams.set(key, values.get(key));
+    });
+    target.searchParams.set('response_type', 'code');
+    history.replaceState(null, '', location.pathname);
+    location.replace(target.toString());
+  }());
+  </script>
+</body>
+</html>

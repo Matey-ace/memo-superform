@@ -138,6 +138,31 @@ def get_or_create_profile(token: str) -> str:
     return token_hash
 
 
+def delete_profile_learning_data(profile_id: Any = None) -> dict[str, int]:
+    """删除一个本机档案的学习数据和同步派生结果。
+
+    保留 ``profiles`` 行及 Live2D 偏好：断开账号或重建学习库不应丢失用户本机
+    的角色/陪伴设置。下次同步时 ``ensure_sync_profile`` 会重新创建 sync_state。
+    """
+    profile_hash = _normalise_profile_hash(profile_id)
+    tables = (
+        "study_records", "study_record_snapshots", "snapshot_runs", "daily_stats",
+        "recommendations", "sync_runs", "sync_segments", "sync_today_items", "sync_state",
+    )
+    deleted: dict[str, int] = {}
+    with _write_connection() as conn:
+        row = conn.execute("SELECT profile_id FROM profiles WHERE token_hash=?", (profile_hash,)).fetchone()
+        if not row:
+            return {name: 0 for name in tables}
+        pk = int(row[0])
+        # 所有表名均来自上方固定白名单，不接受外部路径或字符串。
+        for table in tables:
+            cursor = conn.execute("DELETE FROM " + table + " WHERE profile_id=?", (pk,))
+            deleted[table] = max(0, int(cursor.rowcount or 0))
+        conn.execute("UPDATE profiles SET updated_at=? WHERE profile_id=?", (_utc_now(), pk))
+    return deleted
+
+
 def _profile_pk(profile_id: Any = None) -> int:
     return ensure_sync_profile(profile_id)
 

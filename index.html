@@ -234,14 +234,23 @@
                 </div>
 
                 <div class="setting-group">
-                    <h3>墨墨 API 配置</h3>
-                    <div class="setting-item">
-                        <label>API Token</label>
-                        <input type="text" id="tokenInput" placeholder="在墨墨App: 我的 -> 更多设置 -> 实验功能 -> 开放API">
-                        <p class="hint">Token 仅保存在浏览器本地 (localStorage)，不会上传到任何服务器</p>
+                    <h3>墨墨账号</h3>
+                    <p id="maimemoAccountStatus" class="hint">正在检查连接状态...</p>
+                    <div>
+                        <button id="maimemoConnectBtn" class="test-btn" type="button">连接墨墨账号</button>
+                        <button id="maimemoReconnectBtn" class="test-btn" type="button" style="display:none">重新授权</button>
+                        <button id="maimemoDisconnectBtn" class="danger-btn" type="button" style="display:none">断开连接</button>
                     </div>
-                    <button id="testTokenBtn" class="test-btn">测试连接</button>
-                    <span id="tokenStatus" class="status-text"></span>
+                    <p class="hint">一键授权使用墨墨开放平台；访问令牌只保存在此 Windows 用户的加密凭据中。</p>
+                    <details class="setting-item">
+                        <summary>高级连接方式：手动 Token</summary>
+                        <label for="maimemoManualToken">旧版 API Token</label>
+                        <input type="password" id="maimemoManualToken" autocomplete="off" placeholder="在墨墨 App 的开放 API 设置中获取">
+                        <button id="maimemoManualSaveBtn" class="test-btn" type="button">保存并测试 Token</button>
+                        <p class="hint">仅供旧用户备用；保存后会转入本机加密凭据，不会写入浏览器 localStorage。</p>
+                    </details>
+                    <button id="maimemoDeleteDataBtn" class="danger-btn" type="button" style="display:none">删除本机墨墨学习数据</button>
+                    <p class="hint">断开连接只移除授权；学习记录、同步状态和派生统计可在上方单独删除。</p>
                 </div>
 
                 <div class="setting-group">

@@ -45,6 +45,21 @@ class LauncherTrayContracts(unittest.TestCase):
         finally:
             broker.close()
 
+    def test_oauth_callback_is_queued_then_delivered_to_running_instance(self):
+        broker = launcher.acquire_single_instance(0)
+        self.assertIsNotNone(broker)
+        delivered = threading.Event()
+        values = []
+        callback = "memo-superform://maimemo-oauth?code=abc&state=state"
+        try:
+            self.assertTrue(launcher.forward_maimemo_oauth_callback(callback, broker.port, timeout=1.0))
+            broker.set_oauth_callback_handler(lambda url: (values.append(url), delivered.set()))
+            self.assertTrue(delivered.wait(1.0))
+            self.assertEqual([callback], values)
+            self.assertFalse(launcher.forward_maimemo_oauth_callback("https://example.com", broker.port))
+        finally:
+            broker.close()
+
     def test_launcher_contains_tray_lifecycle_and_background_web_mode(self):
         source = (ROOT / "launcher.py").read_text(encoding="utf-8-sig")
         self.assertIn("create_windows_tray", source)

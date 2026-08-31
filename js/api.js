@@ -6,19 +6,74 @@
 
 const MaimemoAPI = (function() {
     const PROXY_BASE = '/proxy/memo';
-    let token = localStorage.getItem('maimemo_token') || '';
+    // 令牌只保存在 Windows DPAPI 本机凭据库；网页脚本从不保留或读取令牌明文。
+    let connection = { connected: false, mode: '', profile_id: '' };
     
     const CACHE_PREFIX = 'memo_cache_';
     const CACHE_TTL = 30 * 60 * 1000;
     
-    function setToken(newToken) {
-        token = newToken;
-        if (newToken) localStorage.setItem('maimemo_token', newToken);
-        else localStorage.removeItem('maimemo_token');
+    function cacheScope() {
+        return String(connection.profile_id || 'disconnected').slice(-16);
     }
-    
-    function getToken() { return token; }
-    function hasToken() { return token && token.length > 0; }
+
+    async function authRequest(path, options = {}) {
+        const hasBody = options.body !== undefined;
+        const response = await fetch(path, {
+            method: options.method || 'GET',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                ...(hasBody ? { 'Content-Type': 'application/json' } : {})
+            },
+            ...(hasBody ? { body: JSON.stringify(options.body) } : {})
+        });
+        const data = await response.json().catch(function() { return {}; });
+        if (!response.ok) throw new Error(data.error || ('账号服务错误: ' + response.status));
+        return data;
+    }
+
+    async function refreshConnection() {
+        connection = await authRequest('/api/maimemo-auth/status');
+        return connection;
+    }
+
+    async function bootstrap() {
+        // 仅迁移旧版本遗留的 localStorage Token。迁移完成即删除浏览器副本，
+        // 后续请求由本机服务自动附加 Authorization。
+        const legacyToken = localStorage.getItem('maimemo_token') || '';
+        if (legacyToken.trim()) {
+            await authRequest('/api/maimemo-auth/manual-token', {
+                method: 'POST', body: { token: legacyToken.trim() }
+            });
+            localStorage.removeItem('maimemo_token');
+        }
+        return refreshConnection();
+    }
+
+    async function connect() {
+        return authRequest('/api/maimemo-auth/start', { method: 'POST', body: {} });
+    }
+
+    async function saveManualToken(value) {
+        connection = await authRequest('/api/maimemo-auth/manual-token', {
+            method: 'POST', body: { token: String(value || '').trim() }
+        });
+        return connection;
+    }
+
+    async function disconnect() {
+        const result = await authRequest('/api/maimemo-auth/disconnect', { method: 'POST', body: {} });
+        connection = { connected: false, mode: '', profile_id: '' };
+        return result;
+    }
+
+    async function deleteLocalData() {
+        return authRequest('/api/maimemo-auth/data', { method: 'DELETE' });
+    }
+
+    // 供尚未迁移的角色/Live2D 代码检测使用；始终为空，避免浏览器侧重新泄漏 token。
+    function getToken() { return ''; }
+    function hasToken() { return Boolean(connection.connected); }
     
     function getCache(key) {
         try {
@@ -56,14 +111,13 @@ const MaimemoAPI = (function() {
     }
     
     async function request(path, options = {}) {
-        if (!token) throw new Error('请先配置墨墨 API Token');
+        if (!connection.connected) throw new Error('请先连接墨墨账号');
         
         const url = PROXY_BASE + path;
         const config = {
             method: options.method || 'GET',
             headers: {
                 'Accept': 'application/json',
-                'Authorization': 'Bearer ' + token,
                 ...(options.body ? { 'Content-Type': 'application/json' } : {})
             },
             ...(options.body ? { body: JSON.stringify(options.body) } : {})
@@ -88,7 +142,7 @@ const MaimemoAPI = (function() {
     // ---- 学习数据接口 ----
     
     async function getStudyProgress(useCache = true) {
-        const cacheKey = 'study_progress_' + token.slice(-8);
+        const cacheKey = 'study_progress_' + cacheScope();
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/study/get_study_progress', { method: 'POST', body: {} });
         if (useCache) setCache(cacheKey, data);
@@ -96,7 +150,7 @@ const MaimemoAPI = (function() {
     }
     
     async function queryStudyRecords(params = {}, useCache = true) {
-        const cacheKey = 'study_records_' + token.slice(-8) + '_' + JSON.stringify(params);
+        const cacheKey = 'study_records_' + cacheScope() + '_' + JSON.stringify(params);
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/study/query_study_records', { method: 'POST', body: params });
         if (useCache) setCache(cacheKey, data);
@@ -111,7 +165,6 @@ const MaimemoAPI = (function() {
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest'
         };
-        if (token) headers.Authorization = 'Bearer ' + token;
         if (hasBody) headers['Content-Type'] = 'application/json';
         return headers;
     }
@@ -235,7 +288,7 @@ const MaimemoAPI = (function() {
     // 获取今日学习单词（公测接口）
       async function listNotepads(limit = 10, offset = 0, useCache = true) {
         if (limit > 10) limit = 10;
-        const cacheKey = 'notepads_' + token.slice(-8) + '_' + limit + '_' + offset;
+        const cacheKey = 'notepads_' + cacheScope() + '_' + limit + '_' + offset;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/notepads?limit=' + limit + '&offset=' + offset);
         if (useCache) setCache(cacheKey, data);
@@ -243,7 +296,7 @@ const MaimemoAPI = (function() {
     }
     
     async function listAllNotepads(useCache = true) {
-        const cacheKey = 'all_notepads_' + token.slice(-8);
+        const cacheKey = 'all_notepads_' + cacheScope();
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         
         const allNotepads = [];
@@ -263,7 +316,7 @@ const MaimemoAPI = (function() {
     }
     
     async function getNotepad(id, useCache = true) {
-        const cacheKey = 'notepad_' + token.slice(-8) + '_' + id;
+        const cacheKey = 'notepad_' + cacheScope() + '_' + id;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/notepads/' + id);
         if (useCache) setCache(cacheKey, data);
@@ -271,7 +324,7 @@ const MaimemoAPI = (function() {
     }
     
     async function getAllNotepadWords(useCache = true) {
-        const cacheKey = 'all_notepad_words_' + token.slice(-8);
+        const cacheKey = 'all_notepad_words_' + cacheScope();
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         
         const notepads = await listAllNotepads(false);
@@ -303,20 +356,18 @@ const MaimemoAPI = (function() {
     
       
     async function testToken(testToken) {
-        const originalToken = token;
-        token = testToken;
         try {
+            if (testToken) await saveManualToken(testToken);
             const data = await getStudyProgress(false);
-            token = originalToken;
             return { success: true, data: data };
         } catch (e) {
-            token = originalToken;
             return { success: false, error: e.message };
         }
     }
     
     return {
-        setToken, getToken, hasToken, clearCache,
+        bootstrap, refreshConnection, connect, saveManualToken, disconnect, deleteLocalData,
+        getToken, hasToken, clearCache,
         getStudyProgress, queryStudyRecords, getAllStudyRecords,
         startStudySync, getStudySyncStatus, cancelStudySync,
         getWordsFromStudyRecords,

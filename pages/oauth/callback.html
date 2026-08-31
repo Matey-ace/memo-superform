@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>正在返回 Memo Superform</title>
+  <style>body{font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif;text-align:center;padding:14vh 24px;color:#263238}</style>
+</head>
+<body>
+  <p id="message">授权完成，正在返回桌面应用…</p>
+  <script>
+  (function () {
+    'use strict';
+    var source = new URLSearchParams(location.search);
+    var callback = new URL('memo-superform://maimemo-oauth');
+    ['code', 'state', 'error', 'error_description'].forEach(function (key) {
+      if (source.has(key)) callback.searchParams.set(key, source.get(key));
+    });
+    history.replaceState(null, '', location.pathname);
+    if (!callback.searchParams.has('state')) {
+      document.getElementById('message').textContent = '授权回调缺少状态信息，请返回桌面应用后重新连接。';
+      return;
+    }
+    location.replace(callback.toString());
+  }());
+  </script>
+</body>
+</html>

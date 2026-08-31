@@ -43,6 +43,7 @@ class InstanceBroker:
     """
 
     _REQUEST = {"app": "memo-superform", "version": 1, "action": "activate"}
+    _OAUTH_ACTION = "maimemo_oauth_callback"
 
     def __init__(self, listener, port):
         self.listener = listener
@@ -51,6 +52,8 @@ class InstanceBroker:
         self._lock = threading.RLock()
         self._activation_callback = None
         self._pending_activations = 0
+        self._oauth_callback_handler = None
+        self._pending_oauth_callbacks = []
         self._thread = threading.Thread(target=self._serve, name="MemoInstanceBroker", daemon=True)
         self._thread.start()
 
@@ -61,6 +64,15 @@ class InstanceBroker:
             self._pending_activations = 0
         for _ in range(count):
             self._dispatch_activation(callback)
+
+    def set_oauth_callback_handler(self, callback):
+        """注册自定义协议回传处理器，并消费服务器启动前抵达的回调。"""
+        with self._lock:
+            self._oauth_callback_handler = callback
+            pending = list(self._pending_oauth_callbacks)
+            self._pending_oauth_callbacks.clear()
+        for callback_url in pending:
+            self._dispatch_oauth_callback(callback, callback_url)
 
     def _dispatch_activation(self, callback):
         if callback is None:
@@ -75,6 +87,13 @@ class InstanceBroker:
         except Exception as exc:
             _log("instance activation callback failed: %s" % exc)
 
+    @staticmethod
+    def _safe_oauth_callback(callback, callback_url):
+        try:
+            callback(callback_url)
+        except Exception as exc:
+            _log("maimemo OAuth callback failed: %s" % exc)
+
     def _trigger_activation(self):
         with self._lock:
             callback = self._activation_callback
@@ -82,6 +101,35 @@ class InstanceBroker:
                 self._pending_activations += 1
                 return
         self._dispatch_activation(callback)
+
+    def _dispatch_oauth_callback(self, callback, callback_url):
+        if callback is None:
+            return
+        threading.Thread(target=self._safe_oauth_callback, args=(callback, callback_url),
+                         name="MemoMaimemoOAuthCallback", daemon=True).start()
+
+    def _trigger_oauth_callback(self, callback_url):
+        with self._lock:
+            callback = self._oauth_callback_handler
+            if callback is None:
+                self._pending_oauth_callbacks.append(callback_url)
+                return
+        self._dispatch_oauth_callback(callback, callback_url)
+
+    @classmethod
+    def _is_valid_message(cls, message):
+        if message == cls._REQUEST:
+            return True
+        if not isinstance(message, dict):
+            return False
+        callback_url = str(message.get("url") or "")
+        return (
+            message.get("app") == "memo-superform"
+            and message.get("version") == 1
+            and message.get("action") == cls._OAUTH_ACTION
+            and 0 < len(callback_url) <= 8192
+            and callback_url.lower().startswith("memo-superform://maimemo-oauth?")
+        )
 
     def _serve(self):
         try:
@@ -98,7 +146,7 @@ class InstanceBroker:
                         connection.settimeout(0.75)
                         payload = connection.recv(1024)
                         message = json.loads(payload.decode("utf-8", errors="strict").strip())
-                        valid = message == self._REQUEST
+                        valid = self._is_valid_message(message)
                     except (OSError, ValueError, UnicodeError):
                         valid = False
                     try:
@@ -106,7 +154,10 @@ class InstanceBroker:
                     except OSError:
                         pass
                     if valid:
-                        self._trigger_activation()
+                        if message.get("action") == self._OAUTH_ACTION:
+                            self._trigger_oauth_callback(str(message["url"]))
+                        else:
+                            self._trigger_activation()
         finally:
             try:
                 self.listener.close()
@@ -210,6 +261,41 @@ def _res_path(name):
     return os.path.join(base, name)
 
 
+def register_maimemo_oauth_protocol():
+    """在当前 Windows 用户下注册 HTTPS 回调使用的自定义协议。
+
+    只写 HKCU，不要求管理员权限；该协议只携带短期 code/state，令牌、PKCE
+    verifier 和 client secret 都不会出现在协议 URL 中。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+        command = [sys.executable]
+        if not getattr(sys, "frozen", False):
+            command.append(os.path.abspath(__file__))
+        command += ["--maimemo-oauth-callback", "%1"]
+        command_text = subprocess.list2cmdline(command)
+        root = winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\memo-superform")
+        try:
+            winreg.SetValueEx(root, "", 0, winreg.REG_SZ, "URL:Memo Superform OAuth Callback")
+            winreg.SetValueEx(root, "URL Protocol", 0, winreg.REG_SZ, "")
+        finally:
+            winreg.CloseKey(root)
+        command_key = winreg.CreateKey(
+            winreg.HKEY_CURRENT_USER, r"Software\Classes\memo-superform\shell\open\command"
+        )
+        try:
+            winreg.SetValueEx(command_key, "", 0, winreg.REG_SZ, command_text)
+        finally:
+            winreg.CloseKey(command_key)
+        _log("maimemo OAuth protocol registered")
+        return True
+    except Exception as exc:
+        _log("maimemo OAuth protocol registration failed: %s" % exc)
+        return False
+
+
 def create_windows_tray(mode, on_open, on_exit):
     """创建可选的 Windows 通知区域生命周期指示器。"""
     try:
@@ -287,6 +373,26 @@ def activate_existing_instance(port=None, timeout=0.9):
         with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
             connection.settimeout(timeout)
             connection.sendall(json.dumps(InstanceBroker._REQUEST).encode("utf-8"))
+            response = json.loads(connection.recv(256).decode("utf-8"))
+        return bool(response.get("ok"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+
+
+def forward_maimemo_oauth_callback(callback_url, port=None, timeout=0.9):
+    """将第二个进程接到的授权回传交给已运行的主实例。"""
+    if port is None:
+        port = _instance_port()
+    message = {
+        "app": "memo-superform", "version": 1,
+        "action": InstanceBroker._OAUTH_ACTION, "url": str(callback_url),
+    }
+    if not InstanceBroker._is_valid_message(message):
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
+            connection.settimeout(timeout)
+            connection.sendall(json.dumps(message).encode("utf-8"))
             response = json.loads(connection.recv(256).decode("utf-8"))
         return bool(response.get("ok"))
     except (OSError, ValueError, UnicodeError):
@@ -399,12 +505,14 @@ def choose_mode_interactive():
     return "web"
 
 
-def run_web(guard=None):
+def run_web(guard=None, oauth_callback_url=None):
     """网页模式：后台服务器 + Windows 托盘运行状态 + 浏览器入口。"""
     os.environ["MEMO_MODE"] = "web"
     import server
     server.set_relaunch_handler(request_relaunch)
     server.set_update_handler(request_update_apply)
+    if guard is not None and hasattr(guard, "set_oauth_callback_handler"):
+        guard.set_oauth_callback_handler(server.complete_maimemo_oauth_callback)
     shutdown_requested = threading.Event()
     stop_lock = threading.Lock()
     tray_holder = {"tray": None}
@@ -415,6 +523,11 @@ def run_web(guard=None):
             raise RuntimeError("无法启动本地服务器，请检查端口是否被占用。")
         httpd, url = result
         _log("server started: %s" % url)
+        if oauth_callback_url:
+            threading.Thread(
+                target=server.complete_maimemo_oauth_callback,
+                args=(oauth_callback_url,), name="MemoInitialMaimemoOAuth", daemon=True,
+            ).start()
 
         def open_running_app():
             if os.environ.get("MEMO_NO_BROWSER") == "1":
@@ -461,7 +574,7 @@ def run_web(guard=None):
         _release_tray()
 
 
-def run_desktop(guard=None):
+def run_desktop(guard=None, oauth_callback_url=None):
     """桌面模式：窗口关闭后隐藏到托盘，托盘菜单负责恢复或完整退出。"""
     os.environ["MEMO_MODE"] = "desktop"
     if guard is None:
@@ -476,11 +589,18 @@ def run_desktop(guard=None):
     import server
     server.set_relaunch_handler(request_relaunch)
     server.set_update_handler(request_update_apply)
+    if guard is not None and hasattr(guard, "set_oauth_callback_handler"):
+        guard.set_oauth_callback_handler(server.complete_maimemo_oauth_callback)
     result = server.start_server(open_browser=False, block=False)
     if not result:
         show_message("Memo Superform", "无法启动本地服务器，请检查端口是否被占用。")
         sys.exit(1)
     _log("server started: %s" % result[1])
+    if oauth_callback_url:
+        threading.Thread(
+            target=server.complete_maimemo_oauth_callback,
+            args=(oauth_callback_url,), name="MemoInitialMaimemoOAuth", daemon=True,
+        ).start()
     httpd, url = result
     # server.start_server 已把 build_info.BUILD_VERSION 写入入口 URL，并为本地
     # HTML/JS/CSS 禁用缓存；不要再附加硬编码的 v=78，以免自动更新后仍命中旧页。
@@ -1005,6 +1125,7 @@ def main(argv=None):
     parser.add_argument("--reset", action="store_true", help="清除记住的模式选择")
     parser.add_argument("--apply-update", metavar="REQUEST", help=argparse.SUPPRESS)
     parser.add_argument("--cleanup-update-helper", metavar="PATH", help=argparse.SUPPRESS)
+    parser.add_argument("--maimemo-oauth-callback", metavar="URL", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     # 该分支只由临时 helper 使用，必须在实例锁、服务器、网页窗口任何一个启动前
@@ -1020,14 +1141,26 @@ def main(argv=None):
         print("已清除启动模式记忆。")
         return 0
 
+    callback_url = str(args.maimemo_oauth_callback or "").strip()
+    if callback_url and not callback_url.lower().startswith("memo-superform://maimemo-oauth?"):
+        _log("rejected malformed maimemo OAuth callback")
+        return 0
+
+    # 每次普通启动都更新当前用户的协议注册；安装包升级后回调仍会定位到最新 EXE。
+    register_maimemo_oauth_protocol()
+
     mode = args.mode or read_launcher_config()
     if mode is None:
-        mode = choose_mode_interactive()
+        # 协议回调必须无交互地回到已有授权状态，首次从回调拉起时默认网页模式。
+        mode = "web" if callback_url else choose_mode_interactive()
         if mode is None:
             return 0
 
     guard = acquire_single_instance()
     if guard is None:
+        if callback_url and forward_maimemo_oauth_callback(callback_url):
+            _log("maimemo OAuth callback forwarded to existing instance")
+            return 0
         if activate_existing_instance():
             _log("existing instance activation requested")
             return 0
@@ -1039,9 +1172,9 @@ def main(argv=None):
     _log("launcher main: mode=%s" % mode)
 
     if mode == "desktop":
-        run_desktop(guard=guard)
+        run_desktop(guard=guard, oauth_callback_url=callback_url or None)
     else:
-        run_web(guard=guard)
+        run_web(guard=guard, oauth_callback_url=callback_url or None)
         _release_guard()
     _log("launcher main: exit")
     return 0

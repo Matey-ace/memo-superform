@@ -34,7 +34,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 - **Windows 托盘状态**：运行时会在右下角通知区域显示 Memo Superform 图标与当前模式；双击或菜单“打开”可恢复页面/窗口，菜单“退出”会完整停止后台服务。再次启动同一 EXE 会自动唤醒已有实例，不再误报启动错误。
 - **按需增量刷新**：日常只检查今日变化、到期候选和必要的 30 天活动窗口；默认 10 分钟，支持 5/10/15/30/60 分钟，设置内可手动完整核验
 - **热力图自定义配色**：6 套配色预设，亮色与暗色模式各一套，状态栏一键切换
-- **隐私安全**：Token 和 AI Key 只存在本地，代理服务器与数据库仅运行在你自己的电脑上
+- **隐私安全**：墨墨 OAuth/手动 Token 使用 Windows DPAPI 加密保存在本机；代理服务器与数据库仅运行在你自己的电脑上
 - **SQLite 数据中心**：先显示本地已提交数据，再后台增量检查；历史快照不会被普通刷新反复拉取或覆盖
 - **背单词自测模式**：在电脑上复习今日单词，AI 批量翻译释义，翻卡片自测记忆，支持认识/模糊/忘记三级标记，结果本地保存
 - **陪伴学习反馈**：按学习节点读取本轮统计与当前单词，调用已配置的 AI 生成短鼓励；无 AI 配置或离线时自动采用本地反馈，不会中断背词
@@ -91,10 +91,14 @@ Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏
 
 更新不会触及同级 `data/` 中的 SQLite 词库、Live2D 模型和语音资源包；旧 EXE 会保留一份带时间戳的备份。源码运行、macOS/Linux，或安装目录没有写入权限时，设置页会提供官方 Release 下载页而不会尝试替换文件。更新检查会访问 GitHub API，因此该请求会由 GitHub 接收到你的网络连接与 `MemoSuperform/<版本>` User-Agent；不上传墨墨 Token、AI Key、学习记录或本地文件。
 
-### 配置 Token
-- 点击右上角 设置 按钮
-- 填入墨墨 API Token（App: 我的 -> 更多设置 -> 实验功能 -> 开放 API）
-- 点击「测试连接」验证，保存后自动加载数据
+### 连接墨墨账号
+
+- 点击右上角「设置」→「墨墨账号」，选择「连接墨墨账号」并在浏览器完成授权。
+- 桌面端使用 OAuth Authorization Code + PKCE；令牌只保存在当前 Windows 用户的 DPAPI 加密凭据中，浏览器页面不会保存或读取它。
+- 旧用户可展开「高级连接方式」填入手动 API Token。首次打开新版本时，旧版 localStorage Token 会自动迁入本机加密凭据并从浏览器删除。
+- 「断开连接」只删除授权；「删除本机墨墨学习数据」会单独清除当前档案的学习记录、同步状态和派生统计，不影响墨墨云端数据。
+
+OAuth 审核主页、回调页和隐私说明位于 [GitHub Pages](https://matey-ace.github.io/memo-superform/)。开发/打包时请通过 `MEMO_MAIMEMO_CLIENT_ID` 注入获批的公开 `client_id`；该值不是 secret，应用不会保存 `client_secret`。
 
 > SQLite 主库会在 `data/memo-superform.db` 自动建立，无需安装数据库。已有 SQL Server 数据库只会通过可选的只读迁移器导入，原库不会被修改。
 
@@ -175,6 +179,14 @@ memo-superform/
 - POST /api/recommendations/{id}/review - 标记已复习
 - POST /api/snapshot - 保存快照并生成推荐
 - GET /api/stats/history?days=30 - 历史统计
+
+墨墨账号本地 API：
+
+- GET /api/maimemo-auth/status - 获取本机授权状态（不返回令牌）
+- POST /api/maimemo-auth/start - 开始 OAuth + PKCE 授权
+- POST /api/maimemo-auth/manual-token - 保存旧版手动 Token 到本机加密凭据
+- POST /api/maimemo-auth/disconnect - 断开授权并保留本地数据
+- DELETE /api/maimemo-auth/data - 删除当前档案的本机学习数据
 
 | Anon的笔记本 | 每日背词Anon的笔记本：数量分级（摸鱼/日常/努力/爆肝），爆肝日飘爱心，列表/详情双视图 |
 | 背单词 | 内嵌墨墨网页版，实时背单词，暗色跟随 |

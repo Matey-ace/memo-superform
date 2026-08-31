@@ -28,6 +28,7 @@ import traceback
 from urllib.parse import urlparse
 
 import codex_auth
+import maimemo_auth
 from app_update import UpdateManager
 from build_info import BUILD_VERSION
 from live2d_service import Live2DService
@@ -68,6 +69,7 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
         pass
 
 CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
+MAIMEMO_OAUTH = maimemo_auth.MaimemoOAuth(DATA_DIR)
 LIVE2D_SERVICE = Live2DService(DATA_DIR)
 UPDATE_MANAGER = UpdateManager(DATA_DIR)
 
@@ -96,13 +98,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 DB_READY = False
 STUDY_SYNC_SERVICE = None
 STUDY_SYNC_MANAGER = None
+OFFICIAL_API_LIMITER = None
 try:
     import db
     import recommender
     import study_sync
     db.init_db(DATA_DIR)
     _sync_repository = study_sync.DbStudySyncRepository(db)
-    STUDY_SYNC_SERVICE = study_sync.StudySyncService(_sync_repository)
+    # 网页代理和后台学习同步共用同一个窗口限流器，避免两条链路叠加后超过开放
+    # 平台的 20/10s、40/60s、2000/5h 配额。
+    OFFICIAL_API_LIMITER = study_sync.ProfileRateLimiter()
+    _sync_client = study_sync.MaimemoStudyClient(limiter=OFFICIAL_API_LIMITER)
+    STUDY_SYNC_SERVICE = study_sync.StudySyncService(_sync_repository, client=_sync_client)
     STUDY_SYNC_MANAGER = study_sync.SyncManager(STUDY_SYNC_SERVICE)
     DB_READY = True
     print("[db] SQLite 已就绪：%s" % db.database_path())
@@ -555,6 +562,9 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         # 代理墨墨 API: /proxy/memo/xxx -> https://open.maimemo.com/open/api/v1/memo/xxx
         if path.startswith("/proxy/memo/"):
             api_path = path[len("/proxy/memo/"):]
+            if not self._official_api_allowed(api_path, "GET"):
+                self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
+                return
             target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
             if parsed.query:
                 target_url += "?" + parsed.query
@@ -626,6 +636,9 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         # 代理墨墨 API
         if path.startswith("/proxy/memo/"):
             api_path = path[len("/proxy/memo/"):]
+            if not self._official_api_allowed(api_path, "POST"):
+                self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
+                return
             target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
             body = self.rfile.read(self._safe_content_length())
             self._proxy_request(target_url, method="POST", body=body)
@@ -722,9 +735,37 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             return {}
         return json.loads(raw.decode("utf-8"))
 
+    @staticmethod
+    def _official_api_allowed(api_path, method):
+        """将桌面代理收口为产品实际所需的开放 API 白名单。"""
+        clean = str(api_path or "").strip("/")
+        if not clean or ".." in clean or "//" in clean or "\\" in clean:
+            return False
+        if method == "POST":
+            return clean in {
+                "study/get_study_progress",
+                "study/get_today_items",
+                "study/query_study_records",
+            }
+        if method == "GET":
+            if clean == "notepads":
+                return True
+            return bool(re.fullmatch(r"notepads/[A-Za-z0-9_-]{1,160}", clean))
+        return False
+
     def _proxy_request(self, target_url, method="GET", body=None):
-        """转发请求到墨墨 API，去掉 Origin 头"""
-        auth = self.headers.get("Authorization", "")
+        """转发白名单开放 API，并从本机凭据库注入授权与共享限流。"""
+        auth = (self.headers.get("Authorization") or "").strip()
+        rate_profile = ""
+        if not auth:
+            try:
+                auth = "Bearer " + MAIMEMO_OAUTH.access_token()
+                rate_profile = MAIMEMO_OAUTH.profile_key()
+            except Exception as exc:
+                return self._send_json(401, {"error": str(exc) or "请先连接墨墨账号"})
+        elif "study_sync" in globals():
+            # 仅为旧客户端携带的手动 Bearer 兼容路径；新页面不再读取 Token。
+            rate_profile = study_sync.token_profile_id(auth[7:].strip()) if auth.lower().startswith("bearer ") else auth
 
         req = urllib.request.Request(target_url, data=body, method=method)
         req.add_header("Accept", "application/json")
@@ -733,27 +774,49 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         if method == "POST" and body:
             req.add_header("Content-Type", "application/json")
 
-        try:
-            resp = urllib.request.urlopen(req, timeout=30)
-            result = resp.read().decode("utf-8")
-            self.send_response(resp.status)
-            self._send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(result.encode("utf-8"))
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8") if e.fp else ""
-            self.send_response(e.code)
-            self._send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(err_body.encode("utf-8"))
-        except Exception as e:
-            self.send_response(502)
-            self._send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+        retry_error = None
+        for attempt in range(3):
+            try:
+                if OFFICIAL_API_LIMITER is not None:
+                    # 与 StudySyncService 共用同一限流器。Web 请求没有用户取消
+                    # 通道，故传入一次性 Event；此处仍由 429 Retry-After 兜底。
+                    OFFICIAL_API_LIMITER.acquire(threading.Event(), rate_profile)
+                resp = urllib.request.urlopen(req, timeout=30)
+                result = resp.read().decode("utf-8")
+                self.send_response(resp.status)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(result.encode("utf-8"))
+                return
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 2:
+                    retry_error = e
+                    retry_after = study_sync._retry_after_seconds(dict(e.headers.items())) if "study_sync" in globals() else None
+                    # 平台通常返回短窗口配额；限制单次等待，避免 Web 请求长时间占用。
+                    delay = min(30.0, max(0.0, retry_after if retry_after is not None else 1.0 + attempt))
+                    if threading.Event().wait(delay):
+                        break
+                    continue
+                err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+                self.send_response(e.code)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+                if retry_after:
+                    self.send_header("Retry-After", str(retry_after))
+                self.end_headers()
+                self.wfile.write(err_body.encode("utf-8"))
+                return
+            except Exception as e:
+                self.send_response(502)
+                self._send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode("utf-8"))
+                return
+        if retry_error is not None:
+            self._send_json(429, {"error": "墨墨开放平台限流，请稍后重试"})
 
     def _send_json(self, code, data):
         self.send_response(code)
@@ -789,6 +852,17 @@ def _current_mode():
 
 _relaunch_handler = None
 _update_handler = None
+
+
+def complete_maimemo_oauth_callback(callback_url):
+    """由 launcher 的自定义协议回调调用，令牌交换只在本机进程完成。"""
+    try:
+        result = MAIMEMO_OAUTH.complete_callback_url(callback_url)
+        print("[maimemo] OAuth connected: %s" % (result.get("display_name") or result.get("subject") or "account"))
+        return result
+    except Exception as exc:
+        print("[maimemo] OAuth callback failed: %s" % exc)
+        raise
 
 
 def set_relaunch_handler(handler):
@@ -845,7 +919,8 @@ def _apply_update(staged):
 
 
 configure_local_api(
-    CODEX_OAUTH=CODEX_OAUTH, DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
+    CODEX_OAUTH=CODEX_OAUTH, MAIMEMO_OAUTH=MAIMEMO_OAUTH,
+    DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
     DB_READY=DB_READY, db=globals().get("db"), recommender=globals().get("recommender"),
     STUDY_SYNC_SERVICE=STUDY_SYNC_SERVICE, STUDY_SYNC_MANAGER=STUDY_SYNC_MANAGER,
     LIVE2D_SERVICE=LIVE2D_SERVICE,

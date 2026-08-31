@@ -22,19 +22,35 @@ def configure_local_api(**values):
 
 
 class LocalApiMixin:
-    def _memo_token(self, required=True):
+    def _memo_identity(self, required=True):
+        """返回 ``(access_token, stable_profile_id)``。
+
+        旧页面携带 Bearer Token 时仍按旧规则工作；新的桌面页面不再读取令牌，
+        由本机 DPAPI 凭据库在这里附加授权。OAuth 档案键永远基于 OIDC ``sub``。
+        """
         auth = (self.headers.get("Authorization") or "").strip()
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
             if token:
-                return token
+                return token, study_sync.token_profile_id(token)
+        service = globals().get("MAIMEMO_OAUTH")
+        if service is not None:
+            try:
+                token = service.access_token()
+                return token, service.profile_key()
+            except Exception as exc:
+                if required:
+                    self._send_json(401, {"error": str(exc) or "请先连接墨墨账号"})
+                return None, None
         if required:
-            self._send_json(401, {"error": "请先配置墨墨 API Token"})
-        return None
+            self._send_json(401, {"error": "请先连接墨墨账号"})
+        return None, None
+
+    def _memo_token(self, required=True):
+        return self._memo_identity(required=required)[0]
 
     def _profile_id(self, required=False):
-        token = self._memo_token(required=required)
-        return study_sync.token_profile_id(token) if token else None
+        return self._memo_identity(required=required)[1]
 
     def _active_role_live2d_binding(self, live2d):
         """只把当前角色公开为 Live2D 运行时来源。
@@ -148,6 +164,12 @@ class LocalApiMixin:
         if path == "/api/codex/status":
             return self._send_json(200, CODEX_OAUTH.status())
 
+        if path == "/api/maimemo-auth/status":
+            service = globals().get("MAIMEMO_OAUTH")
+            if service is None:
+                return self._send_json(503, {"error": "墨墨账号服务未就绪"})
+            return self._send_json(200, service.status())
+
         live2d = globals().get("LIVE2D_SERVICE")
         if path.startswith("/api/live2d/assets/"):
             if not live2d:
@@ -229,12 +251,11 @@ class LocalApiMixin:
                 return self._send_json(200, {"records": records, "count": len(records), "sync": state})
 
             if path == "/api/study-sync/status":
-                token = self._memo_token(required=True)
-                if not token:
+                token, profile_id = self._memo_identity(required=True)
+                if not token or not profile_id:
                     return
-                profile_id = study_sync.token_profile_id(token)
                 persistent = db.get_sync_state(profile_id)
-                live = STUDY_SYNC_MANAGER.status(token) if STUDY_SYNC_MANAGER else {
+                live = STUDY_SYNC_MANAGER.status(profile_id) if STUDY_SYNC_MANAGER else {
                     "status": "unavailable", "active": False, "error": "同步服务未就绪"
                 }
                 result = dict(persistent)
@@ -418,6 +439,35 @@ class LocalApiMixin:
                 CODEX_OAUTH.logout()
                 return self._send_json(200, {"ok": True})
 
+            if path == "/api/maimemo-auth/start":
+                service = globals().get("MAIMEMO_OAUTH")
+                if service is None:
+                    return self._send_json(503, {"error": "墨墨账号服务未就绪"})
+                try:
+                    return self._send_json(200, service.start_login())
+                except Exception as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path == "/api/maimemo-auth/manual-token":
+                service = globals().get("MAIMEMO_OAUTH")
+                if service is None:
+                    return self._send_json(503, {"error": "墨墨账号服务未就绪"})
+                try:
+                    status = service.set_manual_token(str(body.get("token") or ""))
+                    return self._send_json(200, status)
+                except Exception as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path == "/api/maimemo-auth/disconnect":
+                service = globals().get("MAIMEMO_OAUTH")
+                if service is None:
+                    return self._send_json(503, {"error": "墨墨账号服务未就绪"})
+                try:
+                    service.disconnect()
+                    return self._send_json(200, {"ok": True, "data_preserved": True})
+                except Exception as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
             # 语音资源包接口（与数据库无关）
             if path == "/api/tts/roles":
                 import tts
@@ -581,8 +631,8 @@ class LocalApiMixin:
             if path == "/api/study-sync":
                 if not DB_READY or not STUDY_SYNC_MANAGER:
                     return self._send_json(503, {"error": "同步服务未就绪"})
-                token = self._memo_token(required=True)
-                if not token:
+                token, profile_id = self._memo_identity(required=True)
+                if not token or not profile_id:
                     return
                 mode = str(body.get("mode") or "incremental")
                 if mode not in ("incremental", "bootstrap", "reconcile"):
@@ -593,7 +643,6 @@ class LocalApiMixin:
                     return self._send_json(400, {"error": "seed_records 必须是数组"})
                 if isinstance(seed_records, list) and len(seed_records) > 200000:
                     return self._send_json(413, {"error": "seed_records 数量过大"})
-                profile_id = study_sync.token_profile_id(token)
                 self._start_legacy_import_once(profile_id)
                 # 浏览器仅在检查可见性、拖拽、设置/全屏和学习状态后发送 startup-idle；
                 # 是否确实已过七天由服务端状态决定。
@@ -602,7 +651,9 @@ class LocalApiMixin:
                         sync_state.get("bootstrap_complete") and
                         STUDY_SYNC_SERVICE.should_run_weekly_reconcile(profile_id)):
                     mode, reason = "reconcile", "weekly"
-                started = STUDY_SYNC_MANAGER.start(token, mode, reason=reason, seed_records=seed_records)
+                started = STUDY_SYNC_MANAGER.start(
+                    token, mode, reason=reason, seed_records=seed_records, profile_id=profile_id
+                )
                 return self._send_json(202, started)
 
             # 保存当日快照并生成推荐
@@ -725,12 +776,23 @@ class LocalApiMixin:
                 return self._send_json(200 if deleted else 404, {"ok": deleted})
             except Exception as exc:
                 return self._send_json(400, {"error": str(exc)})
+        if path == "/api/maimemo-auth/data":
+            if not DB_READY:
+                return self._send_json(503, {"error": "数据库未就绪"})
+            profile_id = self._profile_id(required=True)
+            if not profile_id:
+                return
+            try:
+                deleted = db.delete_profile_learning_data(profile_id)
+                return self._send_json(200, {"ok": True, "deleted": deleted})
+            except Exception as exc:
+                return self._send_json(500, {"error": str(exc)})
         if path != "/api/study-sync/current":
             return self._send_json(404, {"error": "未知接口"})
         if not STUDY_SYNC_MANAGER:
             return self._send_json(503, {"error": "同步服务未就绪"})
-        token = self._memo_token(required=True)
-        if not token:
+        _token, profile_id = self._memo_identity(required=True)
+        if not profile_id:
             return
-        return self._send_json(200, STUDY_SYNC_MANAGER.cancel(token))
+        return self._send_json(200, STUDY_SYNC_MANAGER.cancel(profile_id))
 

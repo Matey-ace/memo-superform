@@ -98,6 +98,26 @@ class RepositoryContracts(unittest.TestCase):
             resolve_web_route("/memo-accounts/oidc/auth", "", "GET"),
         )
 
+    def test_maimemo_oauth_pages_and_local_proxy_contract(self):
+        auth = self.read("maimemo_auth.py")
+        api = self.read("js/api.js")
+        server = self.read("server.py")
+        start = self.read("pages/oauth/start.html")
+        callback = self.read("pages/oauth/callback.html")
+        privacy = self.read("pages/privacy.html")
+        self.assertIn("code_challenge_method", auth)
+        self.assertIn("DPAPIProtector", auth)
+        self.assertIn("memo-superform://maimemo-oauth", callback)
+        self.assertIn("accounts.maimemo.com/oidc/auth", start)
+        self.assertNotIn("access_token", callback)
+        self.assertNotIn("refresh_token", callback)
+        self.assertIn("Windows DPAPI", privacy)
+        self.assertIn("localStorage.removeItem('maimemo_token')", api)
+        self.assertNotIn("Authorization': 'Bearer ' + token", api)
+        self.assertIn("_official_api_allowed", server)
+        self.assertIn("OFFICIAL_API_LIMITER", server)
+        self.assertTrue((ROOT / ".github/workflows/pages.yml").is_file())
+
     def test_static_security_contract(self):
         from static_security import is_forbidden_static_path
         for path in ("/.git/config", "/_archive/legacy/README.md", "/server.py", "/data/launcher.json"):

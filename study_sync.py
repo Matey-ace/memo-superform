@@ -309,6 +309,24 @@ class SlidingWindowRateLimiter:
                 raise SyncCancelled("sync cancelled")
 
 
+class ProfileRateLimiter:
+    """按本机稳定档案隔离的开放平台滑动窗口限流器。"""
+
+    def __init__(self, limits: Sequence[RateLimit] = SlidingWindowRateLimiter.DEFAULT_LIMITS) -> None:
+        self._limits = tuple(limits)
+        self._limiters: dict[str, SlidingWindowRateLimiter] = {}
+        self._lock = threading.RLock()
+
+    def acquire(self, cancel_event: threading.Event, profile_id: Optional[str] = None) -> None:
+        key = str(profile_id or "default").strip().lower() or "default"
+        with self._lock:
+            limiter = self._limiters.get(key)
+            if limiter is None:
+                limiter = SlidingWindowRateLimiter(self._limits)
+                self._limiters[key] = limiter
+        limiter.acquire(cancel_event)
+
+
 class MaimemoStudyClient:
     """带身份验证和有限重试的墨墨学习记录客户端。"""
 
@@ -316,7 +334,7 @@ class MaimemoStudyClient:
         self,
         transport: Optional[HTTPTransport] = None,
         *,
-        limiter: Optional[SlidingWindowRateLimiter] = None,
+        limiter: Optional[Any] = None,
         endpoint: str = MAIMEMO_OPEN_API,
         today_items_endpoint: str = MAIMEMO_TODAY_ITEMS_API,
         timeout: float = 30.0,
@@ -331,8 +349,11 @@ class MaimemoStudyClient:
         self.max_retries = max_retries
         self.random_fn = random_fn
 
-    def count(self, token: str, cancel_event: threading.Event, on_retry: Optional[Callable[[str], None]] = None) -> int:
-        data = self.query(token, {"as_count": True}, cancel_event, on_retry=on_retry)
+    def count(
+        self, token: str, cancel_event: threading.Event, on_retry: Optional[Callable[[str], None]] = None,
+        *, profile_id: Optional[str] = None,
+    ) -> int:
+        data = self.query(token, {"as_count": True}, cancel_event, on_retry=on_retry, profile_id=profile_id)
         try:
             return max(0, int(data.get("count", 0)))
         except (TypeError, ValueError):
@@ -345,8 +366,9 @@ class MaimemoStudyClient:
         cancel_event: threading.Event,
         *,
         on_retry: Optional[Callable[[str], None]] = None,
+        profile_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
-        data = self.query(token, params, cancel_event, on_retry=on_retry)
+        data = self.query(token, params, cancel_event, on_retry=on_retry, profile_id=profile_id)
         records = data.get("records", [])
         if not isinstance(records, list):
             raise DataIncompleteError("remote records is not an array")
@@ -360,6 +382,7 @@ class MaimemoStudyClient:
         cancel_event: threading.Event,
         *,
         on_retry: Optional[Callable[[str], None]] = None,
+        profile_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """读取今日精简条目列表，绝不用完整查询代替。
 
@@ -375,6 +398,7 @@ class MaimemoStudyClient:
             cancel_event,
             on_retry=on_retry,
             endpoint=self.today_items_endpoint,
+            profile_id=profile_id,
         )
         items = data.get("today_items", [])
         if not isinstance(items, list):
@@ -397,6 +421,7 @@ class MaimemoStudyClient:
         *,
         on_retry: Optional[Callable[[str], None]] = None,
         endpoint: Optional[str] = None,
+        profile_id: Optional[str] = None,
     ) -> Mapping[str, Any]:
         last_error: Optional[Exception] = None
         headers = {
@@ -407,7 +432,11 @@ class MaimemoStudyClient:
         for attempt in range(self.max_retries + 1):
             if cancel_event.is_set():
                 raise SyncCancelled("sync cancelled")
-            self.limiter.acquire(cancel_event)
+            try:
+                self.limiter.acquire(cancel_event, profile_id)
+            except TypeError:
+                # 兼容外部集成传入的旧单桶 limiter。
+                self.limiter.acquire(cancel_event)
             try:
                 response = self.transport.post_json(endpoint or self.endpoint, params, headers, self.timeout)
             except (OSError, TimeoutError, urllib.error.URLError) as exc:
@@ -686,6 +715,13 @@ class StudySyncService:
         self.activity_window_days = max(1, int(activity_window_days))
         self.today_probe_interval = today_probe_interval
 
+    @staticmethod
+    def _normalise_profile_id(value: str) -> str:
+        text = str(value or "").strip().lower()
+        if len(text) == 64 and all(char in "0123456789abcdef" for char in text):
+            return text
+        return token_profile_id(text)
+
     def run(
         self,
         token: str,
@@ -695,10 +731,11 @@ class StudySyncService:
         cancel_event: Optional[threading.Event] = None,
         status: Optional[SyncStatus] = None,
         seed_records: Optional[Sequence[Mapping[str, Any]]] = None,
+        profile_id: Optional[str] = None,
     ) -> dict[str, Any]:
         if mode not in {"incremental", "bootstrap", "reconcile"}:
             raise ValueError("mode must be incremental, bootstrap, or reconcile")
-        profile_id = token_profile_id(token)
+        profile_id = self._normalise_profile_id(profile_id or token)
         cancel_event = cancel_event or threading.Event()
         status = status or SyncStatus(uuid.uuid4().hex, profile_id, mode, reason)
         self.repository.ensure_sync_profile(profile_id)
@@ -765,7 +802,9 @@ class StudySyncService:
                 status.update(phase="seed_untrusted")
 
         status.update(phase="counting")
-        remote_total = self.client.count(token, cancel_event, on_retry=lambda text: status.update(phase=text))
+        remote_total = self.client.count(
+            token, cancel_event, on_retry=lambda text: status.update(phase=text), profile_id=profile_id
+        )
         if seed_is_trusted and len(clean_seed) == remote_total:
             # 唯一快速初始化路径：结构有效的缓存状态与远程数量完全一致，因此无需
             # 再请求包括 2020–2022 在内的历史区间。
@@ -821,7 +860,9 @@ class StudySyncService:
         status: SyncStatus,
     ) -> None:
         status.update(phase="counting")
-        remote_total = self.client.count(token, cancel_event, on_retry=lambda text: status.update(phase=text))
+        remote_total = self.client.count(
+            token, cancel_event, on_retry=lambda text: status.update(phase=text), profile_id=profile_id
+        )
         status.update(phase="reconciling_ranges", progress_total=remote_total, progress_current=0)
         seen: set[str] = set()
         self._fetch_range_tree(
@@ -872,7 +913,9 @@ class StudySyncService:
             return
 
         status.update(phase="checking")
-        remote_total = self.client.count(token, cancel_event, on_retry=lambda text: status.update(phase=text))
+        remote_total = self.client.count(
+            token, cancel_event, on_retry=lambda text: status.update(phase=text), profile_id=profile_id
+        )
         previous_total = _optional_int(state.get("last_remote_count"))
         today = beijing_today(self.now())
         need_probe = self._needs_today_probe(state, today, reason)
@@ -893,6 +936,7 @@ class StudySyncService:
                 token,
                 cancel_event,
                 on_retry=lambda text: status.update(phase=text),
+                profile_id=profile_id,
             )
             item_hashes = self._get_today_item_hashes(profile_id, today, [item["voc_id"] for item in today_items])
             changed_items = [item for item in today_items if item_hashes.get(item["voc_id"]) != item["content_hash"]]
@@ -905,7 +949,7 @@ class StudySyncService:
                 if cancel_event.is_set():
                     raise SyncCancelled("sync cancelled")
                 records = self.client.records(token, {"voc_ids": batch, "limit": MAX_QUERY_RECORDS}, cancel_event,
-                                              on_retry=lambda text: status.update(phase=text))
+                                              on_retry=lambda text: status.update(phase=text), profile_id=profile_id)
                 returned_ids = {item["voc_id"] for item in records}
                 refreshed_ids.update(returned_ids)
                 missing_ids = set(batch) - returned_ids
@@ -928,7 +972,7 @@ class StudySyncService:
         if previous_total is not None and remote_total > previous_total:
             status.update(phase="scanning_active_window")
             end = today + timedelta(days=self.activity_window_days)
-            activity_records = self._fetch_date_range(token, today, end, cancel_event, status)
+            activity_records = self._fetch_date_range(profile_id, token, today, end, cancel_event, status)
             known = self.repository.get_study_record_hashes(profile_id, [item["voc_id"] for item in activity_records])
             for voc_id, value in known.items():
                 existing_at_start.setdefault(voc_id, value)
@@ -1031,7 +1075,7 @@ class StudySyncService:
         if depth > 32:
             self.repository.record_sync_interval(profile_id, start_day, end_day, complete=False, source=source)
             raise DataIncompleteError("date range split depth exceeded")
-        records = self._fetch_date_range(token, start_day, end_day, cancel_event, status)
+        records = self._fetch_date_range(profile_id, token, start_day, end_day, cancel_event, status)
         if len(records) >= MAX_QUERY_RECORDS:
             if start_day == end_day:
                 self.repository.record_sync_interval(profile_id, start_day, end_day, complete=False, source=source)
@@ -1049,6 +1093,7 @@ class StudySyncService:
 
     def _fetch_date_range(
         self,
+        profile_id: str,
         token: str,
         start_day: date,
         end_day: date,
@@ -1063,6 +1108,7 @@ class StudySyncService:
             },
             cancel_event,
             on_retry=lambda text: status.update(phase=text),
+            profile_id=profile_id,
         )
 
     def _apply_if_changed(self, profile_id: str, records: Sequence[Mapping[str, Any]], status: SyncStatus) -> None:
@@ -1173,8 +1219,12 @@ class SyncManager:
         *,
         reason: str = "manual",
         seed_records: Optional[Sequence[Mapping[str, Any]]] = None,
+        profile_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        profile_id = token_profile_id(token)
+        # OAuth 的 access token 会定期刷新；任务与 SQLite 档案必须使用 OIDC
+        # subject 派生的稳定 ID，而不是短期 token。本参数也让旧手动 Token
+        # 调用保持原来的 hash 行为。
+        profile_id = self._resolve_profile(profile_id or token)
         with self._lock:
             current = self._tasks.get(profile_id)
             if current and current.thread.is_alive():
@@ -1208,6 +1258,7 @@ class SyncManager:
             cancel_event=cancel_event,
             status=status,
             seed_records=seed_records,
+            profile_id=profile_id,
         )
         with self._lock:
             self._last_status[profile_id] = result
@@ -1267,7 +1318,7 @@ class SyncManager:
 __all__ = [
     "BEIJING_TZ", "DEFAULT_BOOTSTRAP_END", "DEFAULT_BOOTSTRAP_START", "HTTPResponse",
     "MAIMEMO_OPEN_API", "MAX_QUERY_RECORDS", "DataIncompleteError", "DbStudySyncRepository",
-    "MaimemoStudyClient", "RateLimit", "RemoteAPIError", "RepositoryContractError",
+    "MaimemoStudyClient", "ProfileRateLimiter", "RateLimit", "RemoteAPIError", "RepositoryContractError",
     "SlidingWindowRateLimiter", "StudySyncError", "StudySyncService", "SyncCancelled",
     "SyncManager", "SyncStatus", "UrllibJSONTransport", "beijing_today", "normalise_record",
     "record_fingerprint", "token_profile_id",

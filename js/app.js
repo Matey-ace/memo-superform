@@ -19,7 +19,7 @@ const App = (function() {
     let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
     if (!VALID_REFRESH_INTERVALS.includes(autoRefreshInterval)) autoRefreshInterval = 10;
 
-    function init() {
+    async function init() {
         setupSettingsPanel();
         setupModeSettings();
         if (window.AppUpdate && typeof window.AppUpdate.init === 'function') window.AppUpdate.init();
@@ -34,6 +34,11 @@ const App = (function() {
         StudySyncUI.init({ onRecordsChanged: handleStudyRecordsChanged });
         setupAutoRefresh();
         
+        try {
+            await MaimemoAPI.bootstrap();
+        } catch (e) {
+            console.warn('墨墨账号初始化失败:', e.message);
+        }
         checkProxyServer().then(online => {
             if (online && MaimemoAPI.hasToken()) {
                 hideWelcome();
@@ -155,8 +160,6 @@ const App = (function() {
             if (e.key === 'Escape' && panel.classList.contains('show')) closeSettings();
         });
         
-        const token = MaimemoAPI.getToken();
-        if (token) document.getElementById('tokenInput').value = token;
         const aiConfig = AIAPI.getConfig();
         document.getElementById('aiProviderSelect').value = aiConfig.provider;
         document.getElementById('aiEndpointInput').value = aiConfig.endpoint;
@@ -295,30 +298,118 @@ const App = (function() {
         });
         syncProviderFields();
         
-        document.getElementById('testTokenBtn').addEventListener('click', async function() {
-            const testToken = document.getElementById('tokenInput').value.trim();
-            const statusEl = document.getElementById('tokenStatus');
-            if (!testToken) { statusEl.textContent = '请输入 Token'; statusEl.className = 'status-text error'; return; }
-            if (!proxyOnline) { statusEl.textContent = '代理服务器未启动'; statusEl.className = 'status-text error'; return; }
-            
-            statusEl.textContent = '测试中...'; statusEl.className = 'status-text';
+        const maimemoStatus = document.getElementById('maimemoAccountStatus');
+        const maimemoConnectBtn = document.getElementById('maimemoConnectBtn');
+        const maimemoReconnectBtn = document.getElementById('maimemoReconnectBtn');
+        const maimemoDisconnectBtn = document.getElementById('maimemoDisconnectBtn');
+        const maimemoManualSaveBtn = document.getElementById('maimemoManualSaveBtn');
+        const maimemoManualToken = document.getElementById('maimemoManualToken');
+        const maimemoDeleteDataBtn = document.getElementById('maimemoDeleteDataBtn');
+        let maimemoPollTimer = null;
+
+        function stopMaimemoPolling() {
+            if (maimemoPollTimer) { clearInterval(maimemoPollTimer); maimemoPollTimer = null; }
+        }
+        async function refreshMaimemoAccount() {
+            try {
+                const wasConnected = MaimemoAPI.hasToken();
+                const status = await MaimemoAPI.refreshConnection();
+                const connected = Boolean(status.connected);
+                if (connected) {
+                    const label = status.mode === 'oauth'
+                        ? ('✓ 已连接' + (status.display_name ? ' · ' + status.display_name : ''))
+                        : '✓ 已连接 · 手动 Token';
+                    maimemoStatus.textContent = label;
+                    maimemoStatus.className = 'status-text success';
+                    maimemoConnectBtn.style.display = 'none';
+                    maimemoReconnectBtn.style.display = status.configured ? '' : 'none';
+                    maimemoDisconnectBtn.style.display = '';
+                    maimemoDeleteDataBtn.style.display = '';
+                    stopMaimemoPolling();
+                    // OAuth 回调在外部浏览器完成后只会更新本机凭据。这里检测到
+                    // 状态转换后主动刷新仪表盘，不要求用户再手动保存设置。
+                    if (!wasConnected) {
+                        resetStudyDataForProfileChange();
+                        hideWelcome();
+                        loadAllData();
+                    }
+                } else {
+                    maimemoStatus.textContent = status.error ? ('✗ ' + status.error)
+                        : (status.pending ? '请在浏览器中完成墨墨授权...' : '尚未连接墨墨账号');
+                    maimemoStatus.className = status.error ? 'status-text error' : 'hint';
+                    maimemoConnectBtn.style.display = status.configured ? '' : 'none';
+                    maimemoReconnectBtn.style.display = 'none';
+                    maimemoDisconnectBtn.style.display = 'none';
+                    maimemoDeleteDataBtn.style.display = 'none';
+                    if (!status.configured && !status.pending) {
+                        maimemoStatus.textContent = '一键授权将在开放平台 client_id 配置后可用；可先使用下方手动 Token。';
+                    }
+                }
+                return status;
+            } catch (e) {
+                maimemoStatus.textContent = '✗ ' + e.message;
+                maimemoStatus.className = 'status-text error';
+                return null;
+            }
+        }
+        async function startMaimemoLogin() {
+            try {
+                const result = await MaimemoAPI.connect();
+                maimemoStatus.textContent = '正在打开浏览器授权...';
+                maimemoStatus.className = 'hint';
+                if (!result.opened && result.authorization_url) window.open(result.authorization_url, '_blank', 'noopener');
+                stopMaimemoPolling();
+                maimemoPollTimer = setInterval(refreshMaimemoAccount, 1500);
+            } catch (e) {
+                maimemoStatus.textContent = '✗ ' + e.message;
+                maimemoStatus.className = 'status-text error';
+            }
+        }
+        maimemoConnectBtn.addEventListener('click', startMaimemoLogin);
+        maimemoReconnectBtn.addEventListener('click', startMaimemoLogin);
+        maimemoDisconnectBtn.addEventListener('click', async function() {
+            try {
+                await MaimemoAPI.disconnect();
+                resetStudyDataForProfileChange();
+                await refreshMaimemoAccount();
+                showWelcome();
+            } catch (e) {
+                maimemoStatus.textContent = '✗ ' + e.message;
+                maimemoStatus.className = 'status-text error';
+            }
+        });
+        maimemoManualSaveBtn.addEventListener('click', async function() {
+            const value = maimemoManualToken.value.trim();
+            if (!value) { maimemoStatus.textContent = '请输入 Token'; maimemoStatus.className = 'status-text error'; return; }
             this.disabled = true;
             try {
-                const result = await MaimemoAPI.testToken(testToken);
-                if (result.success) {
-                    const p = result.data.progress || result.data;
-                    statusEl.textContent = '✓ 连接成功！今日进度: ' + p.finished + '/' + p.total;
-                    statusEl.className = 'status-text success';
-                } else {
-                    statusEl.textContent = '✗ ' + result.error;
-                    statusEl.className = 'status-text error';
-                }
+                await MaimemoAPI.saveManualToken(value);
+                maimemoManualToken.value = '';
+                const progress = await MaimemoAPI.getStudyProgress(false);
+                const p = progress.progress || progress;
+                maimemoStatus.textContent = '✓ Token 已保存并连接成功' + (p && p.total !== undefined ? (' · 今日 ' + (p.finished || 0) + '/' + p.total) : '');
+                maimemoStatus.className = 'status-text success';
+                resetStudyDataForProfileChange();
+                await refreshMaimemoAccount();
+                hideWelcome();
+                loadAllData();
             } catch (e) {
-                statusEl.textContent = '✗ ' + e.message;
-                statusEl.className = 'status-text error';
+                maimemoStatus.textContent = '✗ ' + e.message;
+                maimemoStatus.className = 'status-text error';
             }
             this.disabled = false;
         });
+        maimemoDeleteDataBtn.addEventListener('click', async function() {
+            if (!confirm('删除当前墨墨账号在本机保存的学习记录、同步状态和统计？此操作不会删除墨墨云端数据。')) return;
+            try {
+                await MaimemoAPI.deleteLocalData();
+                resetStudyDataForProfileChange();
+                alert('本机墨墨学习数据已删除。');
+            } catch (e) {
+                alert('删除失败：' + e.message);
+            }
+        });
+        refreshMaimemoAccount();
         
         document.getElementById('clearCacheBtn').addEventListener('click', function() {
             const count = MaimemoAPI.clearCache();
@@ -328,10 +419,7 @@ const App = (function() {
         });
         
         document.getElementById('saveSettingsBtn').addEventListener('click', function() {
-            const token = document.getElementById('tokenInput').value.trim();
-            const oldToken = MaimemoAPI.getToken();
             const nextStyle = uiStyleSelect ? uiStyleSelect.value : window.MemoUIStyle.name;
-            MaimemoAPI.setToken(token);
             AIAPI.setConfig({
                 provider: document.getElementById('aiProviderSelect').value,
                 endpoint: document.getElementById('aiEndpointInput').value.trim(),
@@ -348,13 +436,8 @@ const App = (function() {
                 return;
             }
             closeSettings();
-            if (token) {
+            if (MaimemoAPI.hasToken()) {
                 hideWelcome();
-                if (token !== oldToken) {
-                    resetStudyDataForProfileChange();
-                    StudySyncUI.refreshStatus();
-                    loadAllData();
-                }
             } else {
                 showWelcome();
             }

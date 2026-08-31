@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 from study_sync import (  # noqa: E402
     HTTPResponse,
     MaimemoStudyClient,
+    ProfileRateLimiter,
     StudySyncService,
     SyncManager,
     beijing_today,
@@ -171,6 +172,14 @@ def direct_client(handler):
 
 
 class StudySyncTests(unittest.TestCase):
+    def test_profile_rate_limiter_isolated_by_stable_profile_key(self):
+        limiter = ProfileRateLimiter()
+        limiter.acquire(threading.Event(), "a" * 64)
+        limiter.acquire(threading.Event(), "b" * 64)
+        self.assertEqual({"a" * 64, "b" * 64}, set(limiter._limiters))
+        self.assertEqual(1, len(limiter._limiters["a" * 64]._timestamps))
+        self.assertEqual(1, len(limiter._limiters["b" * 64]._timestamps))
+
     def service(self, repo, handler, *, start=None, end=None):
         return StudySyncService(
             repo,

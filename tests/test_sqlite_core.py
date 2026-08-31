@@ -141,6 +141,16 @@ class SQLiteCoreTests(unittest.TestCase):
         self.assertEqual(2, db.get_records(self.profile)[0]["study_count"])
         self.assertTrue(any(payload.get("voc_ids") == ["old"] for _url, payload in transport.calls))
 
+    def test_delete_profile_learning_data_keeps_local_profile_preferences(self):
+        db.upsert_study_records(self.profile, [self.record("delete-me")])
+        db.save_snapshot(db.get_records(self.profile), self.profile)
+        db.set_sync_state(self.profile, bootstrap_complete=True)
+        db.set_live2d_preference(self.profile, companion_enabled=True)
+        deleted = db.delete_profile_learning_data(self.profile)
+        self.assertGreaterEqual(deleted["study_records"], 1)
+        self.assertEqual([], db.get_records(self.profile))
+        self.assertTrue(db.get_live2d_preference(self.profile)["companion_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
