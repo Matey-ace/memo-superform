@@ -103,6 +103,14 @@ class LocalApiMixin:
                 "data_dir": DATA_DIR,
             })
 
+        if path in ("/api/app/update-status", "/api/app/update/check"):
+            manager = globals().get("UPDATE_MANAGER")
+            if manager is None:
+                return self._send_json(503, {"error": "更新服务未就绪"})
+            query = parse_qs(parsed.query)
+            force = query.get("force", ["0"])[0] == "1"
+            return self._send_json(200, manager.get_status(force=force))
+
         if path == "/api/tts/status":
             import tts
             status = tts.get_status(TTS_PACK_DIR, DATA_DIR)
@@ -365,6 +373,40 @@ class LocalApiMixin:
                 if not ok:
                     return self._send_json(400, {"error": msg})
                 return self._send_json(200, {"ok": True, "mode": mode, "relaunching": True})
+
+            if path == "/api/app/update/download":
+                manager = globals().get("UPDATE_MANAGER")
+                if manager is None:
+                    return self._send_json(503, {"error": "更新服务未就绪"})
+                try:
+                    state = manager.start_download()
+                    code = 202 if state.get("state") == "downloading" else 200
+                    return self._send_json(code, {"ok": True, "download": state})
+                except Exception as exc:
+                    return self._send_json(400, {"error": str(exc)})
+
+            if path == "/api/app/update/apply":
+                manager = globals().get("UPDATE_MANAGER")
+                apply_update = globals().get("_apply_update")
+                if manager is None or not callable(apply_update):
+                    return self._send_json(503, {"error": "更新服务未就绪"})
+                try:
+                    staged = manager.prepare_apply()
+                    # 更新前先结束常驻的 GPT-SoVITS worker。它本身不会持有主 EXE，
+                    # 但可避免更新重启后遗留一份旧角色/旧模型的后台推理进程。
+                    try:
+                        import tts
+                        tts.shutdown(TTS_PACK_DIR, DATA_DIR)
+                    except Exception:
+                        pass
+                    ok, msg = apply_update(staged)
+                    if not ok:
+                        manager.apply_failed(msg)
+                        return self._send_json(400, {"error": msg})
+                    return self._send_json(200, {"ok": True, "installing": True, "message": msg})
+                except Exception as exc:
+                    manager.apply_failed(str(exc))
+                    return self._send_json(400, {"error": str(exc)})
 
             if path == "/api/codex/login":
                 try:

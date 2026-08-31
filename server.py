@@ -28,6 +28,8 @@ import traceback
 from urllib.parse import urlparse
 
 import codex_auth
+from app_update import UpdateManager
+from build_info import BUILD_VERSION
 from live2d_service import Live2DService
 from app_api import LocalApiMixin, configure_local_api
 from static_security import is_forbidden_static_path
@@ -67,6 +69,7 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
 
 CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
 LIVE2D_SERVICE = Live2DService(DATA_DIR)
+UPDATE_MANAGER = UpdateManager(DATA_DIR)
 
 from memo_proxy import MAIMEMO_BASE, resolve_web_route
 
@@ -125,6 +128,14 @@ class MemoThreadingTCPServer(socketserver.ThreadingTCPServer):
 class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
+
+    def end_headers(self):
+        # 自动更新后，WebView 可能仍保存旧的 index/JS/CSS。应用资源完全在本地，
+        # 因此优先保证新 EXE 的页面和更新逻辑立刻生效，而不是复用陈旧的静态缓存。
+        if getattr(self, "_disable_local_asset_cache", False):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+        super().end_headers()
 
     def _rewrite_content(self, body, content_type, proxy_prefix=None):
         """把内容中的墨墨域名 URL 重写为本地代理路径。
@@ -579,7 +590,11 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self.send_error(404, "Not Found")
             return
 
-        super().do_GET()
+        self._disable_local_asset_cache = path.lower().endswith((".html", ".js", ".css"))
+        try:
+            super().do_GET()
+        finally:
+            self._disable_local_asset_cache = False
 
     def do_HEAD(self):
         """HEAD 与 GET 同等做 Host 校验与静态安全过滤，避免绕过白名单。"""
@@ -590,7 +605,11 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         if self._is_forbidden_static_path(path):
             self.send_error(404, "Not Found")
             return
-        super().do_HEAD()
+        self._disable_local_asset_cache = path.lower().endswith((".html", ".js", ".css"))
+        try:
+            super().do_HEAD()
+        finally:
+            self._disable_local_asset_cache = False
 
     def do_POST(self):
         if not self._is_allowed_host():
@@ -769,6 +788,7 @@ def _current_mode():
 
 
 _relaunch_handler = None
+_update_handler = None
 
 
 def set_relaunch_handler(handler):
@@ -779,6 +799,16 @@ def set_relaunch_handler(handler):
     """
     global _relaunch_handler
     _relaunch_handler = handler
+
+
+def set_update_handler(handler):
+    """由 launcher 注册已校验更新文件的交接处理函数。
+
+    server 不能直接 import launcher：打包入口以 ``__main__`` 运行时会产生另一个
+    模块实例，进而失去单实例锁和托盘生命周期。与重启逻辑一样显式注入回调。
+    """
+    global _update_handler
+    _update_handler = handler
 
 
 def _write_launcher_config(mode, remember):
@@ -803,13 +833,25 @@ def _relaunch_app(mode):
     return True, "正在重启..."
 
 
+def _apply_update(staged):
+    """把已由 UpdateManager 二次校验的候选 EXE 交给 launcher。"""
+    if _update_handler is None:
+        return False, "更新处理函数未注册（请通过 launcher.py 启动）"
+    try:
+        _update_handler(staged, _current_mode())
+    except Exception as exc:
+        return False, "更新器启动失败：" + str(exc)
+    return True, "更新器已启动，应用即将重启安装更新…"
+
+
 configure_local_api(
     CODEX_OAUTH=CODEX_OAUTH, DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
     DB_READY=DB_READY, db=globals().get("db"), recommender=globals().get("recommender"),
     STUDY_SYNC_SERVICE=STUDY_SYNC_SERVICE, STUDY_SYNC_MANAGER=STUDY_SYNC_MANAGER,
     LIVE2D_SERVICE=LIVE2D_SERVICE,
+    UPDATE_MANAGER=UPDATE_MANAGER,
     _current_mode=_current_mode, _write_launcher_config=_write_launcher_config,
-    _relaunch_app=_relaunch_app,
+    _relaunch_app=_relaunch_app, _apply_update=_apply_update,
 )
 
 
@@ -818,7 +860,9 @@ def start_server(open_browser=True, block=True):
     for port in [PORT, 8889, 8890, 3000, 5000]:
         try:
             httpd = MemoThreadingTCPServer(("127.0.0.1", port), MemoProxyHandler)
-            url = "http://localhost:%d/index.html" % port
+            # 版本参数与 no-store 响应双保险：升级后桌面 WebView 和普通浏览器均会
+            # 重新获取新 EXE 内的页面，而不是继续运行缓存中的旧脚本。
+            url = "http://localhost:%d/index.html?v=%s" % (port, BUILD_VERSION)
             print("")
             print("  ========================================")
             print("  Memo Superform proxy server started")

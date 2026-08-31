@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
-    <script src="js/ui-style.js?v=20260830-v078-full-runtime"></script>
+    <script src="js/ui-style.js?v=20260831-auto-update"></script>
     <script src="vendor/echarts.min.js?v=40"></script>
 </head>
 <body>
@@ -352,23 +352,41 @@
                     <span id="modeStatus" class="status-text"></span>
                 </div>
 
+                <div class="setting-group app-update-settings">
+                    <h3>软件更新</h3>
+                    <div class="setting-item">
+                        <label>当前版本</label>
+                        <span id="appUpdateCurrentVersion" class="hint">正在读取…</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>更新状态</label>
+                        <span id="appUpdateStatus" class="hint" role="status" aria-live="polite">启动后自动检查更新</span>
+                    </div>
+                    <button id="appUpdateCheckBtn" type="button" class="test-btn">检查更新</button>
+                    <button id="appUpdateInstallBtn" type="button" class="test-btn" hidden>下载并安装</button>
+                    <p id="appUpdateHint" class="hint">自动更新只读取 Memo Superform 官方 GitHub Release；下载完成后会校验 SHA-256，再重启应用安装。源码模式或不可写安装目录会提供下载页。</p>
+                </div>
+
                 <div class="setting-group">
                     <h3>语音功能（GPT-SoVITS 资源包）</h3>
                     <div class="setting-item">
                         <label>状态</label>
                         <span id="ttsStatusText" class="hint">检测中...</span>
                     </div>
-                    <div class="setting-item tts-pack-mount">
-                        <label>快速挂载语音包</label>
-                        <div id="ttsPackMountDropzone" class="tts-pack-mount-dropzone" role="button" tabindex="0" aria-controls="ttsPackMountInput" aria-describedby="ttsPackMountHint ttsPackMountStatus">
-                            <strong>将语音包 ZIP 拖到这里</strong>
-                            <span>或点击此区域选择文件</span>
+                    <details class="tts-settings-disclosure tts-pack-disclosure">
+                        <summary><span>导入语音包</span><small>拖入 ZIP，自动挂载并检查缺项</small></summary>
+                        <div class="tts-settings-disclosure-body setting-item tts-pack-mount">
+                            <label>快速挂载语音包</label>
+                            <div id="ttsPackMountDropzone" class="tts-pack-mount-dropzone" role="button" tabindex="0" aria-controls="ttsPackMountInput" aria-describedby="ttsPackMountHint ttsPackMountStatus">
+                                <strong>将语音包 ZIP 拖到这里</strong>
+                                <span>或点击此区域选择文件</span>
+                            </div>
+                            <input id="ttsPackMountInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
+                            <div class="tts-pack-mount-actions"><button id="ttsPackMountBrowseBtn" type="button" class="test-btn">选择语音包 ZIP</button><span id="ttsPackMountStatus" class="hint" role="status" aria-live="polite"></span></div>
+                            <p id="ttsPackMountHint" class="hint">ZIP 至少需包含有效的 <code>pack.json</code>，可直接压缩整个 <code>tts_pack</code> 文件夹。即使暂缺 <code>.venv311</code>、<code>tts_engine</code> 或角色资料，程序也会正常挂载并在下方列出准确缺项，方便你后续补齐；挂载成功后旧包会被安全替换，语音开关会关闭。</p>
+                            <p id="ttsPackMountMissing" class="tts-pack-mount-missing" hidden aria-live="polite"></p>
                         </div>
-                        <input id="ttsPackMountInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
-                        <div class="tts-pack-mount-actions"><button id="ttsPackMountBrowseBtn" type="button" class="test-btn">选择语音包 ZIP</button><span id="ttsPackMountStatus" class="hint" role="status" aria-live="polite"></span></div>
-                        <p id="ttsPackMountHint" class="hint">ZIP 至少需包含有效的 <code>pack.json</code>，可直接压缩整个 <code>tts_pack</code> 文件夹。即使暂缺 <code>.venv311</code>、<code>tts_engine</code> 或角色资料，程序也会正常挂载并在下方列出准确缺项，方便你后续补齐；挂载成功后旧包会被安全替换，语音开关会关闭。</p>
-                        <p id="ttsPackMountMissing" class="tts-pack-mount-missing" hidden aria-live="polite"></p>
-                    </div>
+                    </details>
                     <div class="setting-item">
                         <label>选中角色（编辑 / 上传目标）</label>
                         <select id="ttsVoiceSelect">
@@ -382,57 +400,38 @@
                         <div id="ttsRoleEditor" class="tts-role-editor" hidden>
                             <input id="ttsRoleId" type="hidden">
                             <p id="ttsRoleEditorContext" class="hint" role="status"></p>
-                            <label>角色名称<input id="ttsRoleName" type="text" maxlength="64" placeholder="例如：千早爱音"></label>
-                            <label>绑定 Live2D<select id="ttsRoleLive2D"><option value="">请选择已安装模型</option></select></label>
-                            <label>参考语言<select id="ttsRoleLanguage"><option value="">请选择语言</option><option value="中文">中文</option><option value="日文">日文</option><option value="英文">英文</option><option value="粤语">粤语</option><option value="韩文">韩文</option><option value="中英混合">中英混合</option><option value="日英混合">日英混合</option><option value="多语种混合">多语种混合</option></select></label>
-                            <label>参考音频对应文本<textarea id="ttsRoleReferenceText" rows="3" maxlength="1000" placeholder="必须逐字对应参考音频内容"></textarea></label>
-                            <p id="ttsRoleFileStatus" class="hint">不选择新文件时，会保留此角色已有资料。</p>
-                            <div class="tts-role-files"><label>GPT 模型 (.ckpt)<input id="ttsRoleGptFile" type="file" accept=".ckpt"></label><label>SoVITS 模型 (.pth)<input id="ttsRoleSovitsFile" type="file" accept=".pth"></label><label>兼容索引（可选 .index，当前引擎不参与合成）<input id="ttsRoleIndexFile" type="file" accept=".index"></label><label>参考音频<input id="ttsRoleAudioFile" type="file" accept=".wav,.mp3,.flac,.ogg"></label></div>
-                            <p class="hint">选择新文件只会替换正在编辑角色的同类资料；其他角色不受影响。若它当前已启用，下一次合成会使用新资料。</p>
+                            <section class="tts-role-editor-section tts-role-dossier" aria-labelledby="ttsRoleDossierTitle">
+                                <div class="tts-role-section-heading">
+                                    <div><h4 id="ttsRoleDossierTitle">角色档案</h4><p>人格会跟随这份角色资料包切换，并同时影响陪伴回复与朗读。</p></div>
+                                    <span class="tts-role-file-badge">persona.json</span>
+                                </div>
+                                <p class="tts-role-schema-note">支持导入或导出固定的中文 JSON 字段：角色、语气、背景、禁忌、示例。</p>
+                                <div class="tts-role-profile-grid">
+                                    <label class="tts-role-profile-field tts-role-profile-name"><span>角色</span><input id="ttsRolePersonaName" type="text" maxlength="64" placeholder="例如：千早爱音" aria-describedby="ttsRolePersonaNameCount" required><small id="ttsRolePersonaNameCount" class="tts-role-counter">0 / 64</small></label>
+                                    <label class="tts-role-profile-field tts-role-profile-wide"><span>背景</span><textarea id="ttsRolePersonaBackground" rows="5" maxlength="8000" placeholder="角色经历、关系、在陪伴学习中的定位……" aria-describedby="ttsRolePersonaBackgroundCount"></textarea><small id="ttsRolePersonaBackgroundCount" class="tts-role-counter">0 / 8000</small></label>
+                                    <label class="tts-role-profile-field"><span>语气</span><textarea id="ttsRolePersonaTone" rows="3" maxlength="2000" placeholder="例如：明快、真诚，偶尔有一点得意。" aria-describedby="ttsRolePersonaToneCount"></textarea><small id="ttsRolePersonaToneCount" class="tts-role-counter">0 / 2000</small></label>
+                                    <label class="tts-role-profile-field"><span>禁忌</span><textarea id="ttsRolePersonaAvoid" rows="3" maxlength="2000" placeholder="不要出现的语气、关系或表达。" aria-describedby="ttsRolePersonaAvoidCount"></textarea><small id="ttsRolePersonaAvoidCount" class="tts-role-counter">0 / 2000</small></label>
+                                    <label class="tts-role-profile-field tts-role-profile-wide"><span>示例（每行一条）</span><textarea id="ttsRolePersonaExamples" rows="4" maxlength="2000" placeholder="这题答得很可以嘛！&#10;下一题也稳稳来。" aria-describedby="ttsRolePersonaExamplesCount"></textarea><small id="ttsRolePersonaExamplesCount" class="tts-role-counter">0 / 2000</small></label>
+                                </div>
+                                <div class="tts-role-persona-footer"><p id="ttsRolePersonaTotalCount" class="tts-role-persona-total" aria-live="polite">角色资料共 0 / 12000 字</p><p id="ttsRolePersonaStatus" class="hint" role="status" aria-live="polite"></p></div>
+                                <div class="tts-role-persona-actions"><input id="ttsRolePersonaImportInput" type="file" accept=".json,application/json" hidden><button id="ttsRolePersonaImportBtn" type="button" class="test-btn">导入人设 JSON</button><button id="ttsRolePersonaExportBtn" type="button" class="test-btn">导出人设 JSON</button><button id="ttsRolePersonaResetBtn" type="button" class="danger-btn">恢复默认</button></div>
+                            </section>
+                            <section class="tts-role-editor-section tts-role-bindings" aria-labelledby="ttsRoleBindingsTitle">
+                                <div class="tts-role-section-heading"><div><h4 id="ttsRoleBindingsTitle">形象、音色与参考资料</h4><p>绑定的 Live2D、模型与参考音频只属于当前角色，不会与其他角色混用。</p></div></div>
+                                <div class="tts-role-binding-grid">
+                                    <label>绑定 Live2D<select id="ttsRoleLive2D"><option value="">请选择已安装模型</option></select></label>
+                                    <label>参考语言<select id="ttsRoleLanguage"><option value="">请选择语言</option><option value="中文">中文</option><option value="日文">日文</option><option value="英文">英文</option><option value="粤语">粤语</option><option value="韩文">韩文</option><option value="中英混合">中英混合</option><option value="日英混合">日英混合</option><option value="多语种混合">多语种混合</option></select></label>
+                                    <label class="tts-role-binding-wide">参考音频对应文本<textarea id="ttsRoleReferenceText" rows="3" maxlength="1000" placeholder="必须逐字对应参考音频内容"></textarea></label>
+                                </div>
+                                <p id="ttsRoleFileStatus" class="hint">不选择新文件时，会保留此角色已有资料。</p>
+                                <div class="tts-role-files"><label>GPT 模型 (.ckpt)<input id="ttsRoleGptFile" type="file" accept=".ckpt"></label><label>SoVITS 模型 (.pth)<input id="ttsRoleSovitsFile" type="file" accept=".pth"></label><label>兼容索引（可选 .index，当前引擎不参与合成）<input id="ttsRoleIndexFile" type="file" accept=".index"></label><label>参考音频<input id="ttsRoleAudioFile" type="file" accept=".wav,.mp3,.flac,.ogg"></label></div>
+                                <p class="hint">选择新文件只会替换正在编辑角色的同类资料；其他角色不受影响。若它当前已启用，下一次合成会使用新资料。</p>
+                            </section>
                             <div class="tts-role-toolbar"><button id="ttsRoleSaveBtn" type="button" class="test-btn">保存角色资料</button><button id="ttsRoleCancelBtn" type="button" class="test-btn">取消</button></div>
                         </div>
                         <p id="ttsRoleStatus" class="hint"></p>
                     </div>
-                    <div class="setting-item">
-                        <label>语速：<span id="ttsSpeedValue">1.0</span></label>
-                        <input type="range" id="ttsSpeedRange" min="0.5" max="1.5" step="0.1" value="1.0">
-                    </div>
-                    <div class="setting-item">
-                        <label>句间停顿：<span id="ttsFragValue">0.5</span> 秒</label>
-                        <input type="range" id="ttsFragRange" min="0" max="3" step="0.1" value="0.5">
-                        <p class="hint">句子之间的停顿，参考 D_sakiko；语调生硬时可适当调大。</p>
-                    </div>
-                    <div class="setting-item">
-                        <label>采样度数 top_k</label>
-                        <input type="number" id="ttsTopK" min="1" max="100" step="1" value="15">
-                        <p class="hint">候选音色多样性，越小越稳定，适合角色人设凝固。</p>
-                    </div>
-                    <div class="setting-item">
-                        <label>文本切分方式</label>
-                        <select id="ttsSplitSelect">
-                            <option value="cut0">cut0（按句）</option>
-                            <option value="cut1">cut1（按标点）</option>
-                            <option value="cut2">cut2（按标点+词）</option>
-                            <option value="cut5">cut5（按字符）</option>
-                        </select>
-                    </div>
-                    <div class="setting-item">
-                        <label>随机种子（-1 随机）</label>
-                        <input type="number" id="ttsSeed" min="-1" step="1" value="-1">
-                    </div>
-                    <div class="setting-item">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="ttsCudaGraph">
-                            <span>GPU 加速（CUDA graph，仅在 N 卡且启用了 CUDA 时生效）</span>
-                        </label>
-                    </div>
-                    <div class="setting-item">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="ttsParallelInfer">
-                            <span>并行推理（可加速长句生成，纯 CPU 时请关闭）</span>
-                        </label>
-                    </div>
-                    <div class="setting-item">
+                    <div class="setting-item tts-common-controls">
                         <label class="checkbox-label">
                             <input type="checkbox" id="ttsAutoRead">
                             <span>自动朗读 AI 结果（推荐/分类摘要）</span>
@@ -448,6 +447,50 @@
                     <button id="ttsPreloadBtn" class="test-btn" style="display:none">预加载已启用角色模型</button>
                     <button id="ttsRepairBtn" class="test-btn" style="display:none">修复语音环境</button>
                     <span id="ttsActionStatus" class="status-text"></span>
+                    <details class="tts-settings-disclosure tts-advanced-disclosure">
+                        <summary><span>高级语音设置</span><small>语速、采样、切句与性能</small></summary>
+                        <div class="tts-settings-disclosure-body">
+                            <div class="setting-item">
+                                <label>语速：<span id="ttsSpeedValue">1.0</span></label>
+                                <input type="range" id="ttsSpeedRange" min="0.5" max="1.5" step="0.1" value="1.0">
+                            </div>
+                            <div class="setting-item">
+                                <label>句间停顿：<span id="ttsFragValue">0.5</span> 秒</label>
+                                <input type="range" id="ttsFragRange" min="0" max="3" step="0.1" value="0.5">
+                                <p class="hint">句子之间的停顿，参考 D_sakiko；语调生硬时可适当调大。</p>
+                            </div>
+                            <div class="setting-item">
+                                <label>采样度数 top_k</label>
+                                <input type="number" id="ttsTopK" min="1" max="100" step="1" value="15">
+                                <p class="hint">候选音色多样性，越小越稳定，适合角色人设凝固。</p>
+                            </div>
+                            <div class="setting-item">
+                                <label>文本切分方式</label>
+                                <select id="ttsSplitSelect">
+                                    <option value="cut0">cut0（按句）</option>
+                                    <option value="cut1">cut1（按标点）</option>
+                                    <option value="cut2">cut2（按标点+词）</option>
+                                    <option value="cut5">cut5（按字符）</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label>随机种子（-1 随机）</label>
+                                <input type="number" id="ttsSeed" min="-1" step="1" value="-1">
+                            </div>
+                            <div class="setting-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="ttsCudaGraph">
+                                    <span>GPU 加速（CUDA graph，仅在 N 卡且启用了 CUDA 时生效）</span>
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="ttsParallelInfer">
+                                    <span>并行推理（可加速长句生成，纯 CPU 时请关闭）</span>
+                                </label>
+                            </div>
+                        </div>
+                    </details>
                 </div>
 
                 <div class="setting-group live2d-settings">
@@ -458,18 +501,6 @@
                     <div class="setting-item"><label>已安装模型</label><div id="live2dInstalledModels" class="live2d-installed-models"><p class="hint">正在读取模型库...</p></div></div>
                     <p id="live2dRoleBindingHint" class="hint"></p>
                     <p id="live2dModelStatus" class="hint"></p>
-                </div>
-                <div class="setting-group live2d-settings live2d-persona-settings">
-                    <h3>角色人设（随角色资料包切换）</h3>
-                    <p class="hint">人设保存到角色资料包；即使两位角色绑定同一个 Live2D 模型，也会保留各自的陪伴语气。</p>
-                    <div class="setting-item"><label>选择角色资料包</label><select id="live2dPersonaRole"></select></div>
-                    <div class="setting-item"><label>名字</label><input id="live2dPersona_name" type="text" maxlength="40"></div>
-                    <div class="setting-item"><label>背景</label><textarea id="live2dPersona_background" rows="3" maxlength="800"></textarea></div>
-                    <div class="setting-item"><label>语气</label><textarea id="live2dPersona_tone" rows="2" maxlength="400"></textarea></div>
-                    <div class="setting-item"><label>禁忌</label><textarea id="live2dPersona_avoid" rows="2" maxlength="400"></textarea></div>
-                    <div class="setting-item"><label>示例（用 | 分隔）</label><textarea id="live2dPersona_examples" rows="3" maxlength="600"></textarea></div>
-                    <div class="live2d-persona-actions"><button id="live2dPersonaSaveBtn" type="button" class="test-btn">保存人设</button><button id="live2dPersonaResetBtn" type="button" class="danger-btn">恢复默认</button></div>
-                    <p id="live2dPersonaStatus" class="hint"></p>
                 </div>
             </div>
             <div class="settings-footer">
@@ -482,6 +513,27 @@
     <div id="fullscreenModal" class="fullscreen-modal">
         <button id="closeFullscreen" class="fullscreen-close">&times;</button>
         <div id="fullscreenChart" class="fullscreen-chart"></div>
+    </div>
+
+    <!-- 应用更新提示：独立于设置面板和图表全屏层，重要更新才会在启动时展示。 -->
+    <div id="appUpdateModal" class="app-update-modal" aria-hidden="true">
+        <section class="app-update-dialog" role="dialog" aria-modal="true" aria-labelledby="appUpdateModalTitle" aria-describedby="appUpdateModalDescription">
+            <button id="appUpdateCloseBtn" class="app-update-close" type="button" aria-label="稍后提醒">&times;</button>
+            <p class="app-update-kicker">Memo Superform 更新</p>
+            <h2 id="appUpdateModalTitle">发现重要更新</h2>
+            <p id="appUpdateModalDescription" class="app-update-description">应用正在读取更新信息…</p>
+            <div class="app-update-version-row"><span>当前版本</span><strong id="appUpdateModalCurrent">--</strong><span aria-hidden="true">→</span><strong id="appUpdateModalLatest">--</strong></div>
+            <div class="app-update-notes-wrap">
+                <p>版本说明</p>
+                <div id="appUpdateModalNotes" class="app-update-notes" tabindex="0"></div>
+            </div>
+            <p id="appUpdateModalProgress" class="app-update-progress" role="status" aria-live="polite"></p>
+            <p class="app-update-warning">安装会关闭并重启应用；请先保存正在编辑的设置或内容。</p>
+            <div class="app-update-actions">
+                <button id="appUpdateLaterBtn" class="test-btn" type="button">24 小时后提醒</button>
+                <button id="appUpdateModalPrimaryBtn" class="save-btn" type="button">下载并安装</button>
+            </div>
+        </section>
     </div>
 
     <!-- 欢迎/未配置提示 -->
@@ -522,6 +574,7 @@
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
-    <script src="js/app.js?v=20260829-v080-tts-pack-partial"></script>
+    <script src="js/app-update.js?v=20260830-v078-app-update"></script>
+    <script src="js/app.js?v=20260830-v078-app-update"></script>
 </body>
 </html>

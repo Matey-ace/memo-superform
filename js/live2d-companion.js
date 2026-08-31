@@ -120,6 +120,8 @@ const DEFAULT_PERSONAS = {
     }
 };
 
+const LEGACY_PERSONA_MIGRATION_STORAGE_KEY = 'memo_live2d_personas_migrated_v2';
+
 function getPersonaOverrides() {
     try {
         const stored = JSON.parse(localStorage.getItem('memo_live2d_personas') || '{}');
@@ -156,8 +158,7 @@ function getActivePersona() {
     const binding = typeof Live2DModelManager !== 'undefined' && Live2DModelManager && Live2DModelManager.roleBinding
         ? Live2DModelManager.roleBinding() : null;
     if (binding && hasCompletePersona(binding.persona)) return Object.assign({}, binding.persona);
-    // 仅作过渡兜底：在 PersonaSettings 把人设写入每个角色前，已有浏览器可能
-    // 仍保存旧角色 ID 人设。
+    // 仅作过渡兜底：资料包迁移完成前，已有浏览器可能仍保存旧角色 ID 人设。
     return personaTemplateForRole({
         name: binding && binding.active_role_name,
         live2d_character_id: binding && binding.model_character_id,
@@ -165,168 +166,15 @@ function getActivePersona() {
 }
 
 function personaSystemPrompt(persona) {
-    return '你现在扮演 `' + String(persona.name || '').slice(0, 40) + '`。\n' +
-           '角色背景：' + String(persona.background || '').slice(0, 800) + '\n' +
-           '语气要求：' + String(persona.tone || '').slice(0, 400) + '\n' +
-           '禁忌：' + String(persona.avoid || '').slice(0, 400) + '\n' +
-           '回复示例：' + String(persona.examples || '').slice(0, 600);
+    // 角色资料可以保存很长的设定，但每次触摸/鼓励都重复附带它。这里采用
+    // 固定字段预算，保证“名字、语气、禁忌”始终优先于较长的背景和示例。
+    // 合计最多 5,964 个字符，留出后续输出指令与学习上下文的空间。
+    return '你现在扮演 `' + String(persona.name || '').slice(0, 64) + '`。\n' +
+           '语气要求：' + String(persona.tone || '').slice(0, 900) + '\n' +
+           '禁忌：' + String(persona.avoid || '').slice(0, 900) + '\n' +
+           '角色背景：' + String(persona.background || '').slice(0, 3200) + '\n' +
+           '回复示例：' + String(persona.examples || '').slice(0, 900);
 }
-
-const PersonaSettings = (function() {
-    const FIELDS = ['name', 'background', 'tone', 'avoid', 'examples'];
-    function escape(text) { const el = document.createElement('span'); el.textContent = String(text || ''); return el.innerHTML; }
-    function escapeAttr(text) { return escape(text).replace(/"/g, '&quot;'); }
-    let roles = [];
-    let activeRoleId = '';
-    let loadRevision = 0;
-
-    function currentRoleId() {
-        const select = document.getElementById('live2dPersonaRole');
-        return select ? String(select.value || '') : '';
-    }
-    function currentRole() {
-        const id = currentRoleId();
-        return roles.find(function(role) { return role.role_id === id; }) || null;
-    }
-    function rolePersona(role) {
-        return hasCompletePersona(role && role.persona) ? Object.assign({}, role.persona) : personaTemplateForRole(role);
-    }
-    function setControlsDisabled(disabled) {
-        FIELDS.forEach(function(field) {
-            const input = document.getElementById('live2dPersona_' + field);
-            if (input) input.disabled = !!disabled;
-        });
-        ['live2dPersonaSaveBtn', 'live2dPersonaResetBtn'].forEach(function(id) {
-            const button = document.getElementById(id);
-            if (button) button.disabled = !!disabled;
-        });
-    }
-    function setRole(roleId) {
-        const select = document.getElementById('live2dPersonaRole');
-        if (select && roleId) select.value = roleId;
-        render();
-    }
-    function render() {
-        const role = currentRole();
-        const status = document.getElementById('live2dPersonaStatus');
-        if (!role) {
-            setControlsDisabled(true);
-            FIELDS.forEach(function(field) {
-                const input = document.getElementById('live2dPersona_' + field);
-                if (input) input.value = '';
-            });
-            if (status) status.textContent = '请先创建并启用角色资料包。';
-            return;
-        }
-        setControlsDisabled(false);
-        const persona = rolePersona(role);
-        FIELDS.forEach(function(field) {
-            const input = document.getElementById('live2dPersona_' + field);
-            if (input) input.value = persona[field];
-        });
-        if (status) status.textContent = '';
-    }
-    async function persist(role, persona, silent) {
-        const response = await fetch('/api/tts/roles/' + encodeURIComponent(role.role_id) + '/persona', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-            body: JSON.stringify({ persona: persona })
-        });
-        const data = await response.json().catch(function() { return {}; });
-        if (!response.ok || data.error) throw new Error(data.error || '角色人设保存失败');
-        const next = data.role || Object.assign({}, role, { persona: persona });
-        const index = roles.findIndex(function(item) { return item.role_id === role.role_id; });
-        if (index >= 0) roles[index] = Object.assign({}, roles[index], next);
-        if (!silent && role.role_id === activeRoleId && typeof Live2DModelManager !== 'undefined' && Live2DModelManager.loadModels) {
-            await Live2DModelManager.loadModels();
-        }
-        return next;
-    }
-    async function migrateLegacyPersonas(revision) {
-        for (const role of roles.slice()) {
-            if (revision !== loadRevision || hasCompletePersona(role.persona)) continue;
-            try { await persist(role, personaTemplateForRole(role), true); }
-            catch (error) { console.warn('角色人设迁移将在下次重试：', error); }
-        }
-    }
-    function populate(preferredRoleId) {
-        const select = document.getElementById('live2dPersonaRole');
-        if (!select) return;
-        select.innerHTML = roles.map(function(role) {
-            const suffix = role.role_id === activeRoleId ? '（当前启用）' : '';
-            return '<option value="' + escapeAttr(role.role_id) + '">' + escape(role.name || role.role_id) + suffix + '</option>';
-        }).join('');
-        select.disabled = !roles.length;
-        const selected = roles.some(function(role) { return role.role_id === preferredRoleId; }) ? preferredRoleId : activeRoleId;
-        if (selected) select.value = selected;
-        render();
-    }
-    async function refreshRoles(preferredRoleId) {
-        const revision = ++loadRevision;
-        try {
-            const response = await fetch('/api/tts/roles');
-            const data = await response.json().catch(function() { return {}; });
-            if (!response.ok || data.error) throw new Error(data.error || '读取角色资料失败');
-            if (revision !== loadRevision) return;
-            roles = Array.isArray(data.roles) ? data.roles : [];
-            activeRoleId = String(data.active_role_id || '');
-            await migrateLegacyPersonas(revision);
-            if (revision !== loadRevision) return;
-            populate(preferredRoleId || currentRoleId() || activeRoleId);
-        } catch (error) {
-            const status = document.getElementById('live2dPersonaStatus');
-            if (status) status.textContent = '读取角色人设失败：' + error.message;
-        }
-    }
-    async function save() {
-        const role = currentRole();
-        if (!role) return;
-        const persona = {};
-        let valid = true;
-        FIELDS.forEach(function(field) {
-            const input = document.getElementById('live2dPersona_' + field);
-            if (!input) return;
-            const value = input.value.trim();
-            if (!value) { valid = false; return; }
-            persona[field] = value;
-        });
-        const status = document.getElementById('live2dPersonaStatus');
-        if (!valid) { if (status) status.textContent = '人设字段不能为空。'; return; }
-        try {
-            await persist(role, persona, false);
-            if (status) status.textContent = '角色人设已保存到“' + role.name + '”资料包。';
-        } catch (error) {
-            if (status) status.textContent = '保存失败：' + error.message;
-        }
-    }
-    async function reset() {
-        const role = currentRole();
-        if (!role) return;
-        try {
-            await persist(role, personaTemplateForRole(Object.assign({}, role, { persona: {} })), false);
-            const current = roles.find(function(item) { return item.role_id === role.role_id; });
-            if (current) current.persona = personaTemplateForRole(Object.assign({}, role, { persona: {} }));
-            render();
-            const status = document.getElementById('live2dPersonaStatus');
-            if (status) status.textContent = '已恢复该角色资料包的默认人设。';
-        } catch (error) {
-            const status = document.getElementById('live2dPersonaStatus');
-            if (status) status.textContent = '恢复失败：' + error.message;
-        }
-    }
-    function attach() {
-        const select = document.getElementById('live2dPersonaRole');
-        if (!select || select.dataset.ready) return;
-        select.dataset.ready = 'true';
-        select.addEventListener('change', render);
-        const saveButton = document.getElementById('live2dPersonaSaveBtn');
-        const resetButton = document.getElementById('live2dPersonaResetBtn');
-        if (saveButton) saveButton.addEventListener('click', save);
-        if (resetButton) resetButton.addEventListener('click', reset);
-        refreshRoles();
-    }
-    return { attach: attach, setRole: setRole, refreshRoles: refreshRoles };
-})();
 
 const Live2DModelManager = (function() {
     let currentModels = [];
@@ -348,11 +196,48 @@ const Live2DModelManager = (function() {
         if (!response.ok || data.error) throw new Error(data.error || ('请求失败: ' + response.status));
         return data;
     }
+    async function migrateLegacyPersonaForActiveRole() {
+        // 旧版仅把人设放在浏览器 localStorage。新版始终以角色资料包中的
+        // persona.json 为权威；此处只在当前角色尚无有效持久化人设、且浏览器
+        // 实际存在旧覆盖值时作一次迁移，不会覆盖任何已保存的资料包。
+        if (!roleBinding || !roleBinding.active_role_id || hasCompletePersona(roleBinding.persona)) return;
+        // An incomplete role binding is returned before the server validates
+        // its Live2D model, so the character id may be absent there.  Resolve
+        // it from the already-loaded installed-model registry to keep legacy
+        // browser persona overrides migratable without weakening activation
+        // validation.
+        const boundModel = currentModels.find(function(model) {
+            return model && model.model_id === roleBinding.configured_model_id;
+        });
+        const characterId = roleBinding.model_character_id || (boundModel && boundModel.character_id) || '';
+        const key = personaKey(characterId);
+        const overrides = getPersonaOverrides();
+        if (!overrides[key] || typeof overrides[key] !== 'object') return;
+        let migrated = {};
+        try { migrated = JSON.parse(localStorage.getItem(LEGACY_PERSONA_MIGRATION_STORAGE_KEY) || '{}'); }
+        catch (error) { migrated = {}; }
+        if (migrated[roleBinding.active_role_id]) return;
+        const persona = personaTemplateForRole({
+            name: roleBinding.active_role_name,
+            live2d_character_id: characterId
+        });
+        const response = await fetch('/api/tts/roles/' + encodeURIComponent(roleBinding.active_role_id) + '/persona', {
+            method: 'POST', headers: headers(true), body: JSON.stringify({ persona: persona })
+        });
+        const data = await response.json().catch(function() { return {}; });
+        if (!response.ok || data.error) throw new Error(data.error || '旧角色人设迁移失败');
+        migrated[roleBinding.active_role_id] = true;
+        try { localStorage.setItem(LEGACY_PERSONA_MIGRATION_STORAGE_KEY, JSON.stringify(migrated)); }
+        catch (error) {}
+        if (data.role && data.role.persona) roleBinding.persona = data.role.persona;
+    }
     async function loadModels() {
         const data = await request('/api/live2d/models');
         currentModels = data.models || [];
         preference = data.preference || preference;
         roleBinding = data.role_binding || null;
+        try { await migrateLegacyPersonaForActiveRole(); }
+        catch (error) { console.warn(error.message || '旧角色人设迁移失败'); }
         renderSettings();
         return data;
     }
@@ -473,18 +358,8 @@ const Live2DModelManager = (function() {
         }).join('') || '<p class="hint">尚未安装模型；可搜索下载或导入本地文件夹。</p>';
         list.querySelectorAll('[data-live2d-remove]').forEach(function(button) { button.addEventListener('click', function() { removeModel(button.getAttribute('data-live2d-remove')); }); });
         renderRoleBindingHint();
-        const roleId = roleBinding && roleBinding.active_role_id;
-        PersonaSettings.setRole(roleId);
-        // 模型列表仅含渲染元数据；单独刷新角色列表，使人设编辑器始终按 role_id
-        // 写入，也能区分共用同一 Live2D 模型的两套音色。
-        if (PersonaSettings.refreshRoles) {
-            PersonaSettings.refreshRoles(roleId).catch(function(error) {
-                console.warn('读取角色人设失败：', error);
-            });
-        }
     }
     function attachSettings() {
-        PersonaSettings.attach();
         const search = document.getElementById('live2dCatalogSearch');
         const refresh = document.getElementById('live2dCatalogRefreshBtn');
         const importBtn = document.getElementById('live2dImportBtn');

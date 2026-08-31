@@ -703,6 +703,56 @@ body {
     padding: 20px;
 }
 
+/* ========== 应用更新提示 ========== */
+.app-update-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, 0.62);
+    backdrop-filter: blur(4px);
+}
+
+.app-update-modal.show { display: flex; }
+
+.app-update-dialog {
+    position: relative;
+    width: min(560px, 100%);
+    max-height: min(720px, calc(100vh - 48px));
+    overflow: auto;
+    padding: 30px;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    background: var(--card-bg);
+    color: var(--text-primary);
+    box-shadow: 0 20px 56px rgba(0, 0, 0, 0.28);
+}
+
+.app-update-kicker { color: var(--accent-purple); font-size: 13px; font-weight: 700; letter-spacing: .08em; }
+.app-update-dialog h2 { margin: 6px 36px 10px 0; font-size: 24px; }
+.app-update-description, .app-update-warning { color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
+.app-update-version-row { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; padding: 12px 14px; border-radius: 10px; background: var(--bg-color); color: var(--text-secondary); font-size: 13px; }
+.app-update-version-row strong { color: var(--text-primary); font-size: 14px; }
+.app-update-notes-wrap { margin: 16px 0; }
+.app-update-notes-wrap > p { margin-bottom: 7px; color: var(--text-secondary); font-size: 13px; font-weight: 600; }
+.app-update-notes { max-height: 180px; overflow: auto; padding: 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-color); color: var(--text-secondary); font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+.app-update-progress { min-height: 20px; color: var(--accent-blue); font-size: 13px; line-height: 1.5; }
+.app-update-warning { margin-top: 10px; }
+.app-update-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.app-update-actions .test-btn, .app-update-actions .save-btn { margin: 0; }
+.app-update-close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: var(--text-secondary); font-size: 26px; cursor: pointer; line-height: 1; }
+.app-update-close:hover, .app-update-close:focus-visible { background: var(--bg-color); color: var(--text-primary); }
+
+@media (max-width: 520px) {
+    .app-update-modal { padding: 14px; }
+    .app-update-dialog { padding: 24px 20px; }
+    .app-update-actions { align-items: stretch; flex-direction: column-reverse; }
+    .app-update-actions .test-btn, .app-update-actions .save-btn { width: 100%; }
+}
+
 /* ========== 欢迎界面 ========== */
 .welcome-overlay {
     position: fixed;

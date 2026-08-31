@@ -255,7 +255,7 @@ const StudySyncUI = (function() {
     function dashboardIsIdleForWeeklyCheck() {
         if (document.visibilityState && document.visibilityState !== 'visible') return false;
         if (typeof LayoutManager !== 'undefined' && LayoutManager.isDragging && LayoutManager.isDragging()) return false;
-        if (document.querySelector('#settingsPanel.show, .fullscreen-modal.show')) return false;
+        if (document.querySelector('#settingsPanel.show, .fullscreen-modal.show, .app-update-modal.show')) return false;
         return !document.querySelector('.study-web-container[data-study-screen-active="true"]');
     }
 

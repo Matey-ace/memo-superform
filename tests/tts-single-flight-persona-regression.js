@@ -184,8 +184,80 @@ async function testRuntimePersonaComesFromActiveRoleBindingNotSharedCharacterId(
     assert.strictEqual(fetchCount, 2);
 }
 
+async function testLegacyBrowserPersonaMigratesForIncompleteRoleBinding() {
+    const migratedPersona = completePersona('旧浏览器覆盖角色');
+    let fetchCount = 0;
+    let migrationBody = null;
+    const context = {
+        window: { addEventListener: function() {} },
+        document: {
+            getElementById: function() { return null; },
+            createElement: function() { return { textContent: '', innerHTML: '' }; }
+        },
+        localStorage: {
+            getItem: function(key) {
+                if (key === 'memo_live2d_personas') return JSON.stringify({ 37: migratedPersona });
+                return null;
+            },
+            setItem: function() {}
+        },
+        fetch: async function(path, options) {
+            fetchCount += 1;
+            if (path === '/api/live2d/models') {
+                return { ok: true, status: 200, json: async function() {
+                    return {
+                        models: [{ model_id: 'shared-model', character_id: '037' }],
+                        preference: {},
+                        role_binding: {
+                            enforced: true, ready: false, active_role_id: 'voice-a',
+                            active_role_name: '角色包 A', configured_model_id: 'shared-model',
+                            persona: { name: '角色包 A', background: '', tone: '', avoid: '', examples: '' }
+                        }
+                    };
+                } };
+            }
+            assert.strictEqual(path, '/api/tts/roles/voice-a/persona');
+            migrationBody = JSON.parse(options.body);
+            return { ok: true, status: 200, json: async function() { return { role: { persona: migratedPersona } }; } };
+        }
+    };
+    vm.createContext(context);
+    vm.runInContext(companionSource, context, { filename: 'js/live2d-companion.js' });
+    await vm.runInContext('Live2DModelManager.loadModels()', context);
+    const activePersona = JSON.parse(vm.runInContext('JSON.stringify(getActivePersona())', context));
+    assert.deepStrictEqual(activePersona, migratedPersona, 'legacy browser profile should migrate into the incomplete role package');
+    assert.strictEqual(migrationBody.persona.name, migratedPersona.name);
+    assert.strictEqual(fetchCount, 2, 'loading an incomplete role may perform exactly one migration write');
+}
+
+function testLongPersonaKeepsStablePromptBudget() {
+    const context = {
+        window: { addEventListener: function() {} },
+        document: { getElementById: function() { return null; }, createElement: function() { return { textContent: '', innerHTML: '' }; } },
+        localStorage: { getItem: function() { return null; }, setItem: function() {} },
+        console: { warn: function() {}, error: function() {}, log: function() {} },
+        setTimeout: function() { return 1; }, clearTimeout: function() {},
+        setInterval: function() { return 1; }, clearInterval: function() {}
+    };
+    vm.createContext(context);
+    vm.runInContext(companionSource, context, { filename: 'js/live2d-companion.js' });
+    const persona = {
+        name: '角'.repeat(80), background: '背'.repeat(9000), tone: '语'.repeat(3000),
+        avoid: '禁'.repeat(3000), examples: '例'.repeat(3000)
+    };
+    const prompt = vm.runInContext('personaSystemPrompt(' + JSON.stringify(persona) + ')', context);
+    assert(prompt.includes('你现在扮演 `' + '角'.repeat(64) + '`。'), 'name budget must be 64 characters');
+    assert(prompt.includes('语气要求：' + '语'.repeat(900)), 'tone must keep its reserved prompt budget');
+    assert(prompt.includes('禁忌：' + '禁'.repeat(900)), 'guardrails must keep their reserved prompt budget');
+    assert(prompt.includes('角色背景：' + '背'.repeat(3200)), 'background must support the expanded prompt budget');
+    assert(prompt.includes('回复示例：' + '例'.repeat(900)), 'examples must keep their reserved prompt budget');
+    assert(prompt.length < 6200, 'persona system prompt must stay within the fixed runtime budget');
+}
+
 Promise.resolve()
     .then(testRapidSpeechKeepsOnlyLatestQueuedReaction)
     .then(testRuntimePersonaComesFromActiveRoleBindingNotSharedCharacterId)
+    .then(testLegacyBrowserPersonaMigratesForIncompleteRoleBinding)
+    .then(testLongPersonaKeepsStablePromptBudget)
     .then(function() { console.log('TTS_SINGLE_FLIGHT_PERSONA_REGRESSION_PASS'); })
     .catch(function(error) { console.error(error); process.exitCode = 1; });

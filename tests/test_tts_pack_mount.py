@@ -187,6 +187,10 @@ class TTSPackMountTests(unittest.TestCase):
         ])
         missing_by_role = {item["role_id"]: item["missing_paths"] for item in result["incomplete_roles"]}
         self.assertEqual(missing_by_role["partial"], [
+            "roles/partial/persona.json → 背景",
+            "roles/partial/persona.json → 语气",
+            "roles/partial/persona.json → 禁忌",
+            "roles/partial/persona.json → 示例",
             "roles/partial/gpt.ckpt",
             "roles/partial/sovits.pth",
             "roles/partial/reference.wav（也可为 .mp3 / .flac / .ogg）",
@@ -198,6 +202,10 @@ class TTSPackMountTests(unittest.TestCase):
             "roles.json → metadata.reference_text",
             "roles.json → metadata.reference_language",
             "设置 → 角色资料包 → 绑定 Live2D",
+            "roles/metadata/persona.json → 背景",
+            "roles/metadata/persona.json → 语气",
+            "roles/metadata/persona.json → 禁忌",
+            "roles/metadata/persona.json → 示例",
         ])
         self.assertFalse((self.pack / "marker.txt").exists())
         self.assertFalse(tts._load_state(str(self.data))["enabled"])

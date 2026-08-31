@@ -57,12 +57,13 @@ tts_pack/
 ├── .venv311/Scripts/python.exe
 ├── tts_engine/worker_main.py
 └── roles/<role_id>/
+    ├── persona.json   # 角色、语气、背景、禁忌、示例
     ├── gpt.ckpt
     ├── sovits.pth
     └── reference.wav   # 也可为 mp3 / flac / ogg
 ```
 
-完整可用包应含有 `roles.json`（或可迁移的旧资料）、每位角色的逐字参考文本和参考语言。单独的 `.ckpt` / `.pth` 也可先作为待补齐包挂载：只要 ZIP 含有效的 `pack.json`，程序会先安全替换本地包，再在设置中逐项列出缺少的运行环境、模型、参考音频、文本、语言或 Live2D 绑定及其预期位置。随后可在角色编辑器中补充；资料尚未配齐的角色保持不可启用。挂载过程会在临时目录校验 ZIP 路径、链接和解压体积，然后关闭旧 worker、原子替换 `data/tts_pack/`；缺少 `pack.json`、清单损坏或 ZIP 不安全时原有包保持不变。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
+完整可用包应含有 `roles.json`（或可迁移的旧资料）、每位角色的 `persona.json`、逐字参考文本和参考语言。`persona.json` 是角色名称与陪伴人设的唯一来源，使用中文固定字段：`版本`、`角色`、`语气`、`背景`、`禁忌`、`示例`。可在角色编辑器中导入、导出和备份该文件。单独的 `.ckpt` / `.pth` 也可先作为待补齐包挂载：只要 ZIP 含有效的 `pack.json`，程序会先安全替换本地包，再在设置中逐项列出缺少的运行环境、模型、参考音频、文本、语言、人设或 Live2D 绑定及其预期位置。随后可在角色编辑器中补充；资料尚未配齐的角色保持不可启用。挂载过程会在临时目录校验 ZIP 路径、链接和解压体积，然后关闭旧 worker、原子替换 `data/tts_pack/`；缺少 `pack.json`、清单损坏或 ZIP 不安全时原有包保持不变。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
 
 ## Quick Start
 
@@ -83,6 +84,12 @@ python app.py
 发布版本使用单一的 `MemoSuperform.exe`：首次启动可选择网页模式或桌面模式，之后会记住选择；运行 `MemoSuperform.exe --reset` 可清除该选择。
 
 Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏览器后服务仍可从托盘重新打开；桌面模式关闭窗口会隐藏到托盘，使用托盘菜单“退出 Memo Superform”才会完全退出。
+
+### 应用内更新
+
+打包版启动时会在后台检查本项目的官方 GitHub Release。普通小版本更新只会出现在设置 →「软件更新」中；跨主版本，或同一主版本连续落后 3 个以上小版本时，应用会显示重要更新提示。选择「下载并安装」后，程序只会下载与该 Release 版本精确匹配的 Windows EXE，并在本地核对文件大小和 GitHub 提供的 SHA-256。校验通过后，当前应用会关闭、由隐藏更新器替换 EXE、并按原来的网页或桌面模式重新启动。
+
+更新不会触及同级 `data/` 中的 SQLite 词库、Live2D 模型和语音资源包；旧 EXE 会保留一份带时间戳的备份。源码运行、macOS/Linux，或安装目录没有写入权限时，设置页会提供官方 Release 下载页而不会尝试替换文件。更新检查会访问 GitHub API，因此该请求会由 GitHub 接收到你的网络连接与 `MemoSuperform/<版本>` User-Agent；不上传墨墨 Token、AI Key、学习记录或本地文件。
 
 ### 配置 Token
 - 点击右上角 设置 按钮
@@ -270,12 +277,13 @@ tts_pack/
 ├── .venv311/Scripts/python.exe
 ├── tts_engine/worker_main.py
 └── roles/<role_id>/
+    ├── persona.json   # character profile: name, tone, background, guardrails, examples
     ├── gpt.ckpt
     ├── sovits.pth
     └── reference.wav   # mp3 / flac / ogg also work
 ```
 
-A complete usable archive contains `roles.json` (or migratable legacy assets), exact reference text, and the reference language for each role. A bare `.ckpt` / `.pth` pair may also be mounted as a package to finish later: as long as the ZIP contains a valid `pack.json`, Memo safely replaces the local pack and lists every missing runtime file, model, reference audio, text, language, or Live2D binding together with its expected location. Finish those items in the role editor; incomplete roles remain unavailable for activation. Memo validates ZIP paths, links, and extracted size in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a missing manifest, malformed manifest, or unsafe ZIP leaves the existing pack unchanged. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
+A complete usable archive contains `roles.json` (or migratable legacy assets), each role's `persona.json`, exact reference text, and the reference language. `persona.json` is the single source for the character name and companion profile. It uses the fixed Chinese keys `版本`, `角色`, `语气`, `背景`, `禁忌`, and `示例`, and can be imported or exported from the role editor for backup. A bare `.ckpt` / `.pth` pair may also be mounted as a package to finish later: as long as the ZIP contains a valid `pack.json`, Memo safely replaces the local pack and lists every missing runtime file, model, reference audio, text, language, persona, or Live2D binding together with its expected location. Finish those items in the role editor; incomplete roles remain unavailable for activation. Memo validates ZIP paths, links, and extracted size in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a missing manifest, malformed manifest, or unsafe ZIP leaves the existing pack unchanged. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
 
 ## Quick Start
 
@@ -386,6 +394,12 @@ Local recommendation APIs (served by server.py):
 
 ## Packaging
 Double-click `dist/MemoSuperform.exe` to run. The exe bundles ECharts and SQLite, so committed charts and recommendations remain available offline; fetching new data and AI classification require network access.
+
+### In-app updates
+
+The packaged Windows app checks this repository's official GitHub Release in the background at startup. Small updates stay in **Settings → Software update**; a major-version jump, or a gap of three or more minor releases within the same major version, shows a prominent update prompt. **Download and install** accepts only the release-matching Windows EXE, validates its size and GitHub SHA-256 digest locally, then closes the current app, replaces the EXE through a hidden helper, and relaunches in the same browser/desktop mode.
+
+The updater never changes the adjacent `data/` directory, so the SQLite study database, Live2D models, and voice packs remain intact. It keeps a timestamped old-EXE backup. Source runs, non-Windows systems, and unwritable install folders receive the official Release page instead of an in-place replacement. Update checks contact the GitHub API and therefore disclose the network connection and a `MemoSuperform/<version>` User-Agent to GitHub; no Maimemo token, AI key, study record, or local file is uploaded.
 
 ## License
 

@@ -22,6 +22,7 @@ const App = (function() {
     function init() {
         setupSettingsPanel();
         setupModeSettings();
+        if (window.AppUpdate && typeof window.AppUpdate.init === 'function') window.AppUpdate.init();
         setupTTSSettings();
         setupRefreshButton();
         setupServerStatusCheck();
@@ -629,14 +630,35 @@ const App = (function() {
         const roleEditorContext = document.getElementById('ttsRoleEditorContext');
         const roleFileStatus = document.getElementById('ttsRoleFileStatus');
         const roleId = document.getElementById('ttsRoleId');
-        const roleName = document.getElementById('ttsRoleName');
+        const rolePersonaName = document.getElementById('ttsRolePersonaName');
+        const rolePersonaBackground = document.getElementById('ttsRolePersonaBackground');
+        const rolePersonaTone = document.getElementById('ttsRolePersonaTone');
+        const rolePersonaAvoid = document.getElementById('ttsRolePersonaAvoid');
+        const rolePersonaExamples = document.getElementById('ttsRolePersonaExamples');
+        const rolePersonaTotalCount = document.getElementById('ttsRolePersonaTotalCount');
+        const rolePersonaStatus = document.getElementById('ttsRolePersonaStatus');
+        const rolePersonaImportInput = document.getElementById('ttsRolePersonaImportInput');
+        const rolePersonaImportBtn = document.getElementById('ttsRolePersonaImportBtn');
+        const rolePersonaExportBtn = document.getElementById('ttsRolePersonaExportBtn');
+        const rolePersonaResetBtn = document.getElementById('ttsRolePersonaResetBtn');
         const roleLive2D = document.getElementById('ttsRoleLive2D');
         const roleLanguage = document.getElementById('ttsRoleLanguage');
         const roleText = document.getElementById('ttsRoleReferenceText');
         const roleSaveButton = document.getElementById('ttsRoleSaveBtn');
         const roleFileInputIds = ['ttsRoleGptFile', 'ttsRoleSovitsFile', 'ttsRoleIndexFile', 'ttsRoleAudioFile'];
+        const rolePersonaFields = [
+            { key: 'name', label: '角色', input: rolePersonaName, countId: 'ttsRolePersonaNameCount', limit: 64 },
+            { key: 'background', label: '背景', input: rolePersonaBackground, countId: 'ttsRolePersonaBackgroundCount', limit: 8000 },
+            { key: 'tone', label: '语气', input: rolePersonaTone, countId: 'ttsRolePersonaToneCount', limit: 2000 },
+            { key: 'avoid', label: '禁忌', input: rolePersonaAvoid, countId: 'ttsRolePersonaAvoidCount', limit: 2000 },
+            { key: 'examples', label: '示例', input: rolePersonaExamples, countId: 'ttsRolePersonaExamplesCount', limit: 2000 }
+        ];
+        const ROLE_PERSONA_TOTAL_LIMIT = 12000;
+        const ROLE_PERSONA_JSON_KEYS = ['版本', '角色', '语气', '背景', '禁忌', '示例'];
         const roleSaveLockIds = ['ttsRoleNewBtn', 'ttsRoleEditBtn', 'ttsRoleActivateBtn', 'ttsRoleDeleteBtn', 'ttsRoleCancelBtn',
-            'ttsRoleName', 'ttsRoleLive2D', 'ttsRoleLanguage', 'ttsRoleReferenceText'].concat(roleFileInputIds);
+            'ttsRolePersonaName', 'ttsRolePersonaBackground', 'ttsRolePersonaTone', 'ttsRolePersonaAvoid', 'ttsRolePersonaExamples',
+            'ttsRolePersonaImportInput', 'ttsRolePersonaImportBtn', 'ttsRolePersonaExportBtn', 'ttsRolePersonaResetBtn',
+            'ttsRoleLive2D', 'ttsRoleLanguage', 'ttsRoleReferenceText'].concat(roleFileInputIds);
         let roleSaveInFlight = false;
         let roleEditorOpen = false;
         let roleEditorRevision = 0;
@@ -789,6 +811,174 @@ const App = (function() {
             roleStatus.textContent = text || '';
             roleStatus.className = error ? 'hint error' : 'hint';
         }
+        function setRolePersonaStatus(text, error) {
+            if (!rolePersonaStatus) return;
+            rolePersonaStatus.textContent = text || '';
+            rolePersonaStatus.className = error ? 'hint error' : 'hint';
+        }
+        function defaultRolePersona(name) {
+            return {
+                name: String(name || '陪伴角色').trim() || '陪伴角色',
+                background: '你是背词学习中的陪伴角色，观察学习节奏并给出简短、真诚的鼓励。',
+                tone: '自然、友好、克制，不打扰学习节奏。',
+                avoid: '不要只说单个语气词，不要说教过长，不要编造成绩或使用冒犯表达。',
+                examples: '这一题记下来就很好。\n保持节奏，下一题继续。'
+            };
+        }
+        function normalizePersonaExamples(value) {
+            // 旧资料使用 | 分隔示例；新 persona.json 统一用一行一条，打开旧资料时
+            // 无损地转换为更易编辑的形式。
+            return String(value || '').replace(/\s*\|\s*/g, '\n');
+        }
+        function rolePersonaFromInputs() {
+            return {
+                name: String(rolePersonaName && rolePersonaName.value || '').trim(),
+                background: String(rolePersonaBackground && rolePersonaBackground.value || '').trim(),
+                tone: String(rolePersonaTone && rolePersonaTone.value || '').trim(),
+                avoid: String(rolePersonaAvoid && rolePersonaAvoid.value || '').trim(),
+                examples: String(rolePersonaExamples && rolePersonaExamples.value || '').trim()
+            };
+        }
+        function setRolePersonaInputs(persona, fallbackName) {
+            const source = persona && typeof persona === 'object' ? persona : {};
+            const values = {
+                name: source.name || fallbackName || '',
+                background: source.background || '',
+                tone: source.tone || '',
+                avoid: source.avoid || '',
+                examples: normalizePersonaExamples(source.examples || '')
+            };
+            rolePersonaFields.forEach(function(field) {
+                if (field.input) field.input.value = String(values[field.key] || '');
+            });
+            updateRolePersonaCounters();
+        }
+        function updateRolePersonaCounters() {
+            let total = 0;
+            rolePersonaFields.forEach(function(field) {
+                const value = String(field.input && field.input.value || '');
+                total += value.length;
+                const counter = document.getElementById(field.countId);
+                if (counter) {
+                    counter.textContent = value.length + ' / ' + field.limit;
+                    counter.classList.toggle('is-limit', value.length > field.limit);
+                }
+            });
+            if (rolePersonaTotalCount) {
+                rolePersonaTotalCount.textContent = '角色资料共 ' + total + ' / ' + ROLE_PERSONA_TOTAL_LIMIT + ' 字';
+                rolePersonaTotalCount.classList.toggle('is-limit', total > ROLE_PERSONA_TOTAL_LIMIT);
+            }
+        }
+        function validateRolePersona(persona) {
+            const values = persona || rolePersonaFromInputs();
+            let total = 0;
+            for (const field of rolePersonaFields) {
+                const value = String(values[field.key] || '').trim();
+                total += value.length;
+                if (value.length > field.limit) {
+                    return { valid: false, error: field.label + '不能超过 ' + field.limit + ' 字。', persona: values, missing: [] };
+                }
+            }
+            if (total > ROLE_PERSONA_TOTAL_LIMIT) {
+                return { valid: false, error: '角色资料总字数不能超过 ' + ROLE_PERSONA_TOTAL_LIMIT + ' 字。', persona: values, missing: [] };
+            }
+            if (!String(values.name || '').trim()) {
+                return { valid: false, error: '请填写角色名称；它会作为角色资料包的唯一显示名称。', persona: values, missing: [] };
+            }
+            const missing = rolePersonaFields.filter(function(field) {
+                return field.key !== 'name' && !String(values[field.key] || '').trim();
+            }).map(function(field) { return field.label; });
+            return { valid: true, persona: values, missing: missing, total: total };
+        }
+        function describePersonaDraft(validation) {
+            if (!validation || !validation.valid) return;
+            if (validation.missing.length) {
+                setRolePersonaStatus('人设尚未完整：缺少' + validation.missing.join('、') + '。可以先保存为草稿，补齐后才能启用角色。');
+            } else {
+                setRolePersonaStatus('角色档案完整；保存后会写入当前角色的 persona.json。');
+            }
+        }
+        function personaJsonFromLegacy(persona) {
+            return {
+                '版本': 1,
+                '角色': String(persona.name || ''),
+                '语气': String(persona.tone || ''),
+                '背景': String(persona.background || ''),
+                '禁忌': String(persona.avoid || ''),
+                '示例': String(persona.examples || '')
+            };
+        }
+        function legacyPersonaFromJson(value) {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('人设 JSON 必须是一个对象。');
+            const keys = Object.keys(value);
+            const missing = ROLE_PERSONA_JSON_KEYS.filter(function(key) { return !Object.prototype.hasOwnProperty.call(value, key); });
+            const unexpected = keys.filter(function(key) { return ROLE_PERSONA_JSON_KEYS.indexOf(key) === -1; });
+            if (missing.length) throw new Error('人设 JSON 缺少字段：' + missing.join('、') + '。');
+            if (unexpected.length) throw new Error('人设 JSON 包含不支持的字段：' + unexpected.join('、') + '。');
+            if (value['版本'] !== 1) throw new Error('目前只支持“版本”为 1 的人设 JSON。');
+            const persona = {
+                name: value['角色'],
+                tone: value['语气'],
+                background: value['背景'],
+                avoid: value['禁忌'],
+                examples: value['示例']
+            };
+            rolePersonaFields.forEach(function(field) {
+                if (typeof persona[field.key] !== 'string') throw new Error('人设 JSON 的“' + field.label + '”必须是文本。');
+            });
+            const validation = validateRolePersona(persona);
+            if (!validation.valid) throw new Error(validation.error);
+            return validation.persona;
+        }
+        function importRolePersonaJson(file) {
+            if (!file) return;
+            if (file.size > 256 * 1024) {
+                setRolePersonaStatus('人设 JSON 不能超过 256 KB。', true);
+                return;
+            }
+            const reader = new FileReader();
+            reader.onerror = function() { setRolePersonaStatus('读取人设 JSON 失败。', true); };
+            reader.onload = function() {
+                try {
+                    const persona = legacyPersonaFromJson(JSON.parse(String(reader.result || '')));
+                    setRolePersonaInputs(persona);
+                    describePersonaDraft(validateRolePersona());
+                    setRolePersonaStatus('已导入“' + persona.name + '”的人设 JSON；保存角色资料后才会写入资料包。');
+                } catch (error) {
+                    setRolePersonaStatus(error.message || '人设 JSON 格式无效。', true);
+                } finally {
+                    if (rolePersonaImportInput) rolePersonaImportInput.value = '';
+                }
+            };
+            reader.readAsText(file, 'utf-8');
+        }
+        function exportRolePersonaJson() {
+            const validation = validateRolePersona();
+            if (!validation.valid) {
+                setRolePersonaStatus(validation.error, true);
+                return;
+            }
+            const contents = JSON.stringify(personaJsonFromLegacy(validation.persona), null, 2) + '\n';
+            const blob = new Blob([contents], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const safeName = String(validation.persona.name || '角色资料').replace(/[\\/:*?"<>|]/g, '_').slice(0, 64) || '角色资料';
+            link.href = url;
+            link.download = safeName + '-persona.json';
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(function() { URL.revokeObjectURL(url); }, 0);
+            setRolePersonaStatus('已导出“' + validation.persona.name + '”的人设 JSON。');
+        }
+        function resetRolePersona() {
+            const current = rolePersonaFromInputs();
+            if (!window.confirm('恢复通用默认人设会覆盖当前编辑中的角色档案，继续吗？')) return;
+            setRolePersonaInputs(defaultRolePersona(current.name));
+            describePersonaDraft(validateRolePersona());
+            setRolePersonaStatus('已恢复通用默认人设；保存角色资料后才会写入资料包。');
+        }
         function clearRoleFileInputs() {
             roleFileInputIds.forEach(function(inputId) {
                 const input = document.getElementById(inputId);
@@ -837,7 +1027,7 @@ const App = (function() {
             if (roleEditorContext) {
                 if (role) {
                     const active = activeRole();
-                    roleEditorContext.textContent = '正在编辑：' + role.name + '（角色 ID：' + role.role_id + '）。' +
+                    roleEditorContext.textContent = '正在编辑：' + role.name + '。' +
                         (role.role_id === activeRoleId ? '它当前已启用。' : ('当前启用：' + (active ? active.name : '无') + '。'));
                 } else {
                     roleEditorContext.textContent = '正在新建角色。首次保存时会创建独立角色资料包。';
@@ -910,23 +1100,12 @@ const App = (function() {
             clearRoleFileInputs();
             roleEditor.hidden = false;
             if (roleId) roleId.value = role ? role.role_id : '';
-            if (roleName) roleName.value = role ? role.name : '';
+            setRolePersonaInputs(role && role.persona, role && role.name);
+            describePersonaDraft(validateRolePersona());
             if (roleLanguage) roleLanguage.value = role ? (role.reference_language || '') : '';
             if (roleText) roleText.value = role ? (role.reference_text || '') : '';
             updateRoleEditorDetails(role);
             await loadRoleLive2DOptions(role && role.live2d_model_id, revision);
-        }
-        function newRoleId(name) {
-            const normalized = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-            const base = (normalized || ('role-' + Date.now())).slice(0, 64);
-            let candidate = base;
-            let suffix = 2;
-            // 新建编辑器绝不能因角色同名而意外覆盖已有资料包。
-            while (roleList.some(function(role) { return role.role_id === candidate; })) {
-                const tail = '-' + suffix++;
-                candidate = base.slice(0, 64 - tail.length) + tail;
-            }
-            return candidate;
         }
         async function uploadRoleAsset(id, input, kind, batchId) {
             const file = input && input.files && input.files[0];
@@ -965,11 +1144,20 @@ const App = (function() {
             roleSaveInFlight = true;
             setRoleSaveLock(true);
             try {
-                // 在元数据请求前只赋值一次；资源上传失败后的重试必须继续写入同一角色包。
-                const id = (roleId && roleId.value) || newRoleId(roleName && roleName.value);
-                if (roleId) roleId.value = id;
-                const body = { role_id: id, name: roleName && roleName.value, reference_language: roleLanguage && roleLanguage.value,
-                    reference_text: roleText && roleText.value, live2d_model_id: roleLive2D && roleLive2D.value };
+                const personaValidation = validateRolePersona();
+                if (!personaValidation.valid) throw new Error(personaValidation.error);
+                describePersonaDraft(personaValidation);
+
+                // 新角色的内部 ID 只由服务端生成。浏览器只在已经存在的角色包
+                // 上携带 ID，因而角色名称始终只来自 persona.json 的“角色”。
+                let id = String(roleId && roleId.value || '').trim();
+                const body = {
+                    persona: personaValidation.persona,
+                    reference_language: roleLanguage && roleLanguage.value,
+                    reference_text: roleText && roleText.value,
+                    live2d_model_id: roleLive2D && roleLive2D.value
+                };
+                if (id) body.role_id = id;
 
                 // 上传顺序固定。已有角色使用隔离暂存批次，所有所选文件、文本、语言
                 // 和 Live2D 绑定能一起提交前，旧资料包保持完整。
@@ -993,7 +1181,7 @@ const App = (function() {
                         }
                     }
                 }
-                const existing = roleList.find(function(role) { return role.role_id === id; }) || null;
+                const existing = id ? (roleList.find(function(role) { return role.role_id === id; }) || null) : null;
                 const editingActiveRole = !!(existing && existing.role_id === activeRoleId);
                 const editingExistingRole = !!existing;
                 let savedRole = null;
@@ -1014,6 +1202,9 @@ const App = (function() {
                     // 新建或未启用角色在明确启用前都是草稿，因此元数据建立后可安全接收资源。
                     const saved = await postRoleJson('/api/tts/roles', body);
                     savedRole = saved.role || body;
+                    id = String(savedRole.role_id || '').trim();
+                    if (!id) throw new Error('服务端没有返回新角色资料包标识。');
+                    if (roleId) roleId.value = id;
                     await uploadSelectedAssets();
                 }
                 updateRoleEditorDetails(savedRole);
@@ -1022,7 +1213,7 @@ const App = (function() {
                 localStorage.setItem('tts_role_selected', id);
                 renderRoles({ roles: roleList, active_role_id: activeRoleId });
                 closeRoleEditor();
-                const roleLabel = roleName && roleName.value ? roleName.value : id;
+                const roleLabel = personaValidation.persona.name || id;
                 if (editingActiveRole) {
                     const renderer = await refreshActiveRoleRuntime();
                     if (renderer && renderer.ok === false) {
@@ -1038,6 +1229,27 @@ const App = (function() {
                 setRoleSaveLock(false);
             }
         }
+        rolePersonaFields.forEach(function(field) {
+            if (!field.input) return;
+            field.input.addEventListener('input', function() {
+                updateRolePersonaCounters();
+                const validation = validateRolePersona();
+                if (validation.valid) describePersonaDraft(validation);
+                else setRolePersonaStatus(validation.error, true);
+            });
+        });
+        if (rolePersonaImportBtn) rolePersonaImportBtn.addEventListener('click', function() {
+            if (!roleSaveInFlight && rolePersonaImportInput) rolePersonaImportInput.click();
+        });
+        if (rolePersonaImportInput) rolePersonaImportInput.addEventListener('change', function() {
+            importRolePersonaJson(rolePersonaImportInput.files && rolePersonaImportInput.files[0]);
+        });
+        if (rolePersonaExportBtn) rolePersonaExportBtn.addEventListener('click', function() {
+            if (!roleSaveInFlight) exportRolePersonaJson();
+        });
+        if (rolePersonaResetBtn) rolePersonaResetBtn.addEventListener('click', function() {
+            if (!roleSaveInFlight) resetRolePersona();
+        });
         document.getElementById('ttsRoleNewBtn').addEventListener('click', function() { openRoleEditor(null); });
         document.getElementById('ttsRoleEditBtn').addEventListener('click', function() { const role = selectedRole(); if (role) openRoleEditor(role); });
         document.getElementById('ttsRoleCancelBtn').addEventListener('click', function() { if (roleSaveInFlight) return; closeRoleEditor(); });

@@ -4,7 +4,7 @@ const assert = require('assert');
 const vm = require('vm');
 const read = p => fs.readFileSync(p, 'utf8');
 const index = read('index.html');
-const files = ['js/ui-style.js','js/api.js','js/tts.js','js/dashboard-core.js','js/charts.js','js/layout.js','js/study-shortcuts.js','js/study-lifecycle.js','js/study-web.js','js/live2d-companion.js','js/study-sync-ui.js','js/app.js'];
+const files = ['js/ui-style.js','js/api.js','js/tts.js','js/dashboard-core.js','js/charts.js','js/layout.js','js/study-shortcuts.js','js/study-lifecycle.js','js/study-web.js','js/live2d-companion.js','js/study-sync-ui.js','js/app-update.js','js/app.js'];
 for (const file of files) assert(index.includes(file), `missing script load: ${file}`);
 const study = read('js/study-shortcuts.js');
 const actions = ['FAMILIAR','VAGUE','FORGET','WELL_FAMILIAR','START_SPELLING','SHOW_ANSWER','PREVIOUS_WORD','EXIT_SPELLING','CLEAR_INPUT','PLAY_AUDIO','TTS_PHRASE_1','TTS_PHRASE_2','TTS_PHRASE_3','SEARCH'];
@@ -70,6 +70,45 @@ assert(read('js/app.js').includes('ttsCompanionRead'), 'companion voice toggle i
 assert(!index.includes('ttsModelDrop'), 'legacy duplicate TTS model drop zone must stay removed');
 assert(index.includes('ttsRoleIndexFile'), 'role editor is missing optional model index upload');
 const appJs = read('js/app.js');
+
+// A role package now owns its whole profile.  Keep this contract close to the
+// broad settings smoke test so a future UI cleanup cannot accidentally restore
+// the second, Live2D-level persona editor or a second role-name field.
+const dossierStart = index.indexOf('class="tts-role-editor-section tts-role-dossier"');
+const bindingsStart = index.indexOf('class="tts-role-editor-section tts-role-bindings"');
+assert(dossierStart >= 0 && bindingsStart > dossierStart, 'role dossier must appear before Live2D and voice bindings');
+assert(index.includes('<input id="ttsRoleId" type="hidden">'), 'role package ID must remain an internal editor value');
+assert(!index.includes('id="ttsRoleName"'), 'role editor must not expose a second role-name input');
+assert(!index.includes('id="live2d-persona-settings"'), 'standalone Live2D persona settings must be removed');
+assert(!/const\s+PersonaSettings\s*=/.test(companion), 'Live2D companion must not recreate a standalone persona settings module');
+for (const id of [
+  'ttsRolePersonaName', 'ttsRolePersonaBackground', 'ttsRolePersonaTone',
+  'ttsRolePersonaAvoid', 'ttsRolePersonaExamples', 'ttsRolePersonaTotalCount',
+  'ttsRolePersonaImportInput', 'ttsRolePersonaImportBtn',
+  'ttsRolePersonaExportBtn', 'ttsRolePersonaResetBtn'
+]) {
+  assert(index.includes('id="' + id + '"'), `missing role dossier control: ${id}`);
+}
+for (const contract of [
+  'ROLE_PERSONA_TOTAL_LIMIT = 12000', 'ROLE_PERSONA_JSON_KEYS',
+  'function personaJsonFromLegacy', 'function legacyPersonaFromJson',
+  'function importRolePersonaJson', 'function exportRolePersonaJson',
+  "reader.readAsText(file, 'utf-8')", 'URL.createObjectURL(blob)'
+]) {
+  assert(appJs.includes(contract), `missing persona.json editor contract: ${contract}`);
+}
+assert(!/\bnewRoleId\s*\(/.test(appJs), 'the browser must not generate role IDs from display names');
+assert(appJs.includes('if (id) body.role_id = id;'), 'only existing role packages may send their ID while saving');
+assert(appJs.includes("id = String(savedRole.role_id || '').trim();"), 'new role IDs must be accepted from the server response');
+const packDisclosureStart = index.indexOf('<details class="tts-settings-disclosure tts-pack-disclosure">');
+const advancedDisclosureStart = index.indexOf('<details class="tts-settings-disclosure tts-advanced-disclosure">');
+assert(packDisclosureStart >= 0 && index.indexOf('id="ttsPackMountDropzone"', packDisclosureStart) > packDisclosureStart,
+  'quick voice-pack mounting must live inside the import disclosure');
+assert(advancedDisclosureStart >= 0 && index.indexOf('id="ttsTopK"', advancedDisclosureStart) > advancedDisclosureStart,
+  'low-frequency tuning must live inside the advanced voice disclosure');
+const updateUi = read('js/app-update.js');
+assert(appJs.includes('window.AppUpdate.init'), 'App.init must initialize the app-update module');
+assert(updateUi.includes('window.AppUpdate ='), 'app-update module must expose its small public API');
 assert(appJs.includes('/api/tts/roles/') && appJs.includes("'/upload' + query"), 'role editor does not upload into its role package');
 for (const endpoint of ["'/begin-update'", "'/commit-update'", "'/discard-update'"]) {
   assert(appJs.includes(endpoint), `role editor is missing staged update endpoint ${endpoint}`);

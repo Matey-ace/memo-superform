@@ -56,8 +56,23 @@ _ROLE_FILE_KINDS = {
     "audio": ("reference", (".wav", ".mp3", ".flac", ".ogg")),
 }
 _ROLE_LIBRARY_LOCK = threading.RLock()
+# ``persona.json`` is the source of truth for a role's display name and
+# companion prompt.  Keep the HTTP-facing names for old clients, but never
+# store them in roles.json again.
 _PERSONA_FIELDS = ("name", "background", "tone", "avoid", "examples")
-_PERSONA_LIMITS = {"name": 40, "background": 800, "tone": 400, "avoid": 400, "examples": 600}
+_PERSONA_JSON_FIELDS = ("版本", "角色", "语气", "背景", "禁忌", "示例")
+_PERSONA_JSON_VERSION = 1
+_PERSONA_FILENAME = "persona.json"
+_PERSONA_LIMITS = {"name": 64, "background": 8000, "tone": 2000, "avoid": 2000, "examples": 2000}
+_PERSONA_TOTAL_LIMIT = 12000
+_PERSONA_LABELS = {
+    "name": "角色", "background": "背景", "tone": "语气", "avoid": "禁忌", "examples": "示例",
+}
+_PERSONA_UNSET = object()
+_ROLE_MANIFEST_FIELDS = (
+    "role_id", "gpt_file", "sovits_file", "audio_file", "index_file",
+    "reference_text", "reference_language", "live2d_model_id",
+)
 
 # 这些导入覆盖 worker 入口以及日文、英文文本前处理器。仅有
 # ``install.json`` 并不能证明复制过来或安装中断的虚拟环境确实能合成语音。
@@ -295,7 +310,7 @@ def _coerce_str(value, default):
 
 def _default_role_persona(role_name):
     """为新建资料包返回一套完整且角色独立的默认人设。"""
-    name = str(role_name or "陪伴角色").strip()[:40] or "陪伴角色"
+    name = str(role_name or "陪伴角色").strip()[:_PERSONA_LIMITS["name"]] or "陪伴角色"
     return {
         "name": name,
         "background": "你是背词学习中的陪伴角色，观察学习节奏并给出简短、真诚的鼓励。",
@@ -305,21 +320,109 @@ def _default_role_persona(role_name):
     }
 
 
-def _normalize_persona(value, role_name, *, allow_empty=False):
-    """校验角色清单中保存的人设。"""
-    if value is None and allow_empty:
-        return {}
+def _persona_document_from_legacy(value, role_name, *, strict=True, allow_blank=True, fill_defaults=True):
+    """Convert the pre-v2 English API shape into the on-disk Chinese schema.
+
+    ``strict`` is used by live API writes so a typo cannot silently disappear.
+    Migration uses ``strict=False`` and may leave absent fields blank, keeping
+    an old partial role visibly incomplete until the user finishes its dossier.
+    """
     if not isinstance(value, dict):
         raise TTSException("角色人设格式无效")
-    result = {}
+    keys = set(value)
+    expected = set(_PERSONA_FIELDS)
+    if strict and keys != expected:
+        raise TTSException("角色人设必须包含且只包含：" + "、".join(_PERSONA_FIELDS))
+    if not strict and not keys.issubset(expected):
+        raise TTSException("旧角色人设包含无法迁移的字段")
     defaults = _default_role_persona(role_name)
+    source = {}
     for field in _PERSONA_FIELDS:
-        raw = value.get(field, defaults[field])
-        text = str(raw or "").strip()
-        if not text or len(text) > _PERSONA_LIMITS[field]:
-            raise TTSException("角色人设字段“%s”不能为空且不能超过 %d 个字符" % (field, _PERSONA_LIMITS[field]))
-        result[field] = text
-    return result
+        raw = value.get(field, defaults[field] if fill_defaults else "")
+        # Historic roles occasionally contained non-string values.  Keep the
+        # migration lossless enough to recover the role, while new writes are
+        # deliberately schema-strict.
+        if strict and not isinstance(raw, str):
+            raise TTSException("角色人设字段“%s”必须是文本" % _PERSONA_LABELS[field])
+        source[field] = str(raw or "").strip()
+    return _validate_persona_document({
+        "版本": _PERSONA_JSON_VERSION,
+        "角色": source["name"],
+        "语气": source["tone"],
+        "背景": source["background"],
+        "禁忌": source["avoid"],
+        "示例": source["examples"],
+    }, allow_blank=allow_blank)
+
+
+def _validate_persona_document(value, *, allow_blank=True):
+    """Validate the exact, versioned ``persona.json`` schema.
+
+    A draft may leave non-name fields empty.  The role status turns those into
+    actionable missing items and blocks activation; this lets a user create a
+    package before every detail is ready without ever treating it as complete.
+    """
+    if not isinstance(value, dict) or set(value) != set(_PERSONA_JSON_FIELDS):
+        raise TTSException("角色人设 JSON 必须包含且只包含：" + "、".join(_PERSONA_JSON_FIELDS))
+    if type(value.get("版本")) is not int or value.get("版本") != _PERSONA_JSON_VERSION:
+        raise TTSException("角色人设 JSON 的“版本”必须为 %d" % _PERSONA_JSON_VERSION)
+    mapping = {
+        "name": value.get("角色"), "tone": value.get("语气"), "background": value.get("背景"),
+        "avoid": value.get("禁忌"), "examples": value.get("示例"),
+    }
+    normalized = {}
+    for field in _PERSONA_FIELDS:
+        raw = mapping[field]
+        if not isinstance(raw, str):
+            raise TTSException("角色人设字段“%s”必须是文本" % _PERSONA_LABELS[field])
+        text = raw.strip()
+        if len(text) > _PERSONA_LIMITS[field]:
+            raise TTSException("角色人设字段“%s”不能超过 %d 个字符" % (_PERSONA_LABELS[field], _PERSONA_LIMITS[field]))
+        if field == "name" and not text:
+            raise TTSException("角色人设字段“角色”不能为空")
+        if not allow_blank and not text:
+            raise TTSException("角色人设字段“%s”不能为空" % _PERSONA_LABELS[field])
+        normalized[field] = text
+    if sum(len(normalized[field]) for field in _PERSONA_FIELDS) > _PERSONA_TOTAL_LIMIT:
+        raise TTSException("整份角色人设不能超过 %d 个字符" % _PERSONA_TOTAL_LIMIT)
+    return {
+        "版本": _PERSONA_JSON_VERSION,
+        "角色": normalized["name"],
+        "语气": normalized["tone"],
+        "背景": normalized["background"],
+        "禁忌": normalized["avoid"],
+        "示例": normalized["examples"],
+    }
+
+
+def _normalize_persona_document(value, role_name, *, allow_blank=True):
+    """Accept either the v2 Chinese document or the legacy English API body."""
+    if not isinstance(value, dict):
+        raise TTSException("角色人设格式无效")
+    keys = set(value)
+    if keys == set(_PERSONA_JSON_FIELDS):
+        return _validate_persona_document(value, allow_blank=allow_blank)
+    return _persona_document_from_legacy(value, role_name, strict=True, allow_blank=allow_blank)
+
+
+def _persona_document_to_public(document):
+    """Return the stable English API shape used by the existing renderer."""
+    if not isinstance(document, dict):
+        return {}
+    return {
+        "name": document.get("角色", ""),
+        "background": document.get("背景", ""),
+        "tone": document.get("语气", ""),
+        "avoid": document.get("禁忌", ""),
+        "examples": document.get("示例", ""),
+    }
+
+
+def _normalize_persona(value, role_name, *, allow_empty=False):
+    """Backward-compatible public helper returning the legacy English shape."""
+    if value is None and allow_empty:
+        return {}
+    return _persona_document_to_public(_normalize_persona_document(value, role_name))
 
 
 _TEXT_SPLIT_METHODS = {"cut0", "cut1", "cut2", "cut5"}
@@ -410,7 +513,7 @@ def _read_reference_language(path, default="中文"):
     return LANGUAGE_NUMBER_MAP.get(numbers[-1], default) if numbers else default
 
 
-def _role_status(role, pack_dir=None, staged_dir=None):
+def _role_status(role, pack_dir=None, staged_dir=None, *, persona_document=_PERSONA_UNSET):
     missing = []
     # 上传始终使用这些规范文件名。手工编辑或过期的清单一律视为不完整，
     # 不跟随其中任意指定的文件名。
@@ -425,6 +528,15 @@ def _role_status(role, pack_dir=None, staged_dir=None):
     if not str(role.get("reference_text") or "").strip(): missing.append("参考文本")
     if role.get("reference_language") not in LANGUAGE_NUMBER_MAP.values(): missing.append("参考语言")
     if not role.get("live2d_model_id"): missing.append("Live2D 模型")
+    if persona_document is _PERSONA_UNSET:
+        persona_document = _load_role_persona_document(pack_dir, role) if pack_dir else None
+    if persona_document is None:
+        missing.append("角色人设")
+    else:
+        for field in ("background", "tone", "avoid", "examples"):
+            public = _persona_document_to_public(persona_document)
+            if not str(public.get(field) or "").strip():
+                missing.append("角色人设（%s）" % _PERSONA_LABELS[field])
     if pack_dir:
         folder = _role_folder(pack_dir, role)
         required = {
@@ -443,10 +555,19 @@ def _role_status(role, pack_dir=None, staged_dir=None):
     return missing
 
 
-def _public_role(role, pack_dir=None):
+def _public_role(role, pack_dir=None, *, persona_document=_PERSONA_UNSET):
     item = dict(role)
     item.pop("folder", None)
-    item["missing"] = _role_status(item, pack_dir)
+    # ``name`` and ``persona`` used to live in roles.json.  They are now
+    # intentionally rebuilt from the per-role document for every response.
+    item.pop("name", None)
+    item.pop("persona", None)
+    if persona_document is _PERSONA_UNSET:
+        persona_document = _load_role_persona_document(pack_dir, role) if pack_dir else None
+    public_persona = _persona_document_to_public(persona_document)
+    item["name"] = public_persona.get("name", "")
+    item["persona"] = public_persona
+    item["missing"] = _role_status(item, pack_dir, persona_document=persona_document)
     item["complete"] = not item["missing"]
     return item
 
@@ -471,6 +592,71 @@ def _role_folder(pack_dir, role):
     edited manifest from making one role consume another role's files.
     """
     return os.path.join(pack_dir, _canonical_role_folder(role.get("role_id")))
+
+
+def _persona_path(pack_dir, role):
+    """Return the only allowed path for a role's persona document."""
+    return os.path.join(_role_folder(pack_dir, role), _PERSONA_FILENAME)
+
+
+def _load_role_persona_document(pack_dir, role):
+    """Read a v2 persona document without applying a legacy fallback.
+
+    Missing or malformed documents deliberately return ``None`` so the role is
+    visible as a draft instead of silently borrowing text from another role.
+    ``ensure_role_library`` handles all legacy migration before normal reads.
+    """
+    if not pack_dir:
+        return None
+    document = _read_json(_persona_path(pack_dir, role))
+    if document is None:
+        return None
+    try:
+        return _validate_persona_document(document)
+    except TTSException:
+        return None
+
+
+def _write_role_persona_document(pack_dir, role, document):
+    path = _persona_path(pack_dir, role)
+    if not _write_json(path, document):
+        raise TTSException("无法保存角色人设 JSON")
+
+
+def _persona_snapshot(pack_dir, role):
+    """Capture raw bytes so a paired role/Live2D operation can roll back."""
+    path = _persona_path(pack_dir, role)
+    try:
+        with open(path, "rb") as f:
+            return True, f.read()
+    except FileNotFoundError:
+        return False, b""
+    except OSError as exc:
+        raise TTSException("无法读取角色人设回滚数据：%s" % exc)
+
+
+def _restore_persona_snapshot(pack_dir, role, snapshot):
+    existed, payload = snapshot
+    path = _persona_path(pack_dir, role)
+    if existed:
+        temp = path + "." + uuid.uuid4().hex + ".rollback"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(temp, "wb") as f:
+                f.write(payload)
+                f.flush()
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                try:
+                    os.unlink(temp)
+                except OSError:
+                    pass
+    else:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
 
 def _role_stage_root(pack_dir, role_id):
@@ -505,47 +691,153 @@ def _staged_asset_fields(stage_dir):
     return fields
 
 
-def ensure_role_library(pack_dir):
-    """建立显式角色库，并一次性迁移旧共享目录。
+def _role_manifest_entry(role):
+    """Return one v2 roles.json entry without display/persona authority."""
+    role_id = _safe_role_id(role.get("role_id"))
+    entry = {"role_id": role_id}
+    for field in _ROLE_MANIFEST_FIELDS[1:]:
+        entry[field] = str(role.get(field) or "").strip()
+    return entry
 
-    The original files are copied, never moved, so a failed/interrupted migration
-    leaves the old resource pack usable.
+
+def _role_library_v2(state):
+    if not (isinstance(state, dict) and state.get("version") == 2 and isinstance(state.get("roles"), list)):
+        return False
+    # A few intermediate builds stamped the manifest as v2 while still
+    # retaining v1 display/persona fields.  Treat only the lean manifest as
+    # final v2; the transitional shape is promoted once below.  Deliberately
+    # do *not* require persona.json here: a genuinely new v2 pack that omits
+    # it must remain a visible draft rather than receiving invented content.
+    legacy_fields = {"name", "persona", "folder"}
+    return all(isinstance(role, dict) and not (legacy_fields & set(role)) for role in state["roles"])
+
+
+def _new_role_id(state):
+    """Generate an opaque, filesystem-safe ID when a caller creates a role."""
+    existing = {str(item.get("role_id") or "") for item in state.get("roles") or [] if isinstance(item, dict)}
+    for _ in range(8):
+        role_id = "role-" + uuid.uuid4().hex[:16]
+        if role_id not in existing:
+            return role_id
+    raise TTSException("生成角色标识失败，请重试")
+
+
+def _legacy_persona_document_for_role(role):
+    """Create a v2 document from a v1 manifest entry without dropping drafts."""
+    raw = role.get("persona") if isinstance(role, dict) else None
+    fallback = ""
+    if isinstance(raw, dict):
+        fallback = str(raw.get("name") or "").strip()
+    fallback = fallback or str(role.get("name") or role.get("role_id") or "陪伴角色").strip()
+    fallback = fallback[:_PERSONA_LIMITS["name"]] or "陪伴角色"
+    if isinstance(raw, dict) and set(raw) == set(_PERSONA_JSON_FIELDS):
+        try:
+            return _validate_persona_document(raw)
+        except TTSException:
+            pass
+    legacy = {}
+    if isinstance(raw, dict):
+        legacy = {field: raw[field] for field in _PERSONA_FIELDS if field in raw}
+    # The role manifest still supplies a stable display fallback when an old
+    # profile omitted or blanked its English ``name`` field.  Other absent
+    # fields intentionally stay empty so the package remains a draft.
+    if not str(legacy.get("name") or "").strip():
+        legacy["name"] = fallback
+    # A v1 record with no inline profile must remain a draft.  Filling a
+    # complete default here would hide the missing persona.json and would also
+    # prevent the browser's legacy per-character override from being migrated.
+    return _persona_document_from_legacy(legacy, fallback, strict=False, fill_defaults=False)
+
+
+def _migrate_role_library_to_v2(pack_dir, state):
+    """Atomically promote a v1 manifest to v2 plus per-role persona files.
+
+    Persona writes are made first, but every previous file is snapshotted and
+    restored if a later write fails.  The v1 roles.json remains untouched until
+    all documents are durable, so an interrupted migration can always retry.
     """
+    if not isinstance(state, dict) or not isinstance(state.get("roles"), list):
+        raise TTSException("角色配置格式无效，无法迁移")
+    roles = []
+    documents = []
+    for raw in state.get("roles") or []:
+        if not isinstance(raw, dict):
+            raise TTSException("角色配置包含无效条目，无法迁移")
+        entry = _role_manifest_entry(raw)
+        roles.append(entry)
+        # If an interrupted intermediate migration already produced a valid
+        # persona.json, it is newer than the stale inline copy and must win.
+        # This keeps reruns idempotent while still allowing a v1-only record
+        # to be promoted on first launch.
+        document = _load_role_persona_document(pack_dir, entry)
+        documents.append((entry, document or _legacy_persona_document_for_role(raw)))
+    active = str(state.get("active_role_id") or "").strip()
+    if active:
+        active = _safe_role_id(active)
+    migrated = {"version": 2, "active_role_id": active, "roles": roles}
+    snapshots = []
+    try:
+        for role, document in documents:
+            snapshot = _persona_snapshot(pack_dir, role)
+            snapshots.append((role, snapshot))
+            _write_role_persona_document(pack_dir, role, document)
+        _write_roles(pack_dir, migrated)
+    except Exception:
+        for role, snapshot in reversed(snapshots):
+            try:
+                _restore_persona_snapshot(pack_dir, role, snapshot)
+            except OSError:
+                pass
+        raise
+    return migrated
+
+
+def _legacy_shared_role_state(pack_dir):
+    """Build the old shared-folder migration source before promoting it to v2."""
+    legacy = os.path.join(pack_dir, "reference_audio", "sakiko")
+    root = _roles_root(pack_dir)
+    sakiko_dir, anon_dir = os.path.join(root, "sakiko"), os.path.join(root, "anon")
+    os.makedirs(sakiko_dir, exist_ok=True)
+    os.makedirs(anon_dir, exist_ok=True)
+    # 原始 D_sakiko 命名资源归属祥子；规范名 gpt/sovits 是后续上传内容，
+    # 有意隔离为爱音草稿。
+    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp-e15.ckpt"), os.path.join(sakiko_dir, "gpt.ckpt"))
+    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp_e8_s520.pth"), os.path.join(sakiko_dir, "sovits.pth"))
+    _copy_if_present(os.path.join(legacy, "black_sakiko.wav"), os.path.join(sakiko_dir, "reference.wav"))
+    sakiko_text = _read_text_file(os.path.join(legacy, "reference_text_black_sakiko.txt"))
+    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "gpt.ckpt"), os.path.join(anon_dir, "gpt.ckpt"))
+    _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sovits.pth"), os.path.join(anon_dir, "sovits.pth"))
+    return {
+        "version": 1,
+        "active_role_id": "",
+        "roles": [
+            {"role_id": "sakiko", "name": "丰川祥子", "folder": "roles/sakiko", "gpt_file": "gpt.ckpt",
+             "sovits_file": "sovits.pth", "audio_file": "reference.wav", "index_file": "",
+             "reference_text": sakiko_text, "reference_language": "日文", "live2d_model_id": "",
+             "persona": _default_role_persona("丰川祥子")},
+            {"role_id": "anon", "name": "千早爱音", "folder": "roles/anon", "gpt_file": "gpt.ckpt",
+             "sovits_file": "sovits.pth", "audio_file": "", "index_file": "",
+             "reference_text": "", "reference_language": "", "live2d_model_id": "",
+             "persona": _default_role_persona("千早爱音")},
+        ],
+    }
+
+
+def ensure_role_library(pack_dir):
+    """Establish the v2 role library and atomically migrate v1 data once."""
     with _ROLE_LIBRARY_LOCK:
         existing = _read_json(_roles_path(pack_dir))
-        if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
+        if _role_library_v2(existing):
             return existing
         with _role_write_guard(pack_dir):
-            # 本进程等待写保护期间，另一个本地进程可能已经完成迁移。
+            # Another local process may have completed migration while we were
+            # waiting for the write lock.
             existing = _read_json(_roles_path(pack_dir))
-            if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
+            if _role_library_v2(existing):
                 return existing
-            legacy = os.path.join(pack_dir, "reference_audio", "sakiko")
-            root = _roles_root(pack_dir)
-            sakiko_dir, anon_dir = os.path.join(root, "sakiko"), os.path.join(root, "anon")
-            os.makedirs(sakiko_dir, exist_ok=True)
-            os.makedirs(anon_dir, exist_ok=True)
-            # 原始 D_sakiko 命名资源归属祥子；规范名 gpt/sovits 是后续上传内容，
-            # 有意隔离为爱音草稿。
-            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp-e15.ckpt"), os.path.join(sakiko_dir, "gpt.ckpt"))
-            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sakiko_v2pp_e8_s520.pth"), os.path.join(sakiko_dir, "sovits.pth"))
-            _copy_if_present(os.path.join(legacy, "black_sakiko.wav"), os.path.join(sakiko_dir, "reference.wav"))
-            sakiko_text = _read_text_file(os.path.join(legacy, "reference_text_black_sakiko.txt"))
-            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "gpt.ckpt"), os.path.join(anon_dir, "gpt.ckpt"))
-            _copy_if_present(os.path.join(legacy, "GPT-SoVITS_models", "sovits.pth"), os.path.join(anon_dir, "sovits.pth"))
-            roles = [
-                {"role_id": "sakiko", "name": "丰川祥子", "folder": "roles/sakiko", "gpt_file": "gpt.ckpt",
-                 "sovits_file": "sovits.pth", "audio_file": "reference.wav", "index_file": "",
-                 "reference_text": sakiko_text, "reference_language": "日文", "live2d_model_id": "",
-                 "persona": _default_role_persona("丰川祥子")},
-                {"role_id": "anon", "name": "千早爱音", "folder": "roles/anon", "gpt_file": "gpt.ckpt",
-                 "sovits_file": "sovits.pth", "audio_file": "", "index_file": "",
-                 "reference_text": "", "reference_language": "", "live2d_model_id": "",
-                 "persona": _default_role_persona("千早爱音")},
-            ]
-            state = {"version": 1, "active_role_id": "", "roles": roles}
-            _write_json(_roles_path(pack_dir), state)
-            return state
+            if isinstance(existing, dict) and isinstance(existing.get("roles"), list):
+                return _migrate_role_library_to_v2(pack_dir, existing)
+            return _migrate_role_library_to_v2(pack_dir, _legacy_shared_role_state(pack_dir))
 
 
 def _role_write_operation(operation):
@@ -608,11 +900,17 @@ def roles_referencing_live2d(pack_dir, model_id):
             # 破坏未知角色。
             raise TTSException("角色配置损坏，无法确认 Live2D 模型是否仍被绑定")
         roles = state["roles"]
-        return [
-            {"role_id": str(role.get("role_id") or ""), "name": str(role.get("name") or role.get("role_id") or "")}
-            for role in roles
-            if isinstance(role, dict) and str(role.get("live2d_model_id") or "") == key
-        ]
+        result = []
+        for role in roles:
+            if not isinstance(role, dict) or str(role.get("live2d_model_id") or "") != key:
+                continue
+            document = _load_role_persona_document(pack_dir, role)
+            public = _persona_document_to_public(document)
+            result.append({
+                "role_id": str(role.get("role_id") or ""),
+                "name": str(public.get("name") or role.get("role_id") or ""),
+            })
+        return result
 
 
 def role_library_snapshot(pack_dir):
@@ -632,41 +930,56 @@ def restore_role_library(pack_dir, snapshot):
 
 
 def _candidate_role(pack_dir, state, data, *, staged_dir=None, check_active=True):
-    """校验元数据变更，但不写入角色库。"""
-    role_id = _safe_role_id(data.get("role_id"))
-    name = str(data.get("name") or "").strip()
-    if not name or len(name) > 64:
-        raise TTSException("角色名称不能为空且不能超过 64 个字符")
+    """Validate a role edit and return its manifest entry plus persona document.
+
+    New UI calls send an explicit ``persona`` document and omit ``role_id``.
+    Older clients retain the former ``name`` and English ``persona`` payloads;
+    those forms are normalized at this boundary rather than persisted again.
+    """
+    requested_id = str(data.get("role_id") or "").strip()
+    role_id = _safe_role_id(requested_id) if requested_id else _new_role_id(state)
     existing = next((item for item in state.get("roles") or [] if item.get("role_id") == role_id), None)
+
+    legacy_name = str(data.get("name") or "").strip()
+    existing_document = _load_role_persona_document(pack_dir, existing) if existing else None
+    if "persona" in data and data.get("persona") is not None:
+        fallback_name = legacy_name or (existing_document or {}).get("角色") or role_id
+        persona_document = _normalize_persona_document(data.get("persona"), fallback_name, allow_blank=True)
+    elif existing_document is not None:
+        persona_document = dict(existing_document)
+        # Retain legacy API compatibility: a supplied old ``name`` renames
+        # the package by rewriting the source-of-truth document.
+        if legacy_name:
+            persona_document["角色"] = legacy_name
+            persona_document = _validate_persona_document(persona_document, allow_blank=True)
+    elif legacy_name:
+        persona_document = _persona_document_from_legacy({}, legacy_name, strict=False, allow_blank=True)
+    else:
+        raise TTSException("新角色需要提供角色人设")
+
     candidate = dict(existing or {
-        "role_id": role_id, "folder": _canonical_role_folder(role_id),
-        "gpt_file": "", "sovits_file": "", "audio_file": "", "index_file": "", "persona": {},
+        "role_id": role_id, "gpt_file": "", "sovits_file": "", "audio_file": "", "index_file": "",
+        "reference_text": "", "reference_language": "", "live2d_model_id": "",
     })
-    # 目录不允许用户自定义，从而让旧版本创建的清单也遵守角色包不变量。
-    candidate["folder"] = _canonical_role_folder(role_id)
-    candidate.update({"name": name, "reference_text": str(data.get("reference_text") or "").strip(),
-                      "reference_language": str(data.get("reference_language") or "").strip(),
-                      "live2d_model_id": str(data.get("live2d_model_id") or "").strip()})
-    if "persona" in data:
-        candidate["persona"] = _normalize_persona(data.get("persona"), name)
-    elif existing is None:
-        candidate["persona"] = _default_role_persona(name)
-    elif not isinstance(candidate.get("persona"), dict):
-        # v0.77 之前的清单由前端利用浏览器中的旧角色 ID 覆盖值迁移。在无损
-        # 迁移写入角色本地值前，保留一个明确的空标记。
-        candidate["persona"] = {}
+    candidate["role_id"] = role_id
+    candidate.update({
+        "reference_text": str(data.get("reference_text") or "").strip(),
+        "reference_language": str(data.get("reference_language") or "").strip(),
+        "live2d_model_id": str(data.get("live2d_model_id") or "").strip(),
+    })
+    candidate = _role_manifest_entry(candidate)
     if check_active and state.get("active_role_id") == role_id:
-        missing = _role_status(candidate, pack_dir, staged_dir)
+        missing = _role_status(candidate, pack_dir, staged_dir, persona_document=persona_document)
         if missing:
             raise TTSException("当前已启用角色不能保存为未完成状态: " + "、".join(missing))
-    return existing, candidate
+    return existing, candidate, persona_document
 
 
 def preview_role_save(pack_dir, data):
     """在其他服务变更自身绑定前校验角色编辑。"""
     with _ROLE_LIBRARY_LOCK:
-        _, candidate = _candidate_role(pack_dir, ensure_role_library(pack_dir), data)
-        return _public_role(candidate, pack_dir)
+        _, candidate, persona_document = _candidate_role(pack_dir, ensure_role_library(pack_dir), data)
+        return _public_role(candidate, pack_dir, persona_document=persona_document)
 
 
 @_role_write_operation
@@ -681,12 +994,13 @@ def save_role(pack_dir, data, *, after_commit=None):
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         before = copy.deepcopy(state)
-        existing, candidate = _candidate_role(pack_dir, state, data)
+        existing, candidate, persona_document = _candidate_role(pack_dir, state, data)
         is_active = state.get("active_role_id") == candidate["role_id"]
         if is_active:
             # 在清单变化前停止旧 worker。此锁释放后开始的请求必须按新角色资料
             # 创建 worker，不能复用缓存的模型权重。
             _reset_manager()
+        snapshot = _persona_snapshot(pack_dir, candidate)
         if existing is None:
             state["roles"].append(candidate)
             role = candidate
@@ -694,15 +1008,19 @@ def save_role(pack_dir, data, *, after_commit=None):
             existing.clear()
             existing.update(candidate)
             role = existing
-        _write_roles(pack_dir, state)
-        public = _public_role(role, pack_dir)
-        if after_commit:
-            try:
+        try:
+            _write_role_persona_document(pack_dir, role, persona_document)
+            _write_roles(pack_dir, state)
+            public = _public_role(role, pack_dir, persona_document=persona_document)
+            if after_commit:
                 after_commit(public)
-            except Exception:
+        except Exception:
+            try:
                 _write_roles(pack_dir, before)
+            finally:
+                _restore_persona_snapshot(pack_dir, role, snapshot)
                 _reset_manager()
-                raise
+            raise
     return public
 
 
@@ -712,9 +1030,16 @@ def update_role_persona(pack_dir, role_id, persona):
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         role = _find_role(state, role_id)
-        role["persona"] = _normalize_persona(persona, role.get("name"))
-        _write_roles(pack_dir, state)
-        return _public_role(role, pack_dir)
+        old_document = _load_role_persona_document(pack_dir, role) or {}
+        fallback_name = old_document.get("角色") or role.get("role_id")
+        document = _normalize_persona_document(persona, fallback_name, allow_blank=True)
+        snapshot = _persona_snapshot(pack_dir, role)
+        try:
+            _write_role_persona_document(pack_dir, role, document)
+        except Exception:
+            _restore_persona_snapshot(pack_dir, role, snapshot)
+            raise
+        return _public_role(role, pack_dir, persona_document=document)
 
 
 @_role_write_operation
@@ -741,7 +1066,6 @@ def upload_role_file(pack_dir, role_id, kind, filename, data):
             out.flush()
         os.replace(temp, target)
         role[{"ckpt": "gpt_file", "pth": "sovits_file", "index": "index_file", "audio": "audio_file"}[kind]] = target_name
-        role["folder"] = _canonical_role_folder(role["role_id"])
         _write_roles(pack_dir, state)
     return _public_role(role, pack_dir)
 
@@ -879,13 +1203,13 @@ def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
             raise TTSException("角色更新批次不存在或已结束")
         if _safe_role_id(data.get("role_id")) != role["role_id"]:
             raise TTSException("角色更新目标不一致")
-        existing, candidate = _candidate_role(pack_dir, state, data, check_active=False)
+        existing, candidate, persona_document = _candidate_role(pack_dir, state, data, check_active=False)
         staged_fields = _staged_asset_fields(stage_dir)
         candidate.update(staged_fields)
-        candidate["folder"] = _canonical_role_folder(candidate["role_id"])
+        candidate = _role_manifest_entry(candidate)
         is_active = state.get("active_role_id") == candidate["role_id"]
         if is_active:
-            missing = _role_status(candidate, pack_dir, stage_dir)
+            missing = _role_status(candidate, pack_dir, stage_dir, persona_document=persona_document)
             if missing:
                 raise TTSException("当前已启用角色不能保存为未完成状态: " + "、".join(missing))
             # 在角色锁内、公开新清单前重置，避免后续请求把旧模型缓存与新文件混用。
@@ -893,6 +1217,7 @@ def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
         before = copy.deepcopy(state)
         folder = _role_folder(pack_dir, candidate)
         os.makedirs(folder, exist_ok=True)
+        persona_before = _persona_snapshot(pack_dir, candidate)
         applied, backups = _apply_staged_assets(folder, stage_dir, staged_fields)
         try:
             if existing is None:
@@ -902,15 +1227,19 @@ def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
                 existing.clear()
                 existing.update(candidate)
                 committed = existing
+            _write_role_persona_document(pack_dir, committed, persona_document)
             _write_roles(pack_dir, state)
-            public = _public_role(committed, pack_dir)
+            public = _public_role(committed, pack_dir, persona_document=persona_document)
             if after_commit:
                 after_commit(public)
         except Exception:
             try:
                 _write_roles(pack_dir, before)
             finally:
-                _restore_staged_assets(stage_dir, applied, backups)
+                try:
+                    _restore_persona_snapshot(pack_dir, candidate, persona_before)
+                finally:
+                    _restore_staged_assets(stage_dir, applied, backups)
             raise
         try:
             shutil.rmtree(stage_dir, ignore_errors=True)
@@ -1310,6 +1639,11 @@ def _missing_mount_paths(role):
         "参考音频": role_dir + "/reference.wav（也可为 .mp3 / .flac / .ogg）",
         "参考文本": "roles.json → %s.reference_text" % role_id,
         "参考语言": "roles.json → %s.reference_language" % role_id,
+        "角色人设": role_dir + "/persona.json",
+        "角色人设（背景）": role_dir + "/persona.json → 背景",
+        "角色人设（语气）": role_dir + "/persona.json → 语气",
+        "角色人设（禁忌）": role_dir + "/persona.json → 禁忌",
+        "角色人设（示例）": role_dir + "/persona.json → 示例",
         "Live2D 模型": "设置 → 角色资料包 → 绑定 Live2D",
         "Live2D 模型（不可用）": "设置 → 角色资料包 → 绑定可用的 Live2D",
     }
@@ -1345,7 +1679,10 @@ def _inspect_tts_pack_root(pack_root):
     library = list_roles(pack_root)
     voice_ready = []
     for role in library.get("roles") or []:
-        missing = [item for item in role.get("missing") or [] if item != "Live2D 模型"]
+        # 这份列表用于“可合成的声线”提示；Live2D 与陪伴人设仍会使角色
+        # 保持草稿、阻止启用，但不掩盖已经齐全的语音模型资料。
+        missing = [item for item in role.get("missing") or []
+                   if item != "Live2D 模型" and not str(item).startswith("角色人设")]
         if not missing:
             voice_ready.append(role)
     incomplete_roles = _incomplete_role_reports(library.get("roles") or [])
@@ -1535,7 +1872,7 @@ def _resolve_role(pack_dir, role_id=None):
     if not selected:
         raise TTSException("请先在设置中启用一个资料完整的角色")
     role = _find_role(state, selected)
-    missing = _role_status(role)
+    missing = _role_status(role, pack_dir)
     if missing:
         raise TTSException("角色资料未配齐: " + "、".join(missing))
     folder = _role_folder(pack_dir, role)

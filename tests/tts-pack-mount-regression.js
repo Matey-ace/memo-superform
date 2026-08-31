@@ -10,8 +10,14 @@ const app = fs.readFileSync('js/app.js', 'utf8');
 const api = fs.readFileSync('app_api.py', 'utf8');
 const tts = fs.readFileSync('tts.py', 'utf8');
 
+const importDisclosureStart = index.indexOf('<details class="tts-settings-disclosure tts-pack-disclosure">');
+const importDisclosureEnd = index.indexOf('</details>', importDisclosureStart);
+assert(importDisclosureStart >= 0 && importDisclosureEnd > importDisclosureStart,
+    'quick mounting must be grouped under the collapsible import-voice-pack section');
 for (const id of ['ttsPackMountDropzone', 'ttsPackMountInput', 'ttsPackMountBrowseBtn', 'ttsPackMountStatus', 'ttsPackMountMissing']) {
     assert(index.includes('id="' + id + '"'), 'missing quick-mount control: ' + id);
+    const position = index.indexOf('id="' + id + '"');
+    assert(position > importDisclosureStart && position < importDisclosureEnd, 'quick-mount control must remain inside import disclosure: ' + id);
 }
 assert(index.includes('ZIP 至少需包含有效的'), 'drop target must explain the minimum ZIP requirement');
 assert(app.includes("'/api/tts/mount-pack?name='"), 'quick-mount client is missing its API route');
@@ -40,6 +46,8 @@ for (const contract of ['_safe_zip_member_parts', '_extract_tts_pack_archive', '
 for (const contract of ['_inspect_tts_pack_root', '_runtime_layout_missing', '"incomplete_roles"']) {
     assert(tts.includes(contract), 'partial-package backend contract is missing: ' + contract);
 }
+assert(tts.includes('_PERSONA_FILENAME') && tts.includes('角色人设'),
+    'a mounted role package must report a missing persona.json profile alongside missing voice assets');
 assert(!tts.includes('def _validate_tts_pack_root'), 'mounting must no longer reject a structurally valid partial package');
 
 console.log('tts pack quick-mount UI regression checks passed');

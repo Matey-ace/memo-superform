@@ -19,12 +19,55 @@ assert(index.includes('选中角色（编辑 / 上传目标）'), 'selected role
 assert(index.includes('ttsRoleEditorContext'), 'editor must identify the role being edited');
 assert(index.includes('ttsRoleSelectionHint'), 'UI must distinguish selected and active roles');
 
+// The profile is now part of the role package rather than an unrelated Live2D
+// preference.  Its form must come before binding any model or voice assets.
+const dossierStart = index.indexOf('class="tts-role-editor-section tts-role-dossier"');
+const bindingsStart = index.indexOf('class="tts-role-editor-section tts-role-bindings"');
+assert(dossierStart >= 0 && bindingsStart > dossierStart, 'role dossier must precede asset bindings');
+assert(index.slice(dossierStart, bindingsStart).includes('persona.json'), 'dossier must identify persona.json as its stored profile');
+assert(!index.includes('id="ttsRoleName"'), 'the obsolete duplicate role-name field must stay removed');
+assert(!index.includes('id="live2d-persona-settings"'), 'the independent Live2D persona section must stay removed');
+assert(index.includes('<input id="ttsRoleId" type="hidden">'), 'role ID must stay internal to the editor');
+for (const [id, maximum] of [
+    ['ttsRolePersonaName', 64], ['ttsRolePersonaBackground', 8000],
+    ['ttsRolePersonaTone', 2000], ['ttsRolePersonaAvoid', 2000],
+    ['ttsRolePersonaExamples', 2000]
+]) {
+    const fieldStart = index.indexOf('id="' + id + '"');
+    const fieldEnd = index.indexOf('>', fieldStart);
+    assert(fieldStart >= 0, 'missing dossier field: ' + id);
+    assert(index.slice(fieldStart, fieldEnd).includes('maxlength="' + maximum + '"'), 'missing field size guard: ' + id);
+}
+for (const id of ['ttsRolePersonaTotalCount', 'ttsRolePersonaImportInput', 'ttsRolePersonaImportBtn', 'ttsRolePersonaExportBtn', 'ttsRolePersonaResetBtn']) {
+    assert(index.includes('id="' + id + '"'), 'missing dossier action: ' + id);
+}
+assert(app.includes("const ROLE_PERSONA_JSON_KEYS = ['版本', '角色', '语气', '背景', '禁忌', '示例'];"), 'persona JSON must use the fixed Chinese schema');
+for (const contract of [
+    'function personaJsonFromLegacy', 'function legacyPersonaFromJson',
+    'function importRolePersonaJson', 'function exportRolePersonaJson',
+    'function resetRolePersona', 'ROLE_PERSONA_TOTAL_LIMIT = 12000',
+    "reader.readAsText(file, 'utf-8')", 'new Blob([contents]', 'URL.createObjectURL(blob)'
+]) {
+    assert(app.includes(contract), 'missing persona dossier workflow: ' + contract);
+}
+assert(!/\broleName\b/.test(app), 'role display names must no longer have a second app-state source');
+
 for (const id of ['ttsRoleGptFile', 'ttsRoleSovitsFile', 'ttsRoleIndexFile', 'ttsRoleAudioFile']) {
     assert(app.includes("'" + id + "'"), 'role file input is not managed: ' + id);
 }
-const fixedId = app.indexOf('if (roleId) roleId.value = id;');
-const metadataBody = app.indexOf('const body = { role_id: id');
-assert(fixedId >= 0 && fixedId < metadataBody, 'new role ID must be fixed before saving metadata');
+const saveStart = app.indexOf('async function saveRoleEditor()');
+const saveEnd = app.indexOf('rolePersonaFields.forEach', saveStart);
+assert(saveStart >= 0 && saveEnd > saveStart, 'role save handler bounds changed');
+const saveBody = app.slice(saveStart, saveEnd);
+assert(!/\bnewRoleId\s*\(/.test(saveBody), 'front end must never manufacture a new role ID');
+assert(!saveBody.includes('role_id: id'), 'new role metadata must not be seeded with a browser-generated ID');
+assert(saveBody.includes('if (id) body.role_id = id;'), 'existing role updates must retain their server ID');
+const metadataBody = saveBody.indexOf('const body = {');
+const createDraft = saveBody.indexOf("postRoleJson('/api/tts/roles', body)");
+const receiveServerId = saveBody.indexOf("id = String(savedRole.role_id || '').trim();");
+const uploadDraftAssets = saveBody.indexOf('await uploadSelectedAssets();', receiveServerId);
+assert(metadataBody >= 0 && metadataBody < createDraft && createDraft < receiveServerId && receiveServerId < uploadDraftAssets,
+    'new roles must be saved first, receive a server ID, then upload their assets');
 const ckpt = app.indexOf("kind: 'ckpt'");
 const pth = app.indexOf("kind: 'pth'");
 const indexFile = app.indexOf("kind: 'index'");

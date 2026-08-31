@@ -397,6 +397,38 @@ body {
 }
 .fullscreen-chart iframe { width: 100%; height: 100%; border: 0; border-radius: 10px; }
 
+/* ================= 应用更新提示 ================= */
+.app-update-modal {
+  position: fixed; inset: 0; z-index: 3000; display: none; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(74, 55, 40, .48); backdrop-filter: blur(5px);
+}
+.app-update-modal.show { display: flex; }
+.app-update-dialog {
+  position: relative; width: min(560px, 100%); max-height: min(720px, calc(100vh - 48px)); overflow: auto;
+  padding: 30px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--paper); color: var(--ink);
+  box-shadow: var(--shadow-lg);
+}
+.app-update-kicker { color: var(--rose-deep); font-family: var(--round); font-size: 12px; font-weight: 800; letter-spacing: .1em; }
+.app-update-dialog h2 { margin: 7px 36px 10px 0; font-family: var(--serif); font-size: 23px; }
+.app-update-description, .app-update-warning { color: var(--ink-mid); font-size: 13px; line-height: 1.75; }
+.app-update-version-row { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; padding: 12px 14px; border-radius: 12px; background: var(--rose-pale); color: var(--ink-mid); font-size: 12px; }
+.app-update-version-row strong { color: var(--ink); font-family: var(--round); font-size: 13px; }
+.app-update-notes-wrap { margin: 16px 0; }
+.app-update-notes-wrap > p { margin-bottom: 7px; color: var(--ink-mid); font-size: 12px; font-weight: 800; }
+.app-update-notes { max-height: 180px; overflow: auto; padding: 12px; border: 1px dashed var(--line-strong); border-radius: 12px; background: #fffaf8; color: var(--ink-mid); font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+.app-update-progress { min-height: 20px; color: var(--sky-deep); font-size: 12px; line-height: 1.55; }
+.app-update-warning { margin-top: 10px; }
+.app-update-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.app-update-actions .test-btn, .app-update-actions .save-btn { margin: 0; }
+.app-update-close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-light); font-size: 26px; cursor: pointer; line-height: 1; }
+.app-update-close:hover, .app-update-close:focus-visible { background: var(--rose-pale); color: var(--rose-deep); }
+@media (max-width: 520px) {
+  .app-update-modal { padding: 14px; }
+  .app-update-dialog { padding: 24px 20px; }
+  .app-update-actions { align-items: stretch; flex-direction: column-reverse; }
+  .app-update-actions .test-btn, .app-update-actions .save-btn { width: 100%; }
+}
+
 /* ================= 欢迎覆盖层 ================= */
 .welcome-overlay {
   position: fixed; top: var(--topbar-h); left: 0; right: 0; bottom: 0;

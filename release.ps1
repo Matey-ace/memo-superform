@@ -5,7 +5,7 @@
 .DESCRIPTION
   从已提交且干净的源码构建、验证并发布单个统一 EXE。脚本不会自动暂存或提交文件。
 .PARAMETER Version
-  版本号，如 0.25（不包含 v 前缀）
+  版本号，如 0.25 或 1.0（不包含 v 前缀）
 .PARAMETER Message
   Release 说明（可选），默认自动生成
 .EXAMPLE
@@ -51,7 +51,15 @@ Write-Host ""
 
 # ---- 1. 发布前保护与回归 ----
 Write-Host "[1/7] 检查工作区、版本与回归测试..." -ForegroundColor Yellow
-if ($Version -notmatch '^0\.\d+$') { throw "版本号必须类似 0.66（不包含 v 前缀）" }
+if ($Version -notmatch '^\d+\.\d+(?:\.\d+)?$') { throw "版本号必须类似 0.79、1.0 或 1.0.1（不包含 v 前缀）" }
+$buildInfoPath = Join-Path $scriptDir "build_info.py"
+if (-not (Test-Path $buildInfoPath)) { throw "缺少 build_info.py，无法验证发布版本" }
+$buildInfoText = Get-Content -LiteralPath $buildInfoPath -Raw -Encoding UTF8
+$buildInfoMatch = [regex]::Match($buildInfoText, 'BUILD_VERSION\s*=\s*["'']([^"'']+)["'']')
+if (-not $buildInfoMatch.Success) { throw "build_info.py 中缺少 BUILD_VERSION" }
+if ($buildInfoMatch.Groups[1].Value -ne $Version) {
+    throw "发布版本 $Version 与 build_info.py 中的 BUILD_VERSION $($buildInfoMatch.Groups[1].Value) 不一致"
+}
 if (git status --porcelain) { throw "工作区不是干净状态；请先明确提交源码，脚本不会执行 git add -A" }
 # Existing local historical tags may intentionally point at rewritten release
 # commits; fetch only the publication branch and query the target tag remotely

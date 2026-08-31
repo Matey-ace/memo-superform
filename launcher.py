@@ -11,23 +11,28 @@ launcher.py - Memo Superform 统一启动入口（桌面 / 网页双模式）
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+import uuid
 import webbrowser
+
+from build_info import BUILD_VERSION
 
 
 _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
-# 每次打包发布都要更新此值。旧版本使用固定协调端口 8891，升级时会悄悄激活旧
-# 可执行文件，并在新代码运行前退出。按构建版本划分端口后，v0.78 能打开自己的
-# 窗口，并在升级期间准确报告共享 TTS 资料包锁。
-BUILD_VERSION = "0.78"
+# 每次打包发布都要更新 build_info.py 中的此值。旧版本使用固定协调端口 8891，
+# 升级时会悄悄激活旧可执行文件，并在新代码运行前退出。按构建版本划分端口后，
+# 新版本能打开自己的窗口，并在升级期间准确报告共享 TTS 资料包锁。
 
 
 class InstanceBroker:
@@ -399,6 +404,7 @@ def run_web(guard=None):
     os.environ["MEMO_MODE"] = "web"
     import server
     server.set_relaunch_handler(request_relaunch)
+    server.set_update_handler(request_update_apply)
     shutdown_requested = threading.Event()
     stop_lock = threading.Lock()
     tray_holder = {"tray": None}
@@ -469,15 +475,15 @@ def run_desktop(guard=None):
 
     import server
     server.set_relaunch_handler(request_relaunch)
+    server.set_update_handler(request_update_apply)
     result = server.start_server(open_browser=False, block=False)
     if not result:
         show_message("Memo Superform", "无法启动本地服务器，请检查端口是否被占用。")
         sys.exit(1)
     _log("server started: %s" % result[1])
     httpd, url = result
-    # 给桌面窗口 URL 加版本参数，强制 WebView 拉取最新页面，避免陈旧缓存
-    # 与当前静态入口版本同步，避免 WebView 继续命中旧版 index.html。
-    url = url + "?v=78"
+    # server.start_server 已把 build_info.BUILD_VERSION 写入入口 URL，并为本地
+    # HTML/JS/CSS 禁用缓存；不要再附加硬编码的 v=78，以免自动更新后仍命中旧页。
     time.sleep(0.5)
 
     import webview
@@ -612,11 +618,402 @@ def request_relaunch(mode):
     _log("relaunch exit scheduled")
     return True
 
+
+_UPDATE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UPDATE_HELPER_PREFIX = "memo-update-helper-"
+_UPDATE_REQUEST_PREFIX = "memo-update-request-"
+_UPDATE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(256 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def _atomic_write_json(path, value):
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    temporary = path + ".tmp-" + uuid.uuid4().hex
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    finally:
+        try:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+        except OSError:
+            pass
+
+
+def _update_directory():
+    path = os.path.join(get_data_dir(), "updates")
+    os.makedirs(path, exist_ok=True)
+    return os.path.abspath(path)
+
+
+def _is_child_path(path, parent):
+    """只把更新器生成物限制在 data/updates 下，拒绝宽泛的清理路径。"""
+    try:
+        return os.path.commonpath([os.path.realpath(path), os.path.realpath(parent)]) == os.path.realpath(parent)
+    except (OSError, ValueError):
+        return False
+
+
+def _hidden_detached_popen(command, env=None):
+    """运行后台更新助手，整个过程不创建或闪烁黑色控制台窗口。"""
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if env is not None:
+        kwargs["env"] = env
+    if os.name == "nt":
+        flags = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+        if flags:
+            kwargs["creationflags"] = flags
+        startupinfo_factory = getattr(subprocess, "STARTUPINFO", None)
+        if startupinfo_factory is not None:
+            try:
+                startupinfo = startupinfo_factory()
+                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+                kwargs["startupinfo"] = startupinfo
+            except Exception:
+                pass
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(command, **kwargs)
+
+
+def _wait_for_process_exit(pid, timeout_seconds=120):
+    """更新 helper 等待旧 EXE 真正退出，避免新版抢占旧服务器端口。"""
+    if os.name == "nt":
+        # Windows 上 ``os.kill(pid, 0)`` 不是 POSIX 的无副作用存在性探测；某些
+        # Python 运行时会把 signal 0 传成 TerminateProcess，反而杀掉旧应用。
+        # 改用 SYNCHRONIZE 句柄和 WaitForSingleObject，只等待、不发送任何信号。
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel32.OpenProcess
+            open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            open_process.restype = wintypes.HANDLE
+            wait_for_single_object = kernel32.WaitForSingleObject
+            wait_for_single_object.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            wait_for_single_object.restype = wintypes.DWORD
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = (wintypes.HANDLE,)
+            close_handle.restype = wintypes.BOOL
+
+            synchronize = 0x00100000
+            query_limited_information = 0x00001000
+            wait_object_0 = 0x00000000
+            wait_failed = 0xFFFFFFFF
+            invalid_parameter = 87  # ERROR_INVALID_PARAMETER: PID 已不存在。
+            handle = open_process(synchronize | query_limited_information, False, int(pid))
+            if not handle:
+                return ctypes.get_last_error() == invalid_parameter
+            try:
+                deadline = time.monotonic() + float(timeout_seconds)
+                while time.monotonic() < deadline:
+                    remaining_ms = max(1, min(500, int((deadline - time.monotonic()) * 1000)))
+                    result = wait_for_single_object(handle, remaining_ms)
+                    if result == wait_object_0:
+                        return True
+                    if result == wait_failed:
+                        return False
+                return False
+            finally:
+                close_handle(handle)
+        except Exception as exc:
+            _log("Windows process wait failed: %s" % exc)
+            return False
+
+    # 非 Windows 平台的 helper 不会被启动；保留 POSIX 的 signal 0 分支供单元
+    # 测试和开发运行使用，该平台上它是无副作用的存在性探测。
+    deadline = time.monotonic() + float(timeout_seconds)
+    while time.monotonic() < deadline:
+        try:
+            os.kill(int(pid), 0)
+        except OSError:
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def _update_result_path():
+    return os.path.join(_update_directory(), "last-update-result.json")
+
+
+def _record_update_result(status, message, **extra):
+    payload = {
+        "status": status,
+        "message": str(message or ""),
+        "timestamp": int(time.time()),
+    }
+    payload.update(extra)
+    try:
+        _atomic_write_json(_update_result_path(), payload)
+    except OSError:
+        pass
+
+
+def _validate_update_request(request):
+    """校验 helper 请求；所有路径均由本进程生成，仍在执行前再做一次收口。"""
+    if not isinstance(request, dict):
+        raise ValueError("更新请求格式不正确")
+    update_dir = _update_directory()
+    source_path = os.path.abspath(str(request.get("source_path") or ""))
+    target_path = os.path.abspath(str(request.get("target_path") or ""))
+    expected_sha256 = str(request.get("sha256") or "").lower()
+    mode = str(request.get("mode") or "")
+    helper_path = os.path.abspath(str(request.get("helper_path") or ""))
+    try:
+        expected_size = int(request.get("size") or 0)
+        parent_pid = int(request.get("parent_pid") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("更新请求的大小或进程号不正确") from exc
+    if (
+        not _is_child_path(source_path, update_dir)
+        or not _is_child_path(helper_path, update_dir)
+        or not os.path.basename(helper_path).startswith(_UPDATE_HELPER_PREFIX)
+        or not helper_path.lower().endswith(".exe")
+        or not _UPDATE_SHA256_RE.fullmatch(expected_sha256)
+        or not (0 < expected_size <= _UPDATE_MAX_BYTES)
+        or parent_pid <= 0
+        or mode not in ("desktop", "web")
+        or not target_path.lower().endswith(".exe")
+    ):
+        raise ValueError("更新请求校验失败")
+    return {
+        "source_path": source_path,
+        "target_path": target_path,
+        "sha256": expected_sha256,
+        "size": expected_size,
+        "parent_pid": parent_pid,
+        "mode": mode,
+        "helper_path": helper_path,
+    }
+
+
+def _cleanup_update_helper(path):
+    """新版本启动后延迟清理由旧版本复制出的 helper，不触及用户任何文件。"""
+    update_dir = _update_directory()
+    candidate = os.path.abspath(str(path or ""))
+    if (
+        not _is_child_path(candidate, update_dir)
+        or not os.path.basename(candidate).startswith(_UPDATE_HELPER_PREFIX)
+        or not candidate.lower().endswith(".exe")
+    ):
+        return
+
+    def remove_later():
+        try:
+            # helper 可能还在写成功结果；稍等后再删，并只删除精确匹配的本地副本。
+            time.sleep(4.0)
+            if os.path.isfile(candidate):
+                os.remove(candidate)
+        except OSError:
+            pass
+
+    threading.Thread(target=remove_later, name="memo-update-helper-cleanup", daemon=True).start()
+
+
+def _restart_old_target_after_update_failure(target_path, mode):
+    try:
+        if os.path.isfile(target_path):
+            _hidden_detached_popen([target_path, "--mode", mode])
+    except Exception as exc:
+        _log("failed to restart old app after update error: %s" % exc)
+
+
+def apply_staged_update(request_path):
+    """更新 helper 专用入口：等待父进程、核验、替换并启动新版。
+
+    helper 是当前 EXE 的临时副本，因此这里运行时没有服务器、托盘或单实例锁；只做
+    文件操作。更新失败会保留旧 EXE 和候选文件，并重新启动旧版应用。
+    """
+    request_file = os.path.abspath(str(request_path or ""))
+    update_dir = _update_directory()
+    target_path = ""
+    mode = "web"
+    backup_path = ""
+    temporary_target = ""
+    try:
+        if (
+            not _is_child_path(request_file, update_dir)
+            or not os.path.basename(request_file).startswith(_UPDATE_REQUEST_PREFIX)
+            or not request_file.lower().endswith(".json")
+        ):
+            raise ValueError("更新请求路径校验失败")
+        with open(request_file, "r", encoding="utf-8") as handle:
+            request = _validate_update_request(json.load(handle))
+        target_path = request["target_path"]
+        mode = request["mode"]
+        source_path = request["source_path"]
+        if not _wait_for_process_exit(request["parent_pid"]):
+            raise RuntimeError("等待旧版本退出超时")
+        if not os.path.isfile(target_path):
+            raise RuntimeError("当前应用文件不存在，未执行替换")
+        if not os.path.isfile(source_path):
+            raise RuntimeError("已下载的更新文件不存在")
+        if os.path.getsize(source_path) != request["size"]:
+            raise RuntimeError("已下载的更新文件大小发生变化")
+        if _sha256_file(source_path) != request["sha256"]:
+            raise RuntimeError("已下载的更新文件 SHA-256 校验失败")
+
+        target_dir = os.path.dirname(target_path)
+        token = uuid.uuid4().hex
+        temporary_target = os.path.join(target_dir, ".%s.memo-update-%s.tmp" % (os.path.basename(target_path), token))
+        shutil.copy2(source_path, temporary_target)
+        if os.path.getsize(temporary_target) != request["size"] or _sha256_file(temporary_target) != request["sha256"]:
+            raise RuntimeError("复制到安装目录后的更新文件校验失败")
+
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_path = "%s.previous-%s.exe" % (target_path[:-4], stamp)
+        os.replace(target_path, backup_path)
+        try:
+            os.replace(temporary_target, target_path)
+            temporary_target = ""
+            _hidden_detached_popen([
+                target_path,
+                "--mode", mode,
+                "--cleanup-update-helper", request["helper_path"],
+            ])
+        except Exception:
+            # 新版未能启动时把旧文件恢复为原名称，保证下次双击仍是可用版本。新
+            # 文件保留为 failed 副本，避免在失败处理中无提示地丢弃诊断样本。
+            if os.path.exists(backup_path):
+                if os.path.exists(target_path):
+                    failed_path = "%s.failed-%s.exe" % (target_path[:-4], token)
+                    os.replace(target_path, failed_path)
+                os.replace(backup_path, target_path)
+            raise
+
+        _record_update_result("success", "已安装 v%s" % os.path.basename(source_path), backup_path=backup_path)
+        for path in (source_path, request_file):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return 0
+    except Exception as exc:
+        if temporary_target:
+            try:
+                os.remove(temporary_target)
+            except OSError:
+                pass
+        # 如果失败发生在移动旧 EXE 之后，则先恢复它；若新文件已经替换过，保留它
+        # 以便人工排查，并让旧备份回到原路径。
+        try:
+            if backup_path and os.path.exists(backup_path) and not os.path.exists(target_path):
+                os.replace(backup_path, target_path)
+        except OSError:
+            pass
+        _record_update_result("failed", str(exc), target_path=target_path)
+        _log("update helper failed: %s" % exc)
+        _restart_old_target_after_update_failure(target_path, mode)
+        show_message("Memo Superform 更新失败", "更新没有安装成功，已保留当前版本。\n\n原因：%s" % str(exc))
+        return 1
+
+
+def request_update_apply(staged, mode):
+    """复制当前 EXE 为无界面 helper，并在 HTTP 响应返回后退出给 helper 接管。"""
+    if not getattr(sys, "frozen", False) or os.name != "nt":
+        raise RuntimeError("当前运行环境不支持自动安装更新")
+    if mode not in ("desktop", "web"):
+        raise RuntimeError("更新后的启动模式不正确")
+    if not isinstance(staged, dict):
+        raise RuntimeError("更新文件信息不正确")
+    update_dir = _update_directory()
+    source_path = os.path.abspath(str(staged.get("path") or ""))
+    expected_sha256 = str(staged.get("sha256") or "").lower()
+    try:
+        expected_size = int(staged.get("size") or 0)
+    except (TypeError, ValueError):
+        expected_size = 0
+    if (
+        not _is_child_path(source_path, update_dir)
+        or not os.path.isfile(source_path)
+        or not _UPDATE_SHA256_RE.fullmatch(expected_sha256)
+        or not (0 < expected_size <= _UPDATE_MAX_BYTES)
+        or os.path.getsize(source_path) != expected_size
+        or _sha256_file(source_path) != expected_sha256
+    ):
+        raise RuntimeError("更新文件在交接前校验失败")
+
+    target_path = os.path.abspath(sys.executable)
+    if not os.path.isfile(target_path) or not os.access(os.path.dirname(target_path), os.W_OK):
+        raise RuntimeError("当前安装目录不可写，无法自动安装更新")
+
+    token = uuid.uuid4().hex
+    helper_path = os.path.join(update_dir, _UPDATE_HELPER_PREFIX + token + ".exe")
+    request_path = os.path.join(update_dir, _UPDATE_REQUEST_PREFIX + token + ".json")
+    try:
+        # 不能直接让运行中的 exe 自己替换自己；把当前版本复制为最小 helper 后，
+        # helper 会等待本进程完全退出，再以目标目录内的原子 os.replace 完成交接。
+        shutil.copy2(target_path, helper_path)
+        _atomic_write_json(request_path, {
+            "parent_pid": os.getpid(),
+            "source_path": source_path,
+            "target_path": target_path,
+            "sha256": expected_sha256,
+            "size": expected_size,
+            "mode": mode,
+            "helper_path": helper_path,
+        })
+        child_env = dict(os.environ)
+        # helper 位于 data/updates；显式保留原数据目录，避免其自身路径被误当成
+        # 应用根目录而影响更新请求/结果的验证和记录。
+        child_env["MEMO_DATA_DIR"] = get_data_dir()
+        process = _hidden_detached_popen([helper_path, "--apply-update", request_path], env=child_env)
+        _log("update helper spawned pid=%s" % process.pid)
+    except Exception as exc:
+        for path in (request_path, helper_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        raise RuntimeError("无法启动更新器：" + str(exc)) from exc
+
+    write_launcher_config(mode, remember=True)
+    _release_tray()
+    _release_guard()
+    # 保留短暂窗口让 /api/app/update/apply 的成功响应到达前端；helper 会持续等待
+    # 本进程彻底结束，所以不会形成新旧版本同时抢占 HTTP 端口的情况。
+    threading.Timer(1.8, lambda: os._exit(0)).start()
+    _log("update exit scheduled")
+    return True
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Memo Superform 统一启动入口")
     parser.add_argument("--mode", choices=["desktop", "web"], help="直接指定启动模式")
     parser.add_argument("--reset", action="store_true", help="清除记住的模式选择")
+    parser.add_argument("--apply-update", metavar="REQUEST", help=argparse.SUPPRESS)
+    parser.add_argument("--cleanup-update-helper", metavar="PATH", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    # 该分支只由临时 helper 使用，必须在实例锁、服务器、网页窗口任何一个启动前
+    # 运行；否则旧版尚在时可能出现两份服务器或抢占不同构建端口的问题。
+    if args.apply_update:
+        return apply_staged_update(args.apply_update)
+
+    if args.cleanup_update_helper:
+        _cleanup_update_helper(args.cleanup_update_helper)
 
     if args.reset:
         clear_launcher_config()

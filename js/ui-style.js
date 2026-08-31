@@ -4,7 +4,8 @@
     'use strict';
 
     var STORAGE_KEY = 'memo_ui_style';
-    var VERSION = '20260830-v078-full-runtime';
+    // 此缓存标记仅用于本地静态资源失效，不参与应用版本或更新比较。
+    var VERSION = '20260831-auto-update';
     var value = 'standard';
     try {
         var saved = localStorage.getItem(STORAGE_KEY);
