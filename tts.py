@@ -111,6 +111,19 @@ _TTS_PACK_MOUNT_MAX_UNCOMPRESSED_BYTES = _mount_limit("MEMO_TTS_PACK_MAX_UNCOMPR
 _TTS_PACK_MOUNT_MAX_FILES = _mount_limit("MEMO_TTS_PACK_MAX_FILES", 50000)
 _TTS_PACK_MOUNT_CHUNK_BYTES = 1024 * 1024
 _TTS_PACK_MOUNT_LOCK = threading.RLock()
+# 浏览器/普通网页文件上传仍要经过 WebView 或浏览器进程；只保留小包后备入口。
+# 完整 GPT-SoVITS 运行时请走桌面原生路径，不应再把数 GB ZIP 放进 HTTP 请求体。
+TTS_PACK_WEB_UPLOAD_MAX_BYTES = _mount_limit(
+    "MEMO_TTS_PACK_WEB_UPLOAD_MAX_BYTES", 256 * 1024 ** 2
+)
+_TTS_PACK_MOUNT_PROGRESS_MIN_SECONDS = 0.25
+_TTS_PACK_MOUNT_PROGRESS_MIN_BYTES = 4 * 1024 ** 2
+_TTS_PACK_MOUNT_DISK_RESERVE_BYTES = 256 * 1024 ** 2
+
+# 后台挂载进入提交流程前会标记该资料包，防止新的 synthesize/preload 或角色写入
+# 与最终目录交换竞争。标记只存在于本地进程；跨进程竞争仍由 .tts.lock 兜底。
+_TTS_PACK_MOUNTING_LOCK = threading.RLock()
+_TTS_PACK_MOUNTING = set()
 
 
 def _hidden_windows_subprocess_kwargs():
@@ -213,8 +226,33 @@ class TTSException(Exception):
     """语音引擎相关的可读错误。"""
 
 
+def _normalized_pack_dir(pack_dir):
+    return os.path.normcase(os.path.abspath(os.fspath(pack_dir)))
+
+
+def _set_tts_pack_mounting(pack_dir, mounting):
+    """登记当前进程正在安装的资料包，供运行时与角色写入路径避让。"""
+    key = _normalized_pack_dir(pack_dir)
+    with _TTS_PACK_MOUNTING_LOCK:
+        if mounting:
+            _TTS_PACK_MOUNTING.add(key)
+        else:
+            _TTS_PACK_MOUNTING.discard(key)
+
+
+def is_tts_pack_mounting(pack_dir):
+    with _TTS_PACK_MOUNTING_LOCK:
+        return _normalized_pack_dir(pack_dir) in _TTS_PACK_MOUNTING
+
+
+def _assert_tts_pack_not_mounting(pack_dir, operation="使用语音功能"):
+    if is_tts_pack_mounting(pack_dir):
+        raise TTSException("语音包正在后台挂载，请等待安装完成后再%s" % operation)
+
+
 def _assert_role_write_allowed(pack_dir):
     """其他 Memo 实例持有本包 TTS 锁时拒绝编辑。"""
+    _assert_tts_pack_not_mounting(pack_dir, "修改角色资料")
     manager_lock = globals().get("_MANAGER_LOCK")
     manager = None
     if manager_lock is not None:
@@ -1529,7 +1567,11 @@ def _safe_zip_member_parts(info):
 
 
 def _inspect_tts_pack_archive(archive):
-    """解压前检查所有成员名称和总大小。"""
+    """解压前检查所有成员名称和总大小。
+
+    返回 ``(members, total_size, total_files)``。目录项不计入文件与字节进度，
+    但仍参与完整的路径安全校验。
+    """
     infos = archive.infolist()
     if not infos:
         raise TTSException("语音包 ZIP 是空的")
@@ -1567,11 +1609,22 @@ def _inspect_tts_pack_archive(archive):
             if file_size >= 128 * 1024 ** 2 and compressed_size * 200 < file_size:
                 raise TTSException("语音包压缩比例异常")
         members.append((info, parts, is_directory))
-    return members
+    return members, total_size, len(files)
 
 
-def _extract_tts_pack_archive(archive_path, extract_dir):
-    """把一个 ZIP 安全解压到私有暂存目录。"""
+def _notify_tts_pack_progress(callback, stage, **payload):
+    """调用可选进度回调；进度显示失败不能影响资料包安全安装。"""
+    if not callable(callback):
+        return
+    try:
+        callback(stage, payload)
+    except Exception:
+        # 回调由 UI/任务层提供，安装底层不应因状态展示问题失去原子回滚保障。
+        pass
+
+
+def _extract_tts_pack_archive(archive_path, extract_dir, on_progress=None):
+    """把一个 ZIP 安全解压到私有暂存目录，并按节流粒度报告进度。"""
     try:
         archive = zipfile.ZipFile(archive_path, "r")
     except (OSError, zipfile.BadZipFile) as exc:
@@ -1579,7 +1632,31 @@ def _extract_tts_pack_archive(archive_path, extract_dir):
 
     root = os.path.abspath(extract_dir)
     try:
-        members = _inspect_tts_pack_archive(archive)
+        members, total_size, total_files = _inspect_tts_pack_archive(archive)
+        completed_bytes = 0
+        completed_files = 0
+        last_report_bytes = -1
+        last_report_at = 0.0
+
+        def report(force=False):
+            nonlocal last_report_bytes, last_report_at
+            now = time.monotonic()
+            if not force:
+                if (completed_bytes - last_report_bytes < _TTS_PACK_MOUNT_PROGRESS_MIN_BYTES and
+                        now - last_report_at < _TTS_PACK_MOUNT_PROGRESS_MIN_SECONDS):
+                    return
+            last_report_bytes = completed_bytes
+            last_report_at = now
+            _notify_tts_pack_progress(
+                on_progress,
+                "extracting",
+                completed_bytes=completed_bytes,
+                total_bytes=total_size,
+                completed_files=completed_files,
+                total_files=total_files,
+            )
+
+        report(force=True)
         for info, parts, is_directory in members:
             destination = os.path.abspath(os.path.join(root, *parts))
             try:
@@ -1600,10 +1677,14 @@ def _extract_tts_pack_archive(archive_path, extract_dir):
                             break
                         target.write(chunk)
                         written += len(chunk)
+                        completed_bytes += len(chunk)
+                        report()
             except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
                 raise TTSException("解压语音包失败：%s" % exc)
             if written != int(info.file_size):
                 raise TTSException("语音包内文件大小校验失败")
+            completed_files += 1
+            report(force=completed_files == total_files)
     finally:
         archive.close()
 
@@ -1756,7 +1837,8 @@ def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
     _clear_engine_probe_cache(pack_dir)
 
 
-def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
+def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name="", *,
+                           on_progress=None, before_switch=None):
     """把完整或待补齐的 GPT-SoVITS ZIP 安装到 ``data/tts_pack``。
 
     可接受 ZIP 的内容为完整 ``tts_pack`` 目录，可直接位于归档根目录或唯一一层
@@ -1780,15 +1862,70 @@ def mount_tts_pack_archive(pack_dir, data_dir, archive_path, source_name=""):
     pack_dir = os.path.abspath(pack_dir)
     parent = os.path.dirname(pack_dir)
     os.makedirs(parent, exist_ok=True)
+    _notify_tts_pack_progress(
+        on_progress,
+        "checking",
+        completed_bytes=0,
+        total_bytes=0,
+        completed_files=0,
+        total_files=0,
+        archive_bytes=archive_size,
+    )
+    try:
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            _members, unpacked_size, unpacked_files = _inspect_tts_pack_archive(archive)
+    except TTSException:
+        raise
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise TTSException("请选择有效的语音包 ZIP 文件：%s" % exc)
+    try:
+        free_bytes = shutil.disk_usage(parent).free
+    except OSError as exc:
+        raise TTSException("无法检查语音包安装磁盘空间：%s" % exc)
+    required_bytes = unpacked_size + _TTS_PACK_MOUNT_DISK_RESERVE_BYTES
+    if free_bytes < required_bytes:
+        raise TTSException(
+            "语音包安装磁盘空间不足：至少需要 %.2f GB 可用空间，当前仅 %.2f GB"
+            % (required_bytes / 1024 ** 3, free_bytes / 1024 ** 3)
+        )
+    _notify_tts_pack_progress(
+        on_progress,
+        "checking",
+        completed_bytes=0,
+        total_bytes=unpacked_size,
+        completed_files=0,
+        total_files=unpacked_files,
+        archive_bytes=archive_size,
+        required_bytes=required_bytes,
+        free_bytes=free_bytes,
+    )
     extraction_dir = tempfile.mkdtemp(prefix=".tts-pack-extract-", dir=parent)
     candidate_dir = ""
     try:
         with _TTS_PACK_MOUNT_LOCK:
-            _extract_tts_pack_archive(archive_path, extraction_dir)
+            _extract_tts_pack_archive(archive_path, extraction_dir, on_progress=on_progress)
+            _notify_tts_pack_progress(
+                on_progress,
+                "validating",
+                completed_bytes=unpacked_size,
+                total_bytes=unpacked_size,
+                completed_files=unpacked_files,
+                total_files=unpacked_files,
+            )
             source_root = _find_tts_pack_root(extraction_dir)
             pack, library, readiness = _inspect_tts_pack_root(source_root)
             candidate_dir = os.path.join(parent, ".tts-pack-ready-" + uuid.uuid4().hex)
             os.replace(source_root, candidate_dir)
+            if callable(before_switch):
+                before_switch()
+            _notify_tts_pack_progress(
+                on_progress,
+                "replacing",
+                completed_bytes=unpacked_size,
+                total_bytes=unpacked_size,
+                completed_files=unpacked_files,
+                total_files=unpacked_files,
+            )
             _check_tts_pack_can_be_replaced(pack_dir)
             _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir)
             candidate_dir = ""  # ownership moved to the live package path
@@ -1855,6 +1992,341 @@ def mount_tts_pack_stream(pack_dir, data_dir, stream, content_length, source_nam
                 os.unlink(temp_path)
             except OSError:
                 pass
+
+
+class TTSPackMountJobManager:
+    """把耗时的语音包安装从 HTTP/WebView 线程移到单一后台任务。
+
+    本地原生文件选择与浏览器小包上传都落到该管理器。状态快照刻意只包含文件名
+    和大小，绝不把本机完整路径返回给网页。
+    """
+
+    _MAX_TERMINAL_JOBS = 24
+    _ACTIVE_STATES = {"queued", "running"}
+
+    def __init__(self, pack_dir, data_dir):
+        self.pack_dir = os.path.abspath(os.fspath(pack_dir))
+        self.data_dir = os.path.abspath(os.fspath(data_dir))
+        self._lock = threading.RLock()
+        self._jobs = {}
+        self._job_order = []
+        self._active_job_id = ""
+        self.recover_stale_staging()
+
+    @property
+    def _parent_dir(self):
+        return os.path.dirname(self.pack_dir)
+
+    @property
+    def _install_lock_path(self):
+        # 独立于 ``tts_pack/.tts.lock``：后者由常驻 worker 占用，而这个锁覆盖
+        # 从解压暂存到目录交换的整个安装窗口，供另一个实例的启动恢复逻辑避让。
+        return os.path.join(self._parent_dir, ".tts-pack-install.lock")
+
+    def _snapshot_locked(self, job):
+        total = max(0, int(job.get("total_bytes") or 0))
+        completed = max(0, int(job.get("completed_bytes") or 0))
+        state = str(job.get("state") or "queued")
+        if state == "completed":
+            percent = 100
+        elif total:
+            percent = max(0, min(99, int(completed * 100 / total)))
+        else:
+            percent = 0
+        snapshot = {
+            "job_id": job["job_id"],
+            "source_name": job["source_name"],
+            "source_size": int(job.get("source_size") or 0),
+            "state": state,
+            "stage": str(job.get("stage") or "queued"),
+            "completed_bytes": completed,
+            "total_bytes": total,
+            "completed_files": max(0, int(job.get("completed_files") or 0)),
+            "total_files": max(0, int(job.get("total_files") or 0)),
+            "percent": percent,
+            "message": str(job.get("message") or ""),
+            "error": str(job.get("error") or ""),
+        }
+        if state == "completed" and isinstance(job.get("result"), dict):
+            snapshot["result"] = copy.deepcopy(job["result"])
+        return snapshot
+
+    def _prune_terminal_jobs_locked(self):
+        terminal = [job_id for job_id in self._job_order
+                    if self._jobs.get(job_id, {}).get("state") not in self._ACTIVE_STATES]
+        while len(terminal) > self._MAX_TERMINAL_JOBS:
+            job_id = terminal.pop(0)
+            self._jobs.pop(job_id, None)
+            try:
+                self._job_order.remove(job_id)
+            except ValueError:
+                pass
+
+    def _reserve_job(self, source_name, source_size, stage="queued"):
+        source_name = os.path.basename(str(source_name or "语音包.zip")) or "语音包.zip"
+        # ``_finish`` publishes the terminal snapshot just before its worker finally
+        # clears the process-wide mount gate. Do not let a second request slip into
+        # that tiny interval and have the first worker clear the second one's gate.
+        if is_tts_pack_mounting(self.pack_dir):
+            raise TTSException("已有语音包正在完成挂载，请等待当前安装完全结束后再导入")
+        with self._lock:
+            if self._active_job_id:
+                active = self._jobs.get(self._active_job_id)
+                if active and active.get("state") in self._ACTIVE_STATES:
+                    raise TTSException("已有语音包正在挂载，请等待当前安装完成后再导入")
+                self._active_job_id = ""
+            job_id = uuid.uuid4().hex
+            self._jobs[job_id] = {
+                "job_id": job_id,
+                "source_name": source_name,
+                "source_size": int(source_size),
+                "state": "queued",
+                "stage": stage,
+                "completed_bytes": 0,
+                "total_bytes": 0,
+                "completed_files": 0,
+                "total_files": 0,
+                "message": "等待开始安装",
+                "error": "",
+                "result": None,
+            }
+            self._job_order.append(job_id)
+            self._active_job_id = job_id
+            return self._snapshot_locked(self._jobs[job_id])
+
+    def _update(self, job_id, **values):
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return None
+            for key, value in values.items():
+                if value is not None:
+                    job[key] = value
+            return self._snapshot_locked(job)
+
+    def _finish(self, job_id, *, result=None, error=""):
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return None
+            if error:
+                job.update({"state": "failed", "stage": "failed", "error": str(error), "message": str(error)})
+            else:
+                job.update({
+                    "state": "completed", "stage": "done", "result": copy.deepcopy(result) if isinstance(result, dict) else {},
+                    "error": "", "message": "语音包已挂载",
+                })
+                total = int(job.get("total_bytes") or 0)
+                if total:
+                    job["completed_bytes"] = total
+                total_files = int(job.get("total_files") or 0)
+                if total_files:
+                    job["completed_files"] = total_files
+            if self._active_job_id == job_id:
+                self._active_job_id = ""
+            self._prune_terminal_jobs_locked()
+            return self._snapshot_locked(job)
+
+    def is_active(self):
+        with self._lock:
+            job = self._jobs.get(self._active_job_id)
+            active_job = bool(job and job.get("state") in self._ACTIVE_STATES)
+        # Keep tray exit/API write protection enabled until the worker has released
+        # the process-wide gate, including the short terminal-snapshot interval.
+        return active_job or is_tts_pack_mounting(self.pack_dir)
+
+    def get_job(self, job_id):
+        with self._lock:
+            job = self._jobs.get(str(job_id or ""))
+            if not job:
+                raise TTSException("未找到该语音包安装任务")
+            return self._snapshot_locked(job)
+
+    def _validate_local_archive(self, path):
+        try:
+            archive_path = os.path.abspath(os.fspath(path))
+        except (TypeError, ValueError):
+            raise TTSException("请选择有效的语音包 ZIP 文件")
+        if not archive_path.lower().endswith(".zip"):
+            raise TTSException("请选择完整的语音包 ZIP 文件")
+        if not os.path.isfile(archive_path):
+            raise TTSException("未找到待挂载的语音包 ZIP")
+        try:
+            size = os.path.getsize(archive_path)
+        except OSError as exc:
+            raise TTSException("读取语音包失败：%s" % exc)
+        if size <= 0:
+            raise TTSException("语音包 ZIP 是空的")
+        if size > _TTS_PACK_MOUNT_MAX_UPLOAD_BYTES:
+            raise TTSException("语音包 ZIP 超过允许大小")
+        return archive_path, size
+
+    def start_local_archive(self, path):
+        """排入原生文件选择/拖放取得的本机 ZIP。"""
+        archive_path, size = self._validate_local_archive(path)
+        snapshot = self._reserve_job(os.path.basename(archive_path), size)
+        thread = threading.Thread(
+            target=self._run_job,
+            args=(snapshot["job_id"], archive_path, False),
+            name="memo-tts-pack-mount",
+            daemon=True,
+        )
+        thread.start()
+        return snapshot
+
+    def start_stream(self, stream, content_length, source_name=""):
+        """为网页小包后备入口流式落盘，随后交由相同后台任务安装。"""
+        try:
+            content_length = int(content_length)
+        except (TypeError, ValueError):
+            content_length = 0
+        if content_length <= 0:
+            raise TTSException("未收到语音包文件")
+        if content_length > TTS_PACK_WEB_UPLOAD_MAX_BYTES:
+            raise TTSException("浏览器模式仅支持不超过 256 MiB 的语音包，请使用桌面 EXE 原生导入")
+        if source_name and not str(source_name).lower().endswith(".zip"):
+            raise TTSException("请选择完整的语音包 ZIP 文件")
+        snapshot = self._reserve_job(source_name or "语音包.zip", content_length, stage="uploading")
+        temp_path = ""
+        try:
+            os.makedirs(self._parent_dir, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                prefix=".tts-pack-upload-", suffix=".zip", dir=self._parent_dir, delete=False
+            ) as target:
+                temp_path = target.name
+                remaining = content_length
+                while remaining:
+                    chunk = stream.read(min(_TTS_PACK_MOUNT_CHUNK_BYTES, remaining))
+                    if not chunk:
+                        raise TTSException("语音包上传中断")
+                    target.write(chunk)
+                    remaining -= len(chunk)
+            self._update(snapshot["job_id"], stage="queued", message="上传完成，等待开始安装")
+            thread = threading.Thread(
+                target=self._run_job,
+                args=(snapshot["job_id"], temp_path, True),
+                name="memo-tts-pack-mount",
+                daemon=True,
+            )
+            thread.start()
+            return self.get_job(snapshot["job_id"])
+        except Exception as exc:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            self._finish(snapshot["job_id"], error=str(exc))
+            if isinstance(exc, TTSException):
+                raise
+            raise TTSException("保存语音包上传文件失败：%s" % exc)
+
+    def _on_progress(self, job_id, stage, payload):
+        labels = {
+            "checking": "正在检查语音包与磁盘空间…",
+            "extracting": "正在解压语音包…",
+            "validating": "正在校验角色资料…",
+            "switching": "正在安全替换旧语音包…",
+        }
+        # 底层保留 ``replacing`` 作为目录交换的技术术语，API 公开的任务阶段
+        # 使用更直观也更稳定的 ``switching``。
+        public_stage = "switching" if stage == "replacing" else stage
+        values = dict(payload or {})
+        values.update({"state": "running", "stage": public_stage,
+                       "message": labels.get(public_stage, "正在安装语音包…")})
+        self._update(job_id, **values)
+
+    def _wait_for_voice(self, job_id):
+        self._update(
+            job_id,
+            state="running",
+            stage="waiting_for_voice",
+            message="正在等待当前语音任务结束…",
+        )
+        while True:
+            manager = _manager_for_pack(self.pack_dir)
+            if manager is None or not manager.is_busy:
+                return
+            time.sleep(0.15)
+
+    def _run_job(self, job_id, archive_path, remove_archive):
+        install_lock = None
+        mounting = False
+        try:
+            install_lock, acquired = _acquire_file_lock(self._install_lock_path)
+            if not acquired:
+                raise TTSException("语音包正在由另一个 Memo Superform 实例后台挂载，请等待其完成")
+            _set_tts_pack_mounting(self.pack_dir, True)
+            mounting = True
+            self._update(job_id, state="running", stage="checking", message="正在检查语音包…")
+            result = mount_tts_pack_archive(
+                self.pack_dir,
+                self.data_dir,
+                archive_path,
+                source_name=os.path.basename(archive_path),
+                on_progress=lambda stage, payload: self._on_progress(job_id, stage, payload),
+                before_switch=lambda: self._wait_for_voice(job_id),
+            )
+            self._finish(job_id, result=result)
+        except Exception as exc:
+            self._finish(job_id, error=str(exc) or "语音包挂载失败")
+        finally:
+            if mounting:
+                _set_tts_pack_mounting(self.pack_dir, False)
+            _release_pack_lock(install_lock)
+            if remove_archive:
+                try:
+                    os.unlink(archive_path)
+                except OSError:
+                    pass
+
+    def recover_stale_staging(self):
+        """恢复异常退出留下的旧包备份，并清理专用临时目录。
+
+        只处理本模块生成且具有严格前缀的项目，绝不扫描或删除用户目录中的其他文件。
+        """
+        recovery_lock, acquired = _acquire_file_lock(self._install_lock_path)
+        if not acquired:
+            # 另一实例正在安装时，任何暂存或备份目录都可能仍是有效工作内容。
+            return False
+        try:
+            parent = self._parent_dir
+            try:
+                os.makedirs(parent, exist_ok=True)
+                entries = list(os.scandir(parent))
+            except OSError:
+                return False
+            backups = []
+            for entry in entries:
+                if entry.name.startswith(".tts-pack-backup-") and entry.is_dir(follow_symlinks=False):
+                    backups.append(entry)
+            if not os.path.lexists(self.pack_dir) and backups:
+                try:
+                    newest = max(backups, key=lambda item: item.stat(follow_symlinks=False).st_mtime)
+                    os.replace(newest.path, self.pack_dir)
+                except OSError:
+                    # 保留备份，供下一次启动或人工恢复；不能因清理逻辑覆盖用户文件。
+                    return False
+            pack_exists = os.path.isdir(self.pack_dir) and not os.path.islink(self.pack_dir)
+            prefixes = (".tts-pack-extract-", ".tts-pack-ready-", ".tts-pack-upload-")
+            for entry in entries:
+                if os.path.islink(entry.path):
+                    continue
+                should_remove = entry.name.startswith(prefixes)
+                if pack_exists and entry.name.startswith(".tts-pack-backup-"):
+                    should_remove = True
+                if not should_remove:
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    elif entry.is_file(follow_symlinks=False):
+                        os.unlink(entry.path)
+                except OSError:
+                    pass
+            return True
+        finally:
+            _release_pack_lock(recovery_lock)
 
 
 def _read_text_file(path):
@@ -2439,6 +2911,7 @@ def _get_status_inner(pack_dir, data_dir):
 
 
 def set_enabled(pack_dir, data_dir, enabled):
+    _assert_tts_pack_not_mounting(pack_dir, "切换语音开关")
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
@@ -2467,8 +2940,9 @@ def set_enabled(pack_dir, data_dir, enabled):
 
 
 def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None, *,
-          top_k=None, fragment_interval=None, text_split_method=None,
-          seed=None, use_cuda_graph=None, parallel_infer=None):
+           top_k=None, fragment_interval=None, text_split_method=None,
+           seed=None, use_cuda_graph=None, parallel_infer=None):
+    _assert_tts_pack_not_mounting(pack_dir, "生成语音")
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
@@ -2501,6 +2975,7 @@ def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None, *,
 
 
 def preload(pack_dir, data_dir, voice=None):
+    _assert_tts_pack_not_mounting(pack_dir, "预加载语音模型")
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
@@ -2516,6 +2991,7 @@ def preload(pack_dir, data_dir, voice=None):
 
 
 def shutdown(pack_dir, data_dir):
+    _assert_tts_pack_not_mounting(pack_dir, "关闭语音引擎")
     manager = _get_manager(pack_dir, data_dir)
     manager.shutdown()
     return True

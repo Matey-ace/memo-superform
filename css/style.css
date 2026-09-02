@@ -560,6 +560,29 @@ body {
     margin-top: 0;
 }
 
+.tts-pack-native-btn {
+    white-space: nowrap;
+}
+
+.tts-pack-mount-progress {
+    display: grid;
+    grid-template-columns: minmax(96px, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    margin-top: 9px;
+}
+
+.tts-pack-mount-progress progress {
+    width: 100%;
+    height: 8px;
+    accent-color: var(--accent-blue);
+}
+
+.tts-pack-mount-progress .hint {
+    margin: 0;
+    white-space: nowrap;
+}
+
 .tts-pack-mount-missing {
     margin-top: 9px;
     padding: 9px 10px;
@@ -570,6 +593,16 @@ body {
     font-size: 11px;
     line-height: 1.65;
     white-space: pre-line;
+}
+
+@media (max-width: 520px) {
+    .tts-pack-mount-progress {
+        grid-template-columns: 1fr;
+    }
+
+    .tts-pack-mount-progress .hint {
+        white-space: normal;
+    }
 }
 
 .checkbox-label {

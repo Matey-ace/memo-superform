@@ -21,6 +21,30 @@ def configure_local_api(**values):
     globals().update(values)
 
 
+def _tts_pack_mount_manager():
+    """返回当前数据目录对应的后台语音包任务管理器。
+
+    生产环境由 ``server.py`` 注入单例；测试或直接导入 ``app_api`` 时按当前
+    DATA_DIR 惰性创建，避免将任务状态绑定到旧的临时目录。
+    """
+    import tts
+    pack_dir = os.path.abspath(globals().get("TTS_PACK_DIR") or "")
+    data_dir = os.path.abspath(globals().get("DATA_DIR") or "")
+    manager = globals().get("TTS_PACK_MOUNT_MANAGER")
+    if (manager is None or os.path.abspath(getattr(manager, "pack_dir", "")) != pack_dir or
+            os.path.abspath(getattr(manager, "data_dir", "")) != data_dir):
+        manager = tts.TTSPackMountJobManager(pack_dir, data_dir)
+        globals()["TTS_PACK_MOUNT_MANAGER"] = manager
+    return manager
+
+
+def _tts_pack_mount_active():
+    try:
+        return _tts_pack_mount_manager().is_active()
+    except Exception:
+        return False
+
+
 class LocalApiMixin:
     def _memo_identity(self, required=True):
         """返回 ``(access_token, stable_profile_id)``。
@@ -130,6 +154,7 @@ class LocalApiMixin:
         if path == "/api/tts/status":
             import tts
             status = tts.get_status(TTS_PACK_DIR, DATA_DIR)
+            status["mounting"] = _tts_pack_mount_active()
             live2d = globals().get("LIVE2D_SERVICE")
             if live2d and status.get("active_role_id"):
                 binding = self._active_role_live2d_binding(live2d)
@@ -138,6 +163,16 @@ class LocalApiMixin:
                     status["role_ready"] = False
                     status["role_error"] = binding.get("reason") or "当前角色绑定的 Live2D 模型不可用"
             return self._send_json(200, status)
+
+        if path.startswith("/api/tts/mount-pack/jobs/"):
+            import tts
+            job_id = path.rsplit("/", 1)[-1]
+            if not job_id:
+                return self._send_json(404, {"error": "未指定语音包安装任务"})
+            try:
+                return self._send_json(200, _tts_pack_mount_manager().get_job(job_id))
+            except tts.TTSException as exc:
+                return self._send_json(404, {"error": str(exc)})
 
         if path == "/api/tts/roles":
             import tts
@@ -305,6 +340,11 @@ class LocalApiMixin:
                 })
             if path == "/api/tts/mount-pack":
                 return self._mount_tts_pack_archive(parsed)
+            if path.startswith("/api/tts/") and _tts_pack_mount_active():
+                return self._send_json(409, {
+                    "error": "语音包正在后台挂载，请等待安装完成后再操作语音资料",
+                    "mounting": True,
+                })
             if path == "/api/tts/repair":
                 import tts
                 try:
@@ -729,7 +769,7 @@ class LocalApiMixin:
             return self._send_json(400, {"error": str(exc)})
 
     def _mount_tts_pack_archive(self, parsed):
-        """流式接收语音包 ZIP，不把完整文件载入内存。"""
+        """网页模式的小包后备入口；真正安装交给后台任务。"""
         import tts
         query = parse_qs(parsed.query)
         source_name = (query.get("name") or [""])[0]
@@ -737,15 +777,20 @@ class LocalApiMixin:
         # 检查，让拖错文件在可能数 GB 的上传开始前就得到提示。
         if source_name and not source_name.lower().endswith(".zip"):
             return self._send_json(400, {"error": "请拖入完整的语音包 ZIP 文件"})
+        content_length = self._safe_content_length()
+        if content_length > tts.TTS_PACK_WEB_UPLOAD_MAX_BYTES:
+            return self._send_json(413, {
+                "error": "浏览器模式仅支持不超过 256 MiB 的语音包，请使用桌面 EXE 原生导入",
+                "requires_native_import": True,
+                "max_bytes": tts.TTS_PACK_WEB_UPLOAD_MAX_BYTES,
+            })
         try:
-            result = tts.mount_tts_pack_stream(
-                TTS_PACK_DIR,
-                DATA_DIR,
+            job = _tts_pack_mount_manager().start_stream(
                 self.rfile,
-                self._safe_content_length(),
+                content_length,
                 source_name=source_name,
             )
-            return self._send_json(200, result)
+            return self._send_json(202, {"ok": True, "job_id": job["job_id"], "job": job})
         except tts.TTSException as exc:
             return self._send_json(400, {"error": str(exc)})
 
@@ -753,6 +798,11 @@ class LocalApiMixin:
     def _handle_api_delete(self, path, parsed):
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             return self._send_json(403, {"error": "缺少 X-Requested-With 头"})
+        if path.startswith("/api/tts/") and _tts_pack_mount_active():
+            return self._send_json(409, {
+                "error": "语音包正在后台挂载，请等待安装完成后再操作语音资料",
+                "mounting": True,
+            })
         live2d = globals().get("LIVE2D_SERVICE")
         if path.startswith("/api/tts/roles/"):
             import tts

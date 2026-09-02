@@ -14,7 +14,13 @@ from urllib.parse import parse_qs, urlparse
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from maimemo_auth import CredentialStore, MaimemoAuthError, MaimemoOAuth  # noqa: E402
+from maimemo_auth import (  # noqa: E402
+    DEFAULT_SCOPES,
+    MAIMEMO_CLIENT_ID,
+    CredentialStore,
+    MaimemoAuthError,
+    MaimemoOAuth,
+)
 
 
 class _Protector:
@@ -66,10 +72,11 @@ class MaimemoOAuthTests(unittest.TestCase):
         started = self.oauth.start_login(open_browser=False)
         query = parse_qs(urlparse(started["authorization_url"]).query)
         self.assertEqual(["S256"], query["code_challenge_method"])
+        self.assertEqual([DEFAULT_SCOPES], query["scope"])
         self.assertNotIn("code_verifier", query)
         state = query["state"][0]
 
-        status = self.oauth.complete_callback_url("memo-superform://maimemo-oauth?code=abc&state=" + state)
+        status = self.oauth.complete_callback_url("memo-superform://maimemo-oauth/?code=abc&state=" + state)
         self.assertTrue(status["connected"])
         self.assertEqual("oauth", status["mode"])
         self.assertEqual("Alice", status["display_name"])
@@ -79,6 +86,22 @@ class MaimemoOAuthTests(unittest.TestCase):
         self.assertEqual("abc", token_request["code"])
         self.assertIn("code_verifier", token_request)
         self.assertFalse((pathlib.Path(self.temp.name) / "pending.bin").exists())
+
+    def test_shipped_configuration_uses_the_approved_public_client_and_scopes(self):
+        self.assertEqual("6a968536c8e75d605a3c9f13", MAIMEMO_CLIENT_ID)
+        self.assertTrue(MaimemoOAuth(self.temp.name).configured)
+        self.assertEqual(
+            {"openid", "profile", "offline_access", "open.memo.study", "open.memo.content"},
+            set(DEFAULT_SCOPES.split()),
+        )
+
+    def test_known_callback_protocol_failure_is_reported_and_blocks_new_login(self):
+        self.oauth.set_callback_protocol_status(False, "回调协议注册失败")
+        status = self.oauth.status()
+        self.assertFalse(status["callback_ready"])
+        self.assertEqual("回调协议注册失败", status["callback_error"])
+        with self.assertRaisesRegex(MaimemoAuthError, "回调协议注册失败"):
+            self.oauth.start_login(open_browser=False)
 
     def test_bad_or_repeated_state_is_rejected(self):
         started = self.oauth.start_login(open_browser=False)

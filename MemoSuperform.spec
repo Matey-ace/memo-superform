@@ -16,6 +16,10 @@ a = Analysis(
         'webview.platforms.winforms',
         'webview.platforms.win32',
         'webview.platforms.edgechromium',
+        # 大型语音包原生拖放使用 pywebview DOM 封装；冻结构建中显式保留，避免
+        # 源码可用而 EXE 首次载入设置页时找不到该动态模块。
+        'webview.dom',
+        'webview.dom.element',
     ],
     hookspath=[],
     hooksconfig={},

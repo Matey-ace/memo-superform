@@ -24,15 +24,258 @@ import time
 import urllib.request
 import uuid
 import webbrowser
+from urllib.parse import urlparse
 
 from build_info import BUILD_VERSION
 
 
 _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
+
+
+def _is_maimemo_oauth_callback_url(value):
+    """接受浏览器/Windows 对自定义协议路径的等价序列化。"""
+    callback_url = str(value or "")
+    if not 0 < len(callback_url) <= 8192:
+        return False
+    parsed = urlparse(callback_url)
+    return (
+        parsed.scheme.lower() == "memo-superform"
+        and parsed.netloc.lower() == "maimemo-oauth"
+        and parsed.path in ("", "/")
+        and bool(parsed.query)
+    )
 # 每次打包发布都要更新 build_info.py 中的此值。旧版本使用固定协调端口 8891，
 # 升级时会悄悄激活旧可执行文件，并在新代码运行前退出。按构建版本划分端口后，
 # 新版本能打开自己的窗口，并在升级期间准确报告共享 TTS 资料包锁。
+
+
+class _DesktopTtsPackBridge:
+    """桌面语音包导入桥接：只允许本地设置页发起原生文件选择。
+
+    JavaScript 永远不会收到文件绝对路径；它只得到后台任务的安全快照。EdgeChromium
+    原生 DnD 会在 Python DOM 回调中提供 ``pywebviewFullPath``，由这里直接交给
+    本机服务，绕过 WebView 的大文件 HTTP 上传路径。
+    """
+
+    _PENDING_DROP_TTL_SECONDS = 30.0
+
+    def __init__(self, server_module, local_url, webview_module):
+        self._server = server_module
+        self._local_url = str(local_url or "")
+        self._webview = webview_module
+        self._window = None
+        self._drop_bound_for_page = None
+        self._pending_drop_lock = threading.RLock()
+        self._pending_drop = None
+
+    def bind_window(self, window):
+        self._window = window
+
+    def reset_native_drop_page(self):
+        """让页面重载后的新 DOM 重新绑定原生拖放监听。"""
+        self._drop_bound_for_page = None
+        with self._pending_drop_lock:
+            self._pending_drop = None
+
+    @staticmethod
+    def _public_error(error, local_path=""):
+        """把本机异常转换为可显示但不泄露路径的提示。"""
+        message = str(error or "").strip() or "桌面导入器未能读取该语音包"
+        if local_path:
+            try:
+                raw = os.fspath(local_path)
+                message = message.replace(raw, os.path.basename(raw))
+                message = message.replace(os.path.abspath(raw), os.path.basename(raw))
+            except (TypeError, ValueError, OSError):
+                pass
+        # Windows/UNC 路径可能来自底层 OSError，而不是用户选择的 ZIP 本身。
+        return re.sub(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n'\"]+", "<本机路径>", message)
+
+    @classmethod
+    def _public_job_snapshot(cls, job):
+        """限制 pywebview API 可返回给网页的任务字段。"""
+        if not isinstance(job, dict):
+            raise RuntimeError("桌面导入器未返回有效任务")
+        allowed = (
+            "job_id", "source_size", "state", "stage", "completed_bytes", "total_bytes",
+            "completed_files", "total_files", "percent", "message", "error",
+        )
+        snapshot = {key: job[key] for key in allowed if key in job}
+        snapshot["source_name"] = os.path.basename(str(job.get("source_name") or "语音包.zip"))
+        if "error" in snapshot:
+            snapshot["error"] = cls._public_error(snapshot["error"])
+        if "message" in snapshot:
+            snapshot["message"] = cls._public_error(snapshot["message"])
+        return snapshot
+
+    def _is_local_index(self):
+        if self._window is None:
+            return False
+        try:
+            current = str(self._window.get_current_url() or "")
+            expected = urlparse(self._local_url)
+            actual = urlparse(current)
+            return (
+                expected.scheme == actual.scheme == "http"
+                and expected.hostname in ("localhost", "127.0.0.1")
+                and actual.hostname in ("localhost", "127.0.0.1")
+                and expected.port == actual.port
+                and actual.path.rstrip("/") == "/index.html"
+            )
+        except Exception:
+            return False
+
+    def _dispatch(self, event_name, detail):
+        if self._window is None:
+            return
+        # detail 来自任务快照，绝不含本机路径。json.dumps 也避免文件名影响脚本语法。
+        try:
+            payload = json.dumps(detail or {}, ensure_ascii=False)
+            self._window.evaluate_js(
+                "window.dispatchEvent(new CustomEvent(%s,{detail:%s}));"
+                % (json.dumps(str(event_name)), payload)
+            )
+        except Exception as exc:
+            _log("desktop tts pack bridge dispatch failed: %s" % exc)
+
+    def _announce_ready(self, drop_ready):
+        if self._window is None:
+            return
+        detail = {"drop": bool(drop_ready), "picker": True}
+        try:
+            payload = json.dumps(detail, ensure_ascii=False)
+            self._window.evaluate_js(
+                "window.__memoNativeTtsPackImport=%s;"
+                "window.dispatchEvent(new CustomEvent('memoNativeTtsPackReady',{detail:%s}));"
+                % (payload, payload)
+            )
+        except Exception as exc:
+            _log("desktop tts pack bridge ready announcement failed: %s" % exc)
+
+    def choose_tts_pack(self):
+        """供 ``window.pywebview.api`` 调用的无参数原生文件选择器。"""
+        if not self._is_local_index():
+            raise RuntimeError("语音包原生导入只能从本地设置页发起")
+        if self._window is None:
+            raise RuntimeError("桌面窗口尚未就绪")
+        selected = self._window.create_file_dialog(
+            self._webview.FileDialog.OPEN,
+            allow_multiple=False,
+            file_types=("语音包 ZIP (*.zip)",),
+        )
+        if not selected:
+            return {"cancelled": True}
+        selected_path = selected[0]
+        try:
+            return self._public_job_snapshot(self._server.start_tts_pack_mount_path(selected_path))
+        except Exception as exc:
+            return {"error": self._public_error(exc, selected_path)}
+
+    def _queue_pending_drop(self, local_path):
+        """暂存原生拖放路径，等待网页确认丢弃未保存的角色编辑。"""
+        if not str(local_path).lower().endswith(".zip"):
+            raise RuntimeError("请拖入完整的语音包 ZIP 文件")
+        try:
+            size = os.path.getsize(local_path)
+        except OSError as exc:
+            raise RuntimeError(self._public_error(exc, local_path))
+        if size <= 0:
+            raise RuntimeError("这个语音包 ZIP 是空的")
+        now = time.monotonic()
+        drop_id = uuid.uuid4().hex
+        with self._pending_drop_lock:
+            previous = self._pending_drop
+            if previous and now - previous["created_at"] < self._PENDING_DROP_TTL_SECONDS:
+                raise RuntimeError("已有拖入的语音包等待确认，请先完成当前操作")
+            self._pending_drop = {
+                "drop_id": drop_id,
+                "path": os.path.abspath(local_path),
+                "source_name": os.path.basename(local_path),
+                "source_size": int(size),
+                "created_at": now,
+            }
+        return {
+            "drop_id": drop_id,
+            "source_name": os.path.basename(local_path),
+            "source_size": int(size),
+        }
+
+    def _take_pending_drop(self, drop_id):
+        now = time.monotonic()
+        with self._pending_drop_lock:
+            pending = self._pending_drop
+            if not pending or str(pending.get("drop_id") or "") != str(drop_id or ""):
+                raise RuntimeError("未找到等待确认的拖入语音包")
+            self._pending_drop = None
+        if now - float(pending.get("created_at") or 0) > self._PENDING_DROP_TTL_SECONDS:
+            raise RuntimeError("拖入语音包的确认已过期，请重新拖入 ZIP")
+        return pending
+
+    def start_tts_pack_drop(self, drop_id):
+        """仅在本地页面确认后，把先前暂存的拖放路径交给后台任务。"""
+        if not self._is_local_index():
+            raise RuntimeError("语音包原生导入只能从本地设置页发起")
+        local_path = ""
+        try:
+            pending = self._take_pending_drop(drop_id)
+            local_path = pending["path"]
+            return self._public_job_snapshot(self._server.start_tts_pack_mount_path(local_path))
+        except Exception as exc:
+            return {"error": self._public_error(exc, local_path)}
+
+    def discard_tts_pack_drop(self, drop_id):
+        """用户取消确认时丢弃仅保存在桥接内存中的拖放路径。"""
+        if not self._is_local_index():
+            raise RuntimeError("语音包原生导入只能从本地设置页发起")
+        with self._pending_drop_lock:
+            pending = self._pending_drop
+            if pending and str(pending.get("drop_id") or "") == str(drop_id or ""):
+                self._pending_drop = None
+        return {"ok": True}
+
+    @staticmethod
+    def _dropped_path(event):
+        payload = event if isinstance(event, dict) else {}
+        files = payload.get("dataTransfer", {}).get("files", []) if isinstance(payload.get("dataTransfer", {}), dict) else []
+        if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict):
+            raise RuntimeError("请一次只拖入一个语音包 ZIP 文件")
+        path = str(files[0].get("pywebviewFullPath") or "")
+        if not path:
+            raise RuntimeError("当前桌面内核未提供拖入文件路径，请点击“选择大型语音包 ZIP”")
+        return path
+
+    def _handle_drop(self, event):
+        if not self._is_local_index():
+            return
+        local_path = ""
+        try:
+            local_path = self._dropped_path(event)
+            pending = self._queue_pending_drop(local_path)
+            self._dispatch("memoTtsPackDropPending", pending)
+        except Exception as exc:
+            self._dispatch("memoTtsPackDropPending", {"error": self._public_error(exc, local_path)})
+
+    def attach_native_drop_handler(self):
+        """每次本地入口页载入后绑定一次 pywebview 原生 drop 监听。"""
+        if not self._is_local_index() or self._window is None:
+            return
+        try:
+            page_url = str(self._window.get_current_url() or "")
+            if self._drop_bound_for_page == page_url:
+                self._announce_ready(True)
+                return
+            from webview.dom import DOMEventHandler
+            dropzone = self._window.dom.get_element("#ttsPackMountDropzone")
+            if dropzone is None:
+                self._announce_ready(False)
+                return
+            dropzone.on("drop", DOMEventHandler(self._handle_drop, prevent_default=True, stop_propagation=True))
+            self._drop_bound_for_page = page_url
+            self._announce_ready(True)
+        except Exception as exc:
+            _log("desktop native tts drop unavailable: %s" % exc)
+            self._announce_ready(False)
 
 
 class InstanceBroker:
@@ -127,8 +370,7 @@ class InstanceBroker:
             message.get("app") == "memo-superform"
             and message.get("version") == 1
             and message.get("action") == cls._OAUTH_ACTION
-            and 0 < len(callback_url) <= 8192
-            and callback_url.lower().startswith("memo-superform://maimemo-oauth?")
+            and _is_maimemo_oauth_callback_url(callback_url)
         )
 
     def _serve(self):
@@ -611,6 +853,7 @@ def run_desktop(guard=None, oauth_callback_url=None):
     gui_ready = threading.Event()
     pending_activation = threading.Event()
     tray_holder = {"tray": None}
+    desktop_tts_bridge = _DesktopTtsPackBridge(server, url, webview)
 
     window = webview.create_window(
         "Memo Superform - 墨墨数据仪表盘",
@@ -619,7 +862,9 @@ def run_desktop(guard=None, oauth_callback_url=None):
         height=820,
         min_size=(960, 640),
         text_select=False,
+        js_api=desktop_tts_bridge,
     )
+    desktop_tts_bridge.bind_window(window)
 
     def show_main_window():
         if not gui_ready.is_set():
@@ -654,6 +899,14 @@ def run_desktop(guard=None, oauth_callback_url=None):
     def exit_application():
         if exit_requested.is_set():
             return
+        # 中途退出可能在 Windows 的目录原子交换之间终止进程。关闭主窗口仍会正常
+        # 隐藏到托盘；显式退出则等待当前挂载完成，避免用户误以为旧包被损坏。
+        try:
+            if server.is_tts_pack_mount_active():
+                show_message("Memo Superform", "语音包正在后台安装。请等待安装完成；关闭窗口可先隐藏到托盘。")
+                return
+        except Exception:
+            pass
         exit_requested.set()
         tray = tray_holder["tray"]
         if tray:
@@ -668,6 +921,10 @@ def run_desktop(guard=None, oauth_callback_url=None):
             pass
 
     window.events.closing += close_to_tray
+    # pywebview 的 EdgeChromium 后端会在 Python DOM 的 drop 回调中提供完整文件路径。
+    # 此监听只绑定本地 index 页面，远程代理页不会获得本机文件访问能力。
+    window.events.before_load += desktop_tts_bridge.reset_native_drop_page
+    window.events.loaded += desktop_tts_bridge.attach_native_drop_handler
     if guard is not None and hasattr(guard, "set_activation_callback"):
         guard.set_activation_callback(show_main_window)
 
@@ -1142,12 +1399,15 @@ def main(argv=None):
         return 0
 
     callback_url = str(args.maimemo_oauth_callback or "").strip()
-    if callback_url and not callback_url.lower().startswith("memo-superform://maimemo-oauth?"):
+    if callback_url and not _is_maimemo_oauth_callback_url(callback_url):
         _log("rejected malformed maimemo OAuth callback")
         return 0
 
     # 每次普通启动都更新当前用户的协议注册；安装包升级后回调仍会定位到最新 EXE。
-    register_maimemo_oauth_protocol()
+    # 结果必须在导入 server.py 前传入本机 OAuth 服务：注册失败时设置页会明确
+    # 禁用一键授权，而不是让用户完成浏览器操作后无限轮询。
+    oauth_protocol_ready = register_maimemo_oauth_protocol()
+    os.environ["MEMO_MAIMEMO_PROTOCOL_READY"] = "1" if oauth_protocol_ready else "0"
 
     mode = args.mode or read_launcher_config()
     if mode is None:

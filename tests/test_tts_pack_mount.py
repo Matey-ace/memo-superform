@@ -6,6 +6,8 @@ import io
 import json
 import os
 import tempfile
+import threading
+import time
 import types
 import unittest
 import zipfile
@@ -115,6 +117,15 @@ class TTSPackMountTests(unittest.TestCase):
         archive = self.root / "complete-voice-pack.zip"
         self._archive_directory(source, archive, wrapper)
         return archive
+
+    @staticmethod
+    def _wait_for_job(manager, job_id, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        snapshot = manager.get_job(job_id)
+        while snapshot["state"] in ("queued", "running") and time.monotonic() < deadline:
+            time.sleep(0.02)
+            snapshot = manager.get_job(job_id)
+        return snapshot
 
     def test_stream_mount_accepts_one_outer_folder_replaces_old_pack_and_disables_voice(self):
         archive = self._new_archive(wrapper="complete-voice-pack")
@@ -265,16 +276,137 @@ class TTSPackMountTests(unittest.TestCase):
         self.assertEqual(state["language"], "日文")
         self.assertEqual(state["speed"], 1.2)
 
+    def test_background_manager_reports_safe_progress_and_keeps_source_archive(self):
+        archive = self._new_archive(wrapper="tts_pack")
+        manager = tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+        initial = manager.start_local_archive(str(archive))
+
+        self.assertIn(initial["state"], ("queued", "running"))
+        self.assertEqual(initial["source_name"], archive.name)
+        self.assertNotIn("path", initial)
+        finished = self._wait_for_job(manager, initial["job_id"])
+
+        self.assertEqual(finished["state"], "completed", finished.get("error"))
+        self.assertEqual(finished["stage"], "done")
+        self.assertEqual(finished["percent"], 100)
+        self.assertTrue(finished["result"]["ok"])
+        self.assertTrue(archive.is_file(), "native source ZIP must stay in its original location")
+        self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "new")
+
+    def test_background_manager_rejects_a_second_pack_while_one_is_running(self):
+        archive = self._new_archive(wrapper="tts_pack")
+        manager = tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+        started = time.monotonic()
+        # Hold the first job in its progress callback long enough to exercise the
+        # manager's single-install gate without making the test depend on ZIP size.
+        real_mount = tts.mount_tts_pack_archive
+
+        def delayed_mount(*args, **kwargs):
+            time.sleep(0.15)
+            return real_mount(*args, **kwargs)
+
+        with mock.patch.object(tts, "mount_tts_pack_archive", side_effect=delayed_mount):
+            first = manager.start_local_archive(str(archive))
+            while not manager.is_active() and time.monotonic() - started < 1.0:
+                time.sleep(0.01)
+            with self.assertRaisesRegex(tts.TTSException, "已有语音包"):
+                manager.start_local_archive(str(archive))
+            finished = self._wait_for_job(manager, first["job_id"])
+
+        self.assertEqual(finished["state"], "completed", finished.get("error"))
+
+    def test_progress_callbacks_cover_check_extract_validate_and_replace(self):
+        archive = self._new_archive(wrapper="tts_pack")
+        stages = []
+        tts.mount_tts_pack_archive(
+            str(self.pack), str(self.data), str(archive),
+            on_progress=lambda stage, payload: stages.append((stage, dict(payload))),
+        )
+
+        self.assertIn("checking", [stage for stage, _payload in stages])
+        self.assertIn("extracting", [stage for stage, _payload in stages])
+        self.assertIn("validating", [stage for stage, _payload in stages])
+        self.assertIn("replacing", [stage for stage, _payload in stages])
+        extraction = [payload for stage, payload in stages if stage == "extracting"]
+        self.assertTrue(extraction)
+        self.assertEqual(extraction[-1]["completed_bytes"], extraction[-1]["total_bytes"])
+
+    def test_public_job_uses_switching_for_the_final_directory_exchange(self):
+        manager = tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+        job = manager._reserve_job("voice.zip", 1)
+        manager._on_progress(job["job_id"], "replacing", {"total_bytes": 1, "completed_bytes": 1})
+        snapshot = manager.get_job(job["job_id"])
+        self.assertEqual(snapshot["stage"], "switching")
+        manager._finish(job["job_id"], result={"ok": True})
+
+    def test_switch_waits_for_current_voice_before_replacing_the_pack(self):
+        class BusyWorker:
+            is_busy = True
+
+        manager = tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+        job = manager._reserve_job("voice.zip", 1)
+        worker = BusyWorker()
+        finished = threading.Event()
+        with mock.patch.object(tts, "_manager_for_pack", return_value=worker):
+            thread = threading.Thread(
+                target=lambda: (manager._wait_for_voice(job["job_id"]), finished.set()), daemon=True
+            )
+            thread.start()
+            deadline = time.monotonic() + 1.0
+            while manager.get_job(job["job_id"])["stage"] != "waiting_for_voice" and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(manager.get_job(job["job_id"])["stage"], "waiting_for_voice")
+            self.assertFalse(finished.is_set())
+            worker.is_busy = False
+            self.assertTrue(finished.wait(1.0))
+        manager._finish(job["job_id"], result={"ok": True})
+
+    def test_new_synthesis_is_rejected_while_a_pack_is_mounting(self):
+        tts._set_tts_pack_mounting(str(self.pack), True)
+        try:
+            with self.assertRaisesRegex(tts.TTSException, "后台挂载"):
+                tts.speak(str(self.pack), str(self.data), "测试语音")
+        finally:
+            tts._set_tts_pack_mounting(str(self.pack), False)
+
+    def test_disk_preflight_keeps_existing_pack_when_space_is_insufficient(self):
+        archive = self._new_archive(wrapper="tts_pack")
+        with mock.patch.object(tts.shutil, "disk_usage", return_value=types.SimpleNamespace(free=0)):
+            with self.assertRaisesRegex(tts.TTSException, "磁盘空间不足"):
+                tts.mount_tts_pack_archive(str(self.pack), str(self.data), str(archive))
+
+        self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "old")
+
     def test_mount_endpoint_streams_the_zip_without_json_decoding(self):
         archive = self._new_archive(wrapper="")
         payload = archive.read_bytes()
-        with _configured_local_api(TTS_PACK_DIR=str(self.pack), DATA_DIR=str(self.data), LIVE2D_SERVICE=None):
+        manager = tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+        with _configured_local_api(
+            TTS_PACK_DIR=str(self.pack), DATA_DIR=str(self.data), LIVE2D_SERVICE=None,
+            TTS_PACK_MOUNT_MANAGER=manager,
+        ):
             probe = _ApiProbe(payload)
             probe._handle_api_post("/api/tts/mount-pack", types.SimpleNamespace(query="name=voice-pack.zip"))
+            job = self._wait_for_job(manager, probe.response[1]["job_id"])
 
-        self.assertEqual(probe.response[0], 200)
+        self.assertEqual(probe.response[0], 202)
         self.assertTrue(probe.response[1]["ok"])
+        self.assertEqual(job["state"], "completed", job.get("error"))
         self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "new")
+
+    def test_mount_endpoint_rejects_large_web_upload_before_reading_stream(self):
+        manager = tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+        with _configured_local_api(
+            TTS_PACK_DIR=str(self.pack), DATA_DIR=str(self.data), LIVE2D_SERVICE=None,
+            TTS_PACK_MOUNT_MANAGER=manager,
+        ):
+            probe = _ApiProbe()
+            probe._length = tts.TTS_PACK_WEB_UPLOAD_MAX_BYTES + 1
+            probe._handle_api_post("/api/tts/mount-pack", types.SimpleNamespace(query="name=too-large.zip"))
+
+        self.assertEqual(probe.response[0], 413)
+        self.assertTrue(probe.response[1]["requires_native_import"])
+        self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "old")
 
 
 if __name__ == "__main__":

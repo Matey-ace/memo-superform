@@ -386,13 +386,14 @@
                         <summary><span>导入语音包</span><small>拖入 ZIP，自动挂载并检查缺项</small></summary>
                         <div class="tts-settings-disclosure-body setting-item tts-pack-mount">
                             <label>快速挂载语音包</label>
-                            <div id="ttsPackMountDropzone" class="tts-pack-mount-dropzone" role="button" tabindex="0" aria-controls="ttsPackMountInput" aria-describedby="ttsPackMountHint ttsPackMountStatus">
+                            <div id="ttsPackMountDropzone" class="tts-pack-mount-dropzone" role="button" tabindex="0" aria-controls="ttsPackMountInput ttsPackMountNativeBtn" aria-describedby="ttsPackMountHint ttsPackMountStatus ttsPackMountProgressText">
                                 <strong>将语音包 ZIP 拖到这里</strong>
-                                <span>或点击此区域选择文件</span>
+                                <span>桌面版会直接后台安装大型 ZIP，不经过页面上传</span>
                             </div>
                             <input id="ttsPackMountInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
-                            <div class="tts-pack-mount-actions"><button id="ttsPackMountBrowseBtn" type="button" class="test-btn">选择语音包 ZIP</button><span id="ttsPackMountStatus" class="hint" role="status" aria-live="polite"></span></div>
-                            <p id="ttsPackMountHint" class="hint">ZIP 至少需包含有效的 <code>pack.json</code>，可直接压缩整个 <code>tts_pack</code> 文件夹。即使暂缺 <code>.venv311</code>、<code>tts_engine</code> 或角色资料，程序也会正常挂载并在下方列出准确缺项，方便你后续补齐；挂载成功后旧包会被安全替换，语音开关会关闭。</p>
+                            <div class="tts-pack-mount-actions"><button id="ttsPackMountBrowseBtn" type="button" class="test-btn">选择语音包 ZIP</button><button id="ttsPackMountNativeBtn" type="button" class="test-btn tts-pack-native-btn" hidden>选择大型语音包 ZIP（推荐）</button><span id="ttsPackMountStatus" class="hint" role="status" aria-live="polite"></span></div>
+                            <div id="ttsPackMountProgressWrap" class="tts-pack-mount-progress" hidden aria-live="polite"><progress id="ttsPackMountProgress" max="100" value="0">0%</progress><span id="ttsPackMountProgressText" class="hint"></span></div>
+                            <p id="ttsPackMountHint" class="hint">ZIP 至少需包含有效的 <code>pack.json</code>，可直接压缩整个 <code>tts_pack</code> 文件夹。桌面 EXE 会直接读取本机 ZIP 并在后台解压；浏览器模式仅支持不超过 256 MiB 的小型 ZIP。即使暂缺 <code>.venv311</code>、<code>tts_engine</code> 或角色资料，程序也会正常挂载并在下方列出准确缺项，方便你后续补齐；挂载成功后旧包会被安全替换，语音开关会关闭。</p>
                             <p id="ttsPackMountMissing" class="tts-pack-mount-missing" hidden aria-live="polite"></p>
                         </div>
                     </details>

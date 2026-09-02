@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 import codex_auth
 import maimemo_auth
+import tts
 from app_update import UpdateManager
 from build_info import BUILD_VERSION
 from live2d_service import Live2DService
@@ -70,8 +71,31 @@ for _data_dir in (DATA_DIR, TTS_PACK_DIR, GENERATED_AUDIO_DIR):
 
 CODEX_OAUTH = codex_auth.CodexOAuth(DATA_DIR)
 MAIMEMO_OAUTH = maimemo_auth.MaimemoOAuth(DATA_DIR)
+# 公开 OAuth 的浏览器回调必须经 Windows 自定义协议回到正在运行的桌面进程。
+# launcher.py 会在导入本模块前写入注册结果；直接运行 server.py 时明确禁用
+# 一键授权并在设置页说明原因，避免用户完成浏览器授权后却没有可接收方。
+_oauth_protocol_ready = os.environ.get("MEMO_MAIMEMO_PROTOCOL_READY")
+if _oauth_protocol_ready == "1":
+    MAIMEMO_OAUTH.set_callback_protocol_status(True)
+else:
+    MAIMEMO_OAUTH.set_callback_protocol_status(
+        False,
+        "一键授权回调协议未注册。请从 MemoSuperform.exe 或 launcher.py 启动应用后重试。",
+    )
 LIVE2D_SERVICE = Live2DService(DATA_DIR)
 UPDATE_MANAGER = UpdateManager(DATA_DIR)
+# 大型语音包由桌面原生路径直接交给后台任务，避免把 ZIP 内容穿过 WebView/HTTP。
+# 管理器在启动时还会安全恢复上次异常退出遗留的私有暂存目录。
+TTS_PACK_MOUNT_MANAGER = tts.TTSPackMountJobManager(TTS_PACK_DIR, DATA_DIR)
+
+
+def start_tts_pack_mount_path(path):
+    """供 launcher 的原生文件选择与拖放桥接调用。"""
+    return TTS_PACK_MOUNT_MANAGER.start_local_archive(path)
+
+
+def is_tts_pack_mount_active():
+    return TTS_PACK_MOUNT_MANAGER.is_active()
 
 from memo_proxy import MAIMEMO_BASE, resolve_web_route
 
@@ -921,6 +945,7 @@ def _apply_update(staged):
 configure_local_api(
     CODEX_OAUTH=CODEX_OAUTH, MAIMEMO_OAUTH=MAIMEMO_OAUTH,
     DATA_DIR=DATA_DIR, TTS_PACK_DIR=TTS_PACK_DIR,
+    TTS_PACK_MOUNT_MANAGER=TTS_PACK_MOUNT_MANAGER,
     DB_READY=DB_READY, db=globals().get("db"), recommender=globals().get("recommender"),
     STUDY_SYNC_SERVICE=STUDY_SYNC_SERVICE, STUDY_SYNC_MANAGER=STUDY_SYNC_MANAGER,
     LIVE2D_SERVICE=LIVE2D_SERVICE,

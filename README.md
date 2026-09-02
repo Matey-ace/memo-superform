@@ -29,7 +29,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 - **磁贴卡片交互**：每张图表是一块圆角磁贴，支持拖拽互换位置、分屏对比（单格 / 左右 / 三分 / 田字格）、点击全屏放大
 - **七种图表**：打卡热力图、学习趋势、记忆曲线、AI 单词分类、词书进度、词汇量增长、智能复习推荐
 - **智能复习推荐**：基于 SQLite 冻结的每日快照，按遗忘风险（逾期 + 回应状态 + 复习间隔）自动生成 TOP-30 推荐词，分级展示并可标记已复习
-- **两种运行模式**：浏览器模式（`python server.py`）与桌面原生窗口模式（`python app.py`，基于 pywebview）
+- **两种运行模式**：浏览器模式（`python launcher.py --mode web`）与桌面原生窗口模式（`python app.py`，基于 pywebview）
 - **统一 Windows EXE**：发布包只提供 `MemoSuperform.exe` 一个入口；启动后选择或记忆“网页模式 / 桌面模式”，两种运行方式共用同一份程序与数据目录
 - **Windows 托盘状态**：运行时会在右下角通知区域显示 Memo Superform 图标与当前模式；双击或菜单“打开”可恢复页面/窗口，菜单“退出”会完整停止后台服务。再次启动同一 EXE 会自动唤醒已有实例，不再误报启动错误。
 - **按需增量刷新**：日常只检查今日变化、到期候选和必要的 30 天活动窗口；默认 10 分钟，支持 5/10/15/30/60 分钟，设置内可手动完整核验
@@ -49,7 +49,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 ### GPT-SoVITS 语音包快速挂载
 
-Windows EXE 不内置体积很大的 GPT-SoVITS 环境和音色资料。将已经准备好的 `tts_pack` 文件夹压缩为一个 ZIP 后，打开设置 →「语音功能（GPT-SoVITS 资源包）」，把 ZIP 拖到「快速挂载语音包」区域即可。ZIP 可以直接以 `pack.json` 为根，也可以只包一层 `tts_pack/` 顶层目录。
+Windows EXE 不内置体积很大的 GPT-SoVITS 环境和音色资料。将已经准备好的 `tts_pack` 文件夹压缩为一个 ZIP 后，打开设置 →「语音功能（GPT-SoVITS 资源包）」，把 ZIP 拖到「快速挂载语音包」区域，或点击「选择大型语音包 ZIP」。桌面版会由原生窗口直接读取本机 ZIP 并在后台安装，不会把数 GB 文件经 WebView 上传；页面会显示检查、解压、校验和替换进度，窗口可继续使用或隐藏到托盘。原 ZIP 会保留在原位置且不会被删除。ZIP 可以直接以 `pack.json` 为根，也可以只包一层 `tts_pack/` 顶层目录。
 
 ```text
 tts_pack/
@@ -63,14 +63,14 @@ tts_pack/
     └── reference.wav   # 也可为 mp3 / flac / ogg
 ```
 
-完整可用包应含有 `roles.json`（或可迁移的旧资料）、每位角色的 `persona.json`、逐字参考文本和参考语言。`persona.json` 是角色名称与陪伴人设的唯一来源，使用中文固定字段：`版本`、`角色`、`语气`、`背景`、`禁忌`、`示例`。可在角色编辑器中导入、导出和备份该文件。单独的 `.ckpt` / `.pth` 也可先作为待补齐包挂载：只要 ZIP 含有效的 `pack.json`，程序会先安全替换本地包，再在设置中逐项列出缺少的运行环境、模型、参考音频、文本、语言、人设或 Live2D 绑定及其预期位置。随后可在角色编辑器中补充；资料尚未配齐的角色保持不可启用。挂载过程会在临时目录校验 ZIP 路径、链接和解压体积，然后关闭旧 worker、原子替换 `data/tts_pack/`；缺少 `pack.json`、清单损坏或 ZIP 不安全时原有包保持不变。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
+完整可用包应含有 `roles.json`（或可迁移的旧资料）、每位角色的 `persona.json`、逐字参考文本和参考语言。`persona.json` 是角色名称与陪伴人设的唯一来源，使用中文固定字段：`版本`、`角色`、`语气`、`背景`、`禁忌`、`示例`。可在角色编辑器中导入、导出和备份该文件。单独的 `.ckpt` / `.pth` 也可先作为待补齐包挂载：只要 ZIP 含有效的 `pack.json`，程序会先安全替换本地包，再在设置中逐项列出缺少的运行环境、模型、参考音频、文本、语言、人设或 Live2D 绑定及其预期位置。随后可在角色编辑器中补充；资料尚未配齐的角色保持不可启用。挂载过程会在临时目录校验 ZIP 路径、链接、磁盘空间和解压体积，然后关闭旧 worker、原子替换 `data/tts_pack/`；缺少 `pack.json`、清单损坏或 ZIP 不安全时原有包保持不变。浏览器模式仅支持不超过 256 MiB 的小型 ZIP 后备上传；完整环境包请使用 Windows EXE。新包不会携带 Live2D 资产，挂载后请在角色资料包中确认或重新绑定本机已安装的 Live2D 模型，再开启语音。
 
 ## Quick Start
 
 ### 方式一：浏览器模式
 ```bash
 cd memo-superform
-python server.py
+python launcher.py --mode web
 ```
 服务器启动后会显示访问地址（默认 http://localhost:8888），并自动打开浏览器。
 
@@ -95,10 +95,11 @@ Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏
 
 - 点击右上角「设置」→「墨墨账号」，选择「连接墨墨账号」并在浏览器完成授权。
 - 桌面端使用 OAuth Authorization Code + PKCE；令牌只保存在当前 Windows 用户的 DPAPI 加密凭据中，浏览器页面不会保存或读取它。
+- 请通过 `MemoSuperform.exe`、`python launcher.py --mode web` 或 `python app.py` 启动；它们会注册 `memo-superform://` 回调协议。直接运行 `server.py` 时，设置页会明确禁用一键授权，手动 Token 仍可使用。
 - 旧用户可展开「高级连接方式」填入手动 API Token。首次打开新版本时，旧版 localStorage Token 会自动迁入本机加密凭据并从浏览器删除。
 - 「断开连接」只删除授权；「删除本机墨墨学习数据」会单独清除当前档案的学习记录、同步状态和派生统计，不影响墨墨云端数据。
 
-OAuth 审核主页、回调页和隐私说明位于 [GitHub Pages](https://matey-ace.github.io/memo-superform/)。开发/打包时请通过 `MEMO_MAIMEMO_CLIENT_ID` 注入获批的公开 `client_id`；该值不是 secret，应用不会保存 `client_secret`。
+OAuth 审核主页、回调页和隐私说明位于 [GitHub Pages](https://matey-ace.github.io/memo-superform/)。正式 Windows 发布包已内置获批的公开 `client_id`，用户无需配置它；开发/测试时可用 `MEMO_MAIMEMO_CLIENT_ID` 临时覆盖。该值不是 secret，应用不会保存 `client_secret`。当前授权请求会包含 `openid profile offline_access open.memo.study open.memo.content`；虽然平台已批准 study/content 的读写 scope，本版本的本机代理仍只放行学习进度、今日条目、学习记录和云词本的读取接口。
 
 > SQLite 主库会在 `data/memo-superform.db` 自动建立，无需安装数据库。已有 SQL Server 数据库只会通过可选的只读迁移器导入，原库不会被修改。
 
@@ -267,7 +268,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 - **Tile-card interaction**: Every chart is a rounded tile that can be dragged to swap positions, used in split-screen comparisons (single / left-right / three-way / quad grid), or clicked to go fullscreen.
 - **Seven chart types**: Check-in heatmap, study trends, memory curve, AI word classification, wordbook progress, vocabulary growth, and smart review recommendations.
 - **Smart review recommendations**: Based on immutable daily SQLite snapshots, it generates a TOP-30 list ranked by forgetting risk and preserves reviewed state.
-- **Two run modes**: Browser mode (`python server.py`) and native desktop window mode (`python app.py`, based on pywebview).
+- **Two run modes**: Browser mode (`python launcher.py --mode web`) and native desktop window mode (`python app.py`, based on pywebview).
 - **Windows tray status**: The notification-area icon shows that Memo Superform is alive, restores the current page/window on double-click, and exits the background service from its menu. A second launch activates the existing instance instead of failing ambiguously.
 - **Incremental refresh**: Checks compact today-state and due candidates by default, scans the 30-day active window only when needed, and offers weekly/manual reconciliation.
 - **Custom heatmap palettes**: 6 preset palettes (one each for light and dark mode), switchable from the status bar.
@@ -281,7 +282,7 @@ Native HTML / CSS / JavaScript + [ECharts](https://echarts.apache.org/) + Python
 
 ### Quick mounting a GPT-SoVITS voice pack
 
-The Windows EXE deliberately keeps the large GPT-SoVITS runtime and voice assets outside the application. Zip a prepared `tts_pack` directory, then open Settings → **Voice (GPT-SoVITS resource pack)** and drag the ZIP into **Quick mount voice pack**. The ZIP may place `pack.json` at its root or inside one outer `tts_pack/` directory.
+The Windows EXE deliberately keeps the large GPT-SoVITS runtime and voice assets outside the application. Zip a prepared `tts_pack` directory, then open Settings → **Voice (GPT-SoVITS resource pack)** and drag the ZIP into **Quick mount voice pack**, or choose **Select large voice-pack ZIP**. The desktop window reads the local ZIP directly and installs it in the background, so multi-GB packs never travel through WebView; progress remains visible and the source ZIP stays where it is. The ZIP may place `pack.json` at its root or inside one outer `tts_pack/` directory.
 
 ```text
 tts_pack/
@@ -295,14 +296,14 @@ tts_pack/
     └── reference.wav   # mp3 / flac / ogg also work
 ```
 
-A complete usable archive contains `roles.json` (or migratable legacy assets), each role's `persona.json`, exact reference text, and the reference language. `persona.json` is the single source for the character name and companion profile. It uses the fixed Chinese keys `版本`, `角色`, `语气`, `背景`, `禁忌`, and `示例`, and can be imported or exported from the role editor for backup. A bare `.ckpt` / `.pth` pair may also be mounted as a package to finish later: as long as the ZIP contains a valid `pack.json`, Memo safely replaces the local pack and lists every missing runtime file, model, reference audio, text, language, persona, or Live2D binding together with its expected location. Finish those items in the role editor; incomplete roles remain unavailable for activation. Memo validates ZIP paths, links, and extracted size in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a missing manifest, malformed manifest, or unsafe ZIP leaves the existing pack unchanged. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
+A complete usable archive contains `roles.json` (or migratable legacy assets), each role's `persona.json`, exact reference text, and the reference language. `persona.json` is the single source for the character name and companion profile. It uses the fixed Chinese keys `版本`, `角色`, `语气`, `背景`, `禁忌`, and `示例`, and can be imported or exported from the role editor for backup. A bare `.ckpt` / `.pth` pair may also be mounted as a package to finish later: as long as the ZIP contains a valid `pack.json`, Memo safely replaces the local pack and lists every missing runtime file, model, reference audio, text, language, persona, or Live2D binding together with its expected location. Finish those items in the role editor; incomplete roles remain unavailable for activation. Memo validates ZIP paths, links, destination free space, and extracted size in staging, stops the previous worker, then atomically swaps `data/tts_pack/`; a missing manifest, malformed manifest, or unsafe ZIP leaves the existing pack unchanged. Browser mode is only a fallback for ZIPs up to 256 MiB; use the Windows EXE for a full runtime pack. Live2D assets are intentionally separate, so confirm or re-bind each mounted role to an installed local Live2D model before enabling voice.
 
 ## Quick Start
 
 ### Option 1: Browser mode
 ```bash
 cd memo-superform
-python server.py
+python launcher.py --mode web
 ```
 Once the server starts it prints the access URL (default http://localhost:8888) and opens your browser automatically.
 
@@ -314,10 +315,12 @@ python app.py
 On Windows, the tray icon remains visible while the app is running. Closing the desktop window hides it to the tray; use **Exit Memo Superform** from the tray menu to stop it completely.
 Runs as a native window (no browser needed); closing the window exits the app.
 
-### Configure your token
-- Click the Settings button in the top-right corner.
-- Enter your Maimemo API token (in the app: Me -> More settings -> Experimental features -> Open API).
-- Click "Test connection" to verify; after saving, the data loads automatically.
+### Connect a Maimemo account
+
+- Click **Settings** → **Maimemo account** → **Connect Maimemo account**, then finish authorization in your browser.
+- The desktop flow uses OAuth Authorization Code + PKCE. Tokens are stored only in the current Windows user's DPAPI-protected credential store; browser pages never store or read them.
+- Start through `MemoSuperform.exe`, `python launcher.py --mode web`, or `python app.py`; these paths register the `memo-superform://` callback protocol. Direct `server.py` runs clearly disable one-click authorization, while manual Token connection remains available.
+- Legacy users can still enter an API Token under **Advanced connection method**.
 
 > The SQLite database is created automatically at `data/memo-superform.db`. A legacy SQL Server installation is optional and is opened read-only for migration only.
 

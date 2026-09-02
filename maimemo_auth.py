@@ -33,13 +33,20 @@ PUBLIC_SITE_ORIGIN = "https://matey-ace.github.io"
 PUBLIC_SITE_BASE = PUBLIC_SITE_ORIGIN + "/memo-superform"
 REDIRECT_URI = PUBLIC_SITE_BASE + "/oauth/callback.html"
 START_URI = PUBLIC_SITE_BASE + "/oauth/start.html"
-DEFAULT_SCOPES = "openid profile offline_access"
+DEFAULT_SCOPES = (
+    "openid profile offline_access "
+    "open.memo.study open.memo.content"
+)
 PENDING_TTL_SECONDS = 10 * 60
 MAX_CALLBACK_VALUE = 8192
 
-# 平台创建应用后填写；也支持打包/开发环境通过环境变量注入。client_id 属于公开
-# 客户端标识，静态授权页会使用同一个值，绝不在此处加入 client_secret。
-MAIMEMO_CLIENT_ID = ""
+# 墨墨开放平台审核通过的公开客户端标识。它会随 Windows EXE 一起发布；client_id
+# 本身不是密钥，也不会让任何 Token 泄露。开发/测试时仍可用
+# MEMO_MAIMEMO_CLIENT_ID 临时覆盖。当前获批的业务 scope 是完整的 study/content
+# scope；即使如此，server.py 仍只白名单放行产品需要的只读开放 API。
+#
+# 纯前端应用不能也不需要保存 client_secret，桌面端始终使用 PKCE S256。
+MAIMEMO_CLIENT_ID = "6a968536c8e75d605a3c9f13"
 
 
 class MaimemoAuthError(RuntimeError):
@@ -198,7 +205,12 @@ class MaimemoOAuth:
         post_form: Optional[Callable[[str, Mapping[str, str]], Mapping[str, Any]]] = None,
     ):
         directory = Path(data_dir)
-        configured = client_id if client_id is not None else os.environ.get("MEMO_MAIMEMO_CLIENT_ID", MAIMEMO_CLIENT_ID)
+        if client_id is not None:
+            configured = client_id
+        else:
+            # 空环境变量不应意外关闭已审核发布包的一键授权；只有非空值才作为
+            # 开发/测试用覆盖项。
+            configured = os.environ.get("MEMO_MAIMEMO_CLIENT_ID", "").strip() or MAIMEMO_CLIENT_ID
         self.client_id = str(configured or "").strip()
         self.issuer = str(issuer).rstrip("/")
         self.authorize_url = self.issuer + "/auth"
@@ -212,10 +224,27 @@ class MaimemoOAuth:
         self.now = now
         self.opener = opener
         self.post_form = post_form or self._post_form
+        # ``None`` 保持给独立单元测试/嵌入式调用的兼容；正式桌面启动器会在
+        # 创建本地服务前明确写入 True 或 False。只有已知注册失败时才阻止登录。
+        self._callback_protocol_ready: Optional[bool] = None
+        self._callback_protocol_error = ""
 
     @property
     def configured(self) -> bool:
         return bool(self.client_id and self.client_id != "__MAIMEMO_CLIENT_ID__")
+
+    def set_callback_protocol_status(self, ready: bool, error: str = "") -> None:
+        """记录桌面 ``memo-superform://`` 回调协议是否可用。
+
+        该状态只决定能否开始新的浏览器授权；手动 Token 与已开始的回调处理不受
+        影响。错误文案由启动器提供的固定用户提示构成，不包含注册表路径或本机
+        异常细节。
+        """
+        self._callback_protocol_ready = bool(ready)
+        if self._callback_protocol_ready:
+            self._callback_protocol_error = ""
+        else:
+            self._callback_protocol_error = str(error or "一键授权回调协议未注册，请重新启动 Memo Superform.exe 后重试。")[:300]
 
     @staticmethod
     def _post_form(url: str, fields: Mapping[str, str]) -> Mapping[str, Any]:
@@ -281,6 +310,10 @@ class MaimemoOAuth:
             connected = False
         return {
             "configured": self.configured,
+            # 未标记时保留测试/嵌入调用的可用状态；正规的 launcher 总会在载入
+            # server.py 前标记结果，直接运行 server.py 则明确返回 False。
+            "callback_ready": self._callback_protocol_ready is not False,
+            "callback_error": self._callback_protocol_error if self._callback_protocol_ready is False else "",
             "connected": connected,
             "mode": mode if connected else "",
             "subject": self._subject(data) if connected and mode == "oauth" else "",
@@ -295,6 +328,8 @@ class MaimemoOAuth:
     def start_login(self, *, open_browser: bool = True) -> dict[str, Any]:
         if not self.configured:
             raise MaimemoAuthError("墨墨开放平台 client_id 尚未配置")
+        if self._callback_protocol_ready is False:
+            raise MaimemoAuthError(self._callback_protocol_error or "一键授权回调协议未注册，请重新启动 Memo Superform.exe 后重试。")
         verifier = _b64url(secrets.token_bytes(64))
         challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
         state = _b64url(secrets.token_bytes(32))

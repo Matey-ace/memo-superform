@@ -6,7 +6,7 @@
 - 应用类型：纯前端应用
 - 主页：`https://matey-ace.github.io/memo-superform/`
 - OAuth 回调：`https://matey-ace.github.io/memo-superform/oauth/callback.html`
-- 申请范围：`openid profile offline_access`，以及平台页面提供的学习数据读取、云词本读取最小权限。
+- 已获批范围：`openid profile offline_access open.memo.study open.memo.content`。
 
 ## 用途说明
 
@@ -21,7 +21,7 @@ OAuth 使用 Authorization Code + PKCE S256。GitHub Pages 只承载介绍页、
 - 学习记录：`study/query_study_records`
 - 云词本：`notepads`、`notepads/{id}`
 
-不申请内容创建、提前复习、释义、助记或例句等写入/内容权限。
+开放平台已批准 study/content 的读写 scope；当前版本仍在本机代理层强制白名单，只使用上述读取接口，不会向墨墨云端写入学习记录、云词本或内容。
 
 ## 嵌入式学习页确认项
 

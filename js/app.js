@@ -315,6 +315,9 @@ const App = (function() {
                 const wasConnected = MaimemoAPI.hasToken();
                 const status = await MaimemoAPI.refreshConnection();
                 const connected = Boolean(status.connected);
+                // 新版桌面启动器会报告 Windows 自定义协议注册结果。旧服务没有
+                // 这个字段时保持兼容，视为可用。
+                const callbackReady = status.callback_ready !== false;
                 if (connected) {
                     const label = status.mode === 'oauth'
                         ? ('✓ 已连接' + (status.display_name ? ' · ' + status.display_name : ''))
@@ -322,9 +325,11 @@ const App = (function() {
                     maimemoStatus.textContent = label;
                     maimemoStatus.className = 'status-text success';
                     maimemoConnectBtn.style.display = 'none';
-                    maimemoReconnectBtn.style.display = status.configured ? '' : 'none';
+                    maimemoReconnectBtn.style.display = status.configured && callbackReady ? '' : 'none';
                     maimemoDisconnectBtn.style.display = '';
                     maimemoDeleteDataBtn.style.display = '';
+                    maimemoConnectBtn.disabled = false;
+                    maimemoConnectBtn.title = '';
                     stopMaimemoPolling();
                     // OAuth 回调在外部浏览器完成后只会更新本机凭据。这里检测到
                     // 状态转换后主动刷新仪表盘，不要求用户再手动保存设置。
@@ -338,11 +343,16 @@ const App = (function() {
                         : (status.pending ? '请在浏览器中完成墨墨授权...' : '尚未连接墨墨账号');
                     maimemoStatus.className = status.error ? 'status-text error' : 'hint';
                     maimemoConnectBtn.style.display = status.configured ? '' : 'none';
+                    maimemoConnectBtn.disabled = !callbackReady;
+                    maimemoConnectBtn.title = callbackReady ? '' : (status.callback_error || '一键授权回调协议未注册');
                     maimemoReconnectBtn.style.display = 'none';
                     maimemoDisconnectBtn.style.display = 'none';
                     maimemoDeleteDataBtn.style.display = 'none';
                     if (!status.configured && !status.pending) {
                         maimemoStatus.textContent = '一键授权将在开放平台 client_id 配置后可用；可先使用下方手动 Token。';
+                    } else if (!callbackReady && !status.pending) {
+                        maimemoStatus.textContent = '一键授权暂不可用：' + (status.callback_error || '授权回调协议未注册。请重新启动 MemoSuperform.exe。');
+                        maimemoStatus.className = 'status-text error';
                     }
                 }
                 return status;
@@ -631,7 +641,11 @@ const App = (function() {
         const packMountDropzone = document.getElementById('ttsPackMountDropzone');
         const packMountInput = document.getElementById('ttsPackMountInput');
         const packMountBrowseBtn = document.getElementById('ttsPackMountBrowseBtn');
+        const packMountNativeBtn = document.getElementById('ttsPackMountNativeBtn');
         const packMountStatus = document.getElementById('ttsPackMountStatus');
+        const packMountProgressWrap = document.getElementById('ttsPackMountProgressWrap');
+        const packMountProgress = document.getElementById('ttsPackMountProgress');
+        const packMountProgressText = document.getElementById('ttsPackMountProgressText');
         const packMountMissing = document.getElementById('ttsPackMountMissing');
 
         let savedSpeed = parseFloat(localStorage.getItem('tts_speed') || '1.0');
@@ -752,6 +766,12 @@ const App = (function() {
             if (token) out.Authorization = 'Bearer ' + token;
             return out;
         }
+        const TTS_PACK_WEB_UPLOAD_MAX_BYTES = 256 * 1024 * 1024;
+        const TTS_PACK_MOUNT_JOB_STORAGE_KEY = 'tts_pack_mount_job_id';
+        let packMountPollTimer = 0;
+        let activePackMountJobId = '';
+        let nativeTtsPackDropReady = Boolean(window.__memoNativeTtsPackImport && window.__memoNativeTtsPackImport.drop);
+
         function setPackMountMessage(message, error) {
             if (!packMountStatus) return;
             packMountStatus.textContent = message || '';
@@ -782,6 +802,7 @@ const App = (function() {
             }
             if (packMountInput) packMountInput.disabled = !!busy;
             if (packMountBrowseBtn) packMountBrowseBtn.disabled = !!busy;
+            if (packMountNativeBtn) packMountNativeBtn.disabled = !!busy;
         }
         function describePackSize(bytes) {
             const size = Number(bytes) || 0;
@@ -789,8 +810,165 @@ const App = (function() {
             if (size >= 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + ' MB';
             return Math.max(0, Math.round(size / 1024)) + ' KB';
         }
+        function getNativeTtsPackBridge() {
+            const api = window.pywebview && window.pywebview.api;
+            return api && typeof api.choose_tts_pack === 'function' ? api : null;
+        }
+        function isDesktopShell() {
+            return Boolean(window.pywebview);
+        }
+        function refreshNativeTtsPackControls() {
+            const bridge = getNativeTtsPackBridge();
+            const desktop = isDesktopShell();
+            // 在 pywebview 注入 API 的极短初始化阶段，也不要露出浏览器文件上传
+            // 入口；否则用户点得很快时仍会把 ZIP 交给 WebView。
+            if (packMountNativeBtn) {
+                packMountNativeBtn.hidden = !desktop;
+                packMountNativeBtn.disabled = Boolean(packMountInFlight || (desktop && !bridge));
+            }
+            if (packMountBrowseBtn) packMountBrowseBtn.hidden = desktop;
+            const nativeState = window.__memoNativeTtsPackImport;
+            if (nativeState && typeof nativeState.drop === 'boolean') nativeTtsPackDropReady = nativeState.drop;
+        }
+        function stageLabel(stage) {
+            return {
+                queued: '等待安装',
+                uploading: '正在接收 ZIP',
+                checking: '正在检查 ZIP',
+                extracting: '正在解压',
+                validating: '正在校验资料',
+                waiting_for_voice: '正在等待当前语音结束',
+                switching: '正在替换旧包',
+                replacing: '正在替换旧包',
+                done: '安装完成',
+                failed: '安装失败'
+            }[String(stage || '')] || '正在安装';
+        }
+        function renderPackMountProgress(job) {
+            if (!packMountProgressWrap) return;
+            if (!job) {
+                packMountProgressWrap.hidden = true;
+                if (packMountProgress) packMountProgress.value = 0;
+                if (packMountProgressText) packMountProgressText.textContent = '';
+                return;
+            }
+            const completed = Number(job.completed_bytes) || 0;
+            const total = Number(job.total_bytes) || 0;
+            const percent = Number.isFinite(Number(job.percent)) ? Number(job.percent)
+                : (total ? Math.min(99, Math.floor(completed * 100 / total)) : 0);
+            packMountProgressWrap.hidden = false;
+            if (packMountProgress) {
+                packMountProgress.max = 100;
+                packMountProgress.value = Math.max(0, Math.min(100, percent));
+                packMountProgress.setAttribute('aria-valuetext', stageLabel(job.stage) + ' ' + percent + '%');
+            }
+            if (packMountProgressText) {
+                const byteText = total ? (describePackSize(completed) + ' / ' + describePackSize(total)) : '';
+                const fileText = Number(job.total_files) ? ('，' + (Number(job.completed_files) || 0) + ' / ' + Number(job.total_files) + ' 个文件') : '';
+                packMountProgressText.textContent = stageLabel(job.stage) + (byteText ? (' · ' + byteText) : '') + fileText + (total ? (' · ' + percent + '%') : '');
+            }
+        }
+        function clearPackMountPolling() {
+            if (packMountPollTimer) window.clearTimeout(packMountPollTimer);
+            packMountPollTimer = 0;
+        }
+        function getStoredPackMountJobId() {
+            try { return sessionStorage.getItem(TTS_PACK_MOUNT_JOB_STORAGE_KEY) || ''; } catch (error) { return ''; }
+        }
+        function storePackMountJobId(jobId) {
+            try {
+                if (jobId) sessionStorage.setItem(TTS_PACK_MOUNT_JOB_STORAGE_KEY, jobId);
+                else sessionStorage.removeItem(TTS_PACK_MOUNT_JOB_STORAGE_KEY);
+            } catch (error) { /* private browsing/storage denial must not block import */ }
+        }
+        function releasePackMountUi() {
+            clearPackMountPolling();
+            activePackMountJobId = '';
+            storePackMountJobId('');
+            packMountInFlight = false;
+            setPackMountBusy(false);
+            setRoleEditorSelectionLock(false);
+            if (packMountInput) packMountInput.value = '';
+        }
+        function preparePackMount(label, sourceSize, message) {
+            if (packMountInFlight) return false;
+            if (roleSaveInFlight) {
+                setPackMountMessage('角色资料正在保存，请完成后再挂载语音包。', true);
+                return false;
+            }
+            if (roleEditorOpen) {
+                const proceed = window.confirm('挂载会替换当前完整语音包。未保存的角色编辑内容会被丢弃，继续吗？');
+                if (!proceed) return false;
+                closeRoleEditor();
+            }
+            packMountInFlight = true;
+            setPackMountBusy(true);
+            setRoleEditorSelectionLock(true);
+            renderPackMountMissing(null);
+            renderPackMountProgress({ stage: 'queued', source_size: sourceSize || 0 });
+            setPackMountMessage(message || ('正在准备挂载 ' + String(label || '语音包 ZIP') + '…'));
+            if (actionEl) { actionEl.textContent = '正在挂载语音包…'; actionEl.className = 'status-text'; }
+            return true;
+        }
+        async function completePackMount(data, label) {
+            await TTS.refresh();
+            renderStatus();
+            await loadRoles();
+            const imported = Array.isArray(data && data.voice_ready_role_ids) ? data.voice_ready_role_ids.length : 0;
+            renderPackMountMissing(data || {});
+            if (data && data.complete) {
+                setPackMountMessage('✓ 已挂载“' + ((data && data.pack_name) || label || '语音包') + '”。已识别 ' + imported + ' 套完整语音资料；请确认角色的 Live2D 绑定后再开启语音。');
+                if (actionEl) { actionEl.textContent = '✓ 语音包已挂载，旧 worker 已关闭'; actionEl.className = 'status-text success'; }
+            } else {
+                const runtimeMissing = Array.isArray(data && data.runtime_missing) && data.runtime_missing.length;
+                const usableRoles = !runtimeMissing && imported > 0;
+                setPackMountMessage(usableRoles
+                    ? ('✓ 已挂载“' + ((data && data.pack_name) || label || '语音包') + '”。已识别 ' + imported + ' 套完整语音资料；其余待补齐内容见下方清单。')
+                    : ('✓ 已挂载“' + ((data && data.pack_name) || label || '语音包') + '”，但还有待补齐内容；请按下方清单补充后再开启语音。'));
+                if (actionEl) {
+                    actionEl.textContent = usableRoles ? '✓ 语音包已挂载，部分角色待补齐' : '✓ 语音包已挂载，等待补齐资料';
+                    actionEl.className = usableRoles ? 'status-text success' : 'status-text';
+                }
+            }
+        }
+        async function pollPackMountJob() {
+            const jobId = activePackMountJobId;
+            if (!jobId) return;
+            try {
+                const response = await fetch('/api/tts/mount-pack/jobs/' + encodeURIComponent(jobId));
+                const job = await response.json().catch(function() { return {}; });
+                if (!response.ok || job.error && job.state !== 'failed') throw new Error(job.error || '读取语音包安装状态失败');
+                renderPackMountProgress(job);
+                if (job.state === 'completed') {
+                    await completePackMount(job.result || {}, job.source_name);
+                    releasePackMountUi();
+                    return;
+                }
+                if (job.state === 'failed') throw new Error(job.error || '语音包挂载失败');
+                packMountPollTimer = window.setTimeout(pollPackMountJob, 650);
+            } catch (error) {
+                console.error('语音包挂载失败：', error);
+                setPackMountMessage('✗ ' + (error.message || '语音包挂载失败'), true);
+                if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
+                releasePackMountUi();
+            }
+        }
+        function startPackMountPolling(job) {
+            const jobId = String(job && (job.job_id || job.id) || '');
+            if (!jobId) throw new Error('语音包安装未返回任务编号');
+            activePackMountJobId = jobId;
+            storePackMountJobId(jobId);
+            if (!packMountInFlight) {
+                packMountInFlight = true;
+                setPackMountBusy(true);
+                setRoleEditorSelectionLock(true);
+            }
+            if (job) renderPackMountProgress(job);
+            clearPackMountPolling();
+            void pollPackMountJob();
+        }
         async function mountTtsPack(file) {
-            if (packMountInFlight || !file) return;
+            if (!file) return;
             if (!/\.zip$/i.test(String(file.name || ''))) {
                 setPackMountMessage('请选择语音包 ZIP 文件。', true);
                 return;
@@ -799,80 +977,137 @@ const App = (function() {
                 setPackMountMessage('这个语音包 ZIP 是空的。', true);
                 return;
             }
-            if (roleSaveInFlight) {
-                setPackMountMessage('角色资料正在保存，请完成后再挂载语音包。', true);
+            if (isDesktopShell()) {
+                setPackMountMessage('桌面版请使用“选择大型语音包 ZIP”或直接拖入 ZIP；不会经页面上传。', true);
                 return;
             }
-            if (roleEditorOpen) {
-                const proceed = window.confirm('挂载会替换当前完整语音包。未保存的角色编辑内容会被丢弃，继续吗？');
-                if (!proceed) return;
-                closeRoleEditor();
+            if (file.size > TTS_PACK_WEB_UPLOAD_MAX_BYTES) {
+                setPackMountMessage('浏览器模式仅支持不超过 256 MiB 的 ZIP；请使用 Windows EXE 原生导入完整语音包。', true);
+                return;
             }
-
-            packMountInFlight = true;
-            setPackMountBusy(true);
-            setRoleEditorSelectionLock(true);
             const label = String(file.name || '语音包.zip');
-            renderPackMountMissing(null);
-            setPackMountMessage('正在传输并校验 ' + label + '（' + describePackSize(file.size) + '），大包需要一些时间…');
-            if (actionEl) { actionEl.textContent = '正在挂载语音包…'; actionEl.className = 'status-text'; }
+            if (!preparePackMount(label, file.size, '正在上传小型语音包 ' + label + '（' + describePackSize(file.size) + '）…')) return;
             try {
-                // 直接以 File 作为请求体。与 arrayBuffer() 不同，WebView 可流式
-                // 传输数 GB 的运行包，不在浏览器内存中再复制一份。
                 const response = await fetch('/api/tts/mount-pack?name=' + encodeURIComponent(label), {
                     method: 'POST',
                     headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/zip' }),
                     body: file
                 });
                 const data = await response.json().catch(function() { return {}; });
-                if (!response.ok || data.error) throw new Error(data.error || '语音包挂载失败');
-                await TTS.refresh();
-                renderStatus();
-                await loadRoles();
-                const imported = Array.isArray(data.voice_ready_role_ids) ? data.voice_ready_role_ids.length : 0;
-                renderPackMountMissing(data);
-                if (data.complete) {
-                    setPackMountMessage('✓ 已挂载“' + (data.pack_name || label) + '”。已识别 ' + imported + ' 套完整语音资料；请确认角色的 Live2D 绑定后再开启语音。');
-                    if (actionEl) { actionEl.textContent = '✓ 语音包已挂载，旧 worker 已关闭'; actionEl.className = 'status-text success'; }
-                } else {
-                    const runtimeMissing = Array.isArray(data.runtime_missing) && data.runtime_missing.length;
-                    const usableRoles = !runtimeMissing && imported > 0;
-                    setPackMountMessage(usableRoles
-                        ? ('✓ 已挂载“' + (data.pack_name || label) + '”。已识别 ' + imported + ' 套完整语音资料；其余待补齐内容见下方清单。')
-                        : ('✓ 已挂载“' + (data.pack_name || label) + '”，但还有待补齐内容；请按下方清单补充后再开启语音。'));
-                    if (actionEl) {
-                        actionEl.textContent = usableRoles ? '✓ 语音包已挂载，部分角色待补齐' : '✓ 语音包已挂载，等待补齐资料';
-                        actionEl.className = usableRoles ? 'status-text success' : 'status-text';
-                    }
-                }
+                if (!response.ok || data.error) throw new Error(data.error || '语音包上传失败');
+                startPackMountPolling(data.job || { job_id: data.job_id, source_name: label, source_size: file.size });
             } catch (error) {
                 console.error('语音包挂载失败：', error);
                 setPackMountMessage('✗ ' + (error.message || '语音包挂载失败'), true);
                 if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
-            } finally {
-                packMountInFlight = false;
-                setPackMountBusy(false);
-                setRoleEditorSelectionLock(false);
-                if (packMountInput) packMountInput.value = '';
+                releasePackMountUi();
             }
         }
         function selectTtsPack(files) {
             const file = files && files[0];
             if (!file) return;
-            mountTtsPack(file);
+            void mountTtsPack(file);
         }
+        async function chooseNativeTtsPack() {
+            const bridge = getNativeTtsPackBridge();
+            if (!bridge) {
+                if (isDesktopShell()) {
+                    setPackMountMessage('桌面原生导入器正在初始化，请稍候再试。', true);
+                } else if (packMountInput) {
+                    packMountInput.click();
+                }
+                return;
+            }
+            if (!preparePackMount('本机语音包 ZIP', 0, '正在打开系统文件选择器…')) return;
+            try {
+                const job = await bridge.choose_tts_pack();
+                if (!job || job.cancelled) {
+                    setPackMountMessage('已取消选择语音包。');
+                    renderPackMountProgress(null);
+                    releasePackMountUi();
+                    return;
+                }
+                if (job.error) throw new Error(job.error);
+                startPackMountPolling(job);
+            } catch (error) {
+                console.error('原生语音包选择失败：', error);
+                setPackMountMessage('✗ ' + (error.message || '无法打开原生语音包导入器'), true);
+                if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
+                releasePackMountUi();
+            }
+        }
+        async function discardNativeDroppedPack(bridge, dropId) {
+            if (!bridge || typeof bridge.discard_tts_pack_drop !== 'function' || !dropId) return;
+            try { await bridge.discard_tts_pack_drop(dropId); } catch (error) { /* pending paths expire automatically */ }
+        }
+        async function startNativeDroppedPack(detail) {
+            const bridge = getNativeTtsPackBridge();
+            const dropId = String(detail && detail.drop_id || '');
+            if (!detail || detail.error) {
+                // A second drop during an active install must never unlock or overwrite
+                // the progress UI belonging to the first job.
+                if (!packMountInFlight) {
+                    setPackMountMessage('✗ ' + ((detail && detail.error) || '桌面导入器未能读取 ZIP'), true);
+                    renderPackMountProgress(null);
+                }
+                return;
+            }
+            if (!bridge || typeof bridge.start_tts_pack_drop !== 'function' || !dropId) {
+                setPackMountMessage('桌面原生导入器尚未准备好；请点击“选择大型语音包 ZIP（推荐）”。', true);
+                return;
+            }
+            if (packMountInFlight) {
+                await discardNativeDroppedPack(bridge, dropId);
+                return;
+            }
+            const label = String(detail.source_name || '语音包.zip');
+            const sourceSize = Number(detail.source_size) || 0;
+            // 原生桥接在这里才会取得暂存路径。先经过同一份确认逻辑，避免拖入 ZIP
+            // 直接覆盖仍在编辑、尚未保存的角色资料。
+            if (!preparePackMount(label, sourceSize, '正在准备挂载 ' + label + '（' + describePackSize(sourceSize) + '）…')) {
+                await discardNativeDroppedPack(bridge, dropId);
+                return;
+            }
+            try {
+                const job = await bridge.start_tts_pack_drop(dropId);
+                if (!job || job.error) throw new Error((job && job.error) || '桌面导入器未能开始安装');
+                startPackMountPolling(job);
+            } catch (error) {
+                console.error('原生拖入语音包失败：', error);
+                setPackMountMessage('✗ ' + (error.message || '语音包安装未能启动'), true);
+                if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
+                releasePackMountUi();
+            }
+        }
+        window.addEventListener('pywebviewready', refreshNativeTtsPackControls);
+        window.addEventListener('memoNativeTtsPackReady', function(event) {
+            const detail = event && event.detail || {};
+            nativeTtsPackDropReady = Boolean(detail.drop);
+            window.__memoNativeTtsPackImport = { drop: nativeTtsPackDropReady };
+            refreshNativeTtsPackControls();
+        });
+        window.addEventListener('memoTtsPackDropPending', function(event) {
+            void startNativeDroppedPack(event && event.detail);
+        });
+        refreshNativeTtsPackControls();
+        if (packMountNativeBtn) packMountNativeBtn.addEventListener('click', function() { void chooseNativeTtsPack(); });
         if (packMountBrowseBtn) packMountBrowseBtn.addEventListener('click', function() {
             if (!packMountInFlight && packMountInput) packMountInput.click();
         });
         if (packMountInput) packMountInput.addEventListener('change', function() { selectTtsPack(packMountInput.files); });
         if (packMountDropzone) {
             packMountDropzone.addEventListener('click', function() {
-                if (!packMountInFlight && packMountInput) packMountInput.click();
+                if (packMountInFlight) return;
+                if (getNativeTtsPackBridge()) void chooseNativeTtsPack();
+                else if (isDesktopShell()) setPackMountMessage('桌面原生导入器正在初始化，请稍候再试。', true);
+                else if (packMountInput) packMountInput.click();
             });
             packMountDropzone.addEventListener('keydown', function(event) {
                 if (packMountInFlight || (event.key !== 'Enter' && event.key !== ' ')) return;
                 event.preventDefault();
-                if (packMountInput) packMountInput.click();
+                if (getNativeTtsPackBridge()) void chooseNativeTtsPack();
+                else if (isDesktopShell()) setPackMountMessage('桌面原生导入器正在初始化，请稍候再试。', true);
+                else if (packMountInput) packMountInput.click();
             });
             packMountDropzone.addEventListener('dragover', function(event) {
                 if (packMountInFlight) return;
@@ -886,9 +1121,25 @@ const App = (function() {
             packMountDropzone.addEventListener('drop', function(event) {
                 event.preventDefault();
                 packMountDropzone.classList.remove('is-dragover');
+                // 桌面壳由 launcher.py 的原生 DnD 监听器取得真实路径。这里绝不把
+                // File 再传给 fetch，避免 Edge WebView 在多 GB ZIP 上黑屏或假死。
+                if (isDesktopShell()) {
+                    if (nativeTtsPackDropReady) setPackMountMessage('正在读取拖入 ZIP 的本机信息…');
+                    else setPackMountMessage('桌面原生拖放尚未准备好；请点击“选择大型语音包 ZIP（推荐）”。', true);
+                    return;
+                }
                 if (!packMountInFlight) selectTtsPack(event.dataTransfer && event.dataTransfer.files);
             });
         }
+        (function restorePackMountAfterReload() {
+            const jobId = getStoredPackMountJobId();
+            if (!jobId) return;
+            packMountInFlight = true;
+            setPackMountBusy(true);
+            setRoleEditorSelectionLock(true);
+            activePackMountJobId = jobId;
+            void pollPackMountJob();
+        })();
         function roleMessage(text, error) {
             if (!roleStatus) return;
             roleStatus.textContent = text || '';

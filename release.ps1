@@ -60,6 +60,23 @@ if (-not $buildInfoMatch.Success) { throw "build_info.py 中缺少 BUILD_VERSION
 if ($buildInfoMatch.Groups[1].Value -ne $Version) {
     throw "发布版本 $Version 与 build_info.py 中的 BUILD_VERSION $($buildInfoMatch.Groups[1].Value) 不一致"
 }
+# 公开 OAuth Client ID 必须随发布 EXE 一起固化。只在构建机设置环境变量不会把
+# 它带进用户下载的 EXE，因此在打包前直接检查源码中的审核配置与业务 scope。
+$maimemoAuthPath = Join-Path $scriptDir "maimemo_auth.py"
+if (-not (Test-Path $maimemoAuthPath)) { throw "缺少 maimemo_auth.py，无法验证墨墨 OAuth 配置" }
+$oauthConfigJson = & python -c "import json, maimemo_auth; print(json.dumps({'client_id': maimemo_auth.MAIMEMO_CLIENT_ID, 'scopes': maimemo_auth.DEFAULT_SCOPES}))"
+if ($LASTEXITCODE -ne 0) { throw "读取墨墨 OAuth 发布配置失败" }
+try { $oauthConfig = $oauthConfigJson | ConvertFrom-Json } catch { throw "墨墨 OAuth 发布配置格式错误" }
+$oauthClientId = [string]$oauthConfig.client_id
+if ($oauthClientId -notmatch '^[A-Za-z0-9._-]{8,200}$' -or $oauthClientId -eq '__MAIMEMO_CLIENT_ID__') {
+    throw "未配置有效的墨墨公开 Client ID；请先写入已审核应用的 client_id"
+}
+$oauthScopes = @([string]$oauthConfig.scopes -split '\s+' | Where-Object { $_ })
+foreach ($requiredScope in @('openid', 'profile', 'offline_access', 'open.memo.study', 'open.memo.content')) {
+    if ($oauthScopes -notcontains $requiredScope) {
+        throw "墨墨 OAuth 发布配置缺少获批 scope：$requiredScope"
+    }
+}
 if (git status --porcelain) { throw "工作区不是干净状态；请先明确提交源码，脚本不会执行 git add -A" }
 # Existing local historical tags may intentionally point at rewritten release
 # commits; fetch only the publication branch and query the target tag remotely
