@@ -8,7 +8,7 @@ const fs = require('fs');
 const vm = require('vm');
 
 const ttsSource = fs.readFileSync('js/tts.js', 'utf8');
-const companionSource = fs.readFileSync('js/live2d-companion.js', 'utf8');
+const companionSource = fs.readFileSync('js/live2d-companion.js', 'utf8').replace(/\r\n/g, '\n');
 
 class SilentAudio {
     constructor() { this.currentTime = 0; this.src = ''; }
