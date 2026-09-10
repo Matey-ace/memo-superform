@@ -106,26 +106,21 @@ MEMO_NAV_GUARD_JS = (
     '})();</script>'
 )
 
-# 墨墨网页版自带快捷键系统（localStorage: shortcut_settings）。
-# 给 START_SPELLING（开始拼写，聚焦输入框）绑定空格键，并把“显示答案”让位到 S 键，
-# 这样背单词时按一下空格即可直接开始输入，无需再用鼠标点击输入框。
+# Install defaults only for missing actions; preserve user bindings on navigation.
+# The guard uses the SPA's spelling button, avoiding its event.key input seed.
 MEMO_STUDY_KEYS_JS = (
+    '<script src="/js/study-shortcuts.js"></script>'
     '<script>(function(){'
     'if(location.pathname.indexOf("/webstudy/app")<0)return;'
     'try{'
-    'var KEY="shortcut_settings";'
-    'var cur=null;'
-    'try{cur=JSON.parse(localStorage.getItem(KEY)||"null");}catch(e){}'
+    'var KEY="shortcut_settings",cur=null;'
+    'try{cur=JSON.parse(localStorage.getItem(KEY)||"null")}catch(e){}'
     'var base=(cur&&cur.version===1&&cur.shortcuts)?cur.shortcuts:{};'
-    'var show=base.SHOW_ANSWER;'
-    'var patch={START_SPELLING:{action:"START_SPELLING",key:"Space",modifiers:[],enabled:true}};'
-    'if(!show||show.key===""||show.key==="Space"){'
-    'patch.SHOW_ANSWER={action:"SHOW_ANSWER",key:"s",modifiers:[],enabled:true};'
-    '}'
-    'var merged={};'
-    'for(var k in base){merged[k]=base[k];}'
-    'for(var k2 in patch){merged[k2]=patch[k2];}'
-    'localStorage.setItem(KEY,JSON.stringify({version:1,shortcuts:merged}));'
+    'var merged=Object.assign({},base);'
+    'if(!base.START_SPELLING)merged.START_SPELLING={action:"START_SPELLING",key:"Space",modifiers:[],enabled:true};'
+    'if(!base.SHOW_ANSWER)merged.SHOW_ANSWER={action:"SHOW_ANSWER",key:"s",modifiers:[],enabled:true};'
+    'localStorage.setItem(KEY,JSON.stringify(Object.assign({},cur,{version:1,shortcuts:merged})));'
     '}catch(e){}'
+    'StudyShortcuts.installSpellingGuard(window);'
     '})();</script>'
 )

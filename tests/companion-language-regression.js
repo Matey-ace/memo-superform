@@ -7,7 +7,7 @@ const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
 
-const companionSource = fs.readFileSync('js/live2d-companion.js', 'utf8');
+const companionSource = fs.readFileSync('js/live2d-companion.js', 'utf8').replace(/\r\n/g, '\n');
 const ttsSource = fs.readFileSync('js/tts.js', 'utf8');
 const index = fs.readFileSync('index.html', 'utf8');
 const appSource = fs.readFileSync('js/app.js', 'utf8');

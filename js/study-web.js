@@ -87,16 +87,11 @@ const StudyWeb = (function() {
                 var activePage = idoc && getActiveTaroPage(idoc);
                 var scope = activePage || idoc;
                 if (!scope) return '';
-                var node = scope.querySelector('.phrase-spelling, .phrase-word, .rev-word, [data-word], .phrase-title');
+                var node = scope.querySelector('.phrase-spelling, .phrase-word, .rev-word, [data-word], .phrase-title, .rev-root .spelling');
                 var text = node && (node.getAttribute('data-word') || node.innerText || node.textContent);
                 text = (text || '').replace(/\s+/g, ' ').trim();
                 return /^[A-Za-z][A-Za-z' -]{0,80}$/.test(text) ? text : '';
             } catch(e) { return ''; }
-        }
-
-        function reportAnswer(action) {
-            if (!studyControlsActive || studyAddWordOverlayOpen) return;
-            reportStudyEvent({ type: 'answer', action: action, word: currentStudyWord() });
         }
 
         // URL 只能说明墨墨 SPA 已加载，公测说明、词书和设置页也共用
@@ -156,6 +151,7 @@ const StudyWeb = (function() {
                     return false;
                 }
                 var activePage = getActiveTaroPage(idoc);
+                if (!activePage && idoc.querySelector('.taro_page')) { studyAddWordOverlayOpen = false; return false; }
                 var scope = activePage || idoc;
                 var reviewRoot = scope.querySelector('.rev-root');
                 var active = !!(reviewRoot && scope.querySelector('.rev-top, .rev-scroller, .rev-bottom, .rev-resp-btns'));
@@ -241,9 +237,12 @@ const StudyWeb = (function() {
             container.querySelectorAll('.study-web-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     var action = btn.getAttribute('data-action') || actionForDefault(btn.getAttribute('data-key'));
+                    if (!studyControlsActive || studyAddWordOverlayOpen) return;
+                    shortcutMap = loadShortcuts();
                     var shortcut = shortcutMap[action];
-                    sendKey(iframe, shortcut);
-                    reportAnswer(action);
+                    var word = currentStudyWord();
+                    if (!sendKey(iframe, shortcut)) return;
+                    reportStudyEvent({ type: 'answer', action: action, word: word });
                     btn.style.transform = 'translateY(1px) scale(0.94)';
                     setTimeout(function() { btn.style.transform = ''; }, 150);
                 });
@@ -271,8 +270,11 @@ const StudyWeb = (function() {
             shortcutPanel.querySelector('[data-close-shortcuts]').addEventListener('click', function() { setShortcutPanelOpen(false); });
             shortcutPanel.querySelectorAll('[data-shortcut]').forEach(function(input) {
                 input.addEventListener('keydown', function(e) {
+                    if (e.key === 'Tab' || e.isComposing || e.keyCode === 229) return;
                     e.preventDefault();
-                    if (['Shift','Control','Alt','Meta','Tab','Escape'].indexOf(e.key) >= 0) return;
+                    e.stopPropagation();
+                    if (e.key === 'Escape') { setShortcutPanelOpen(false); shortcutToggle.focus(); return; }
+                    if (e.repeat || ['Shift','Control','Alt','Meta'].indexOf(e.key) >= 0) return;
                     var action = input.getAttribute('data-shortcut');
                     shortcutMap[action] = { key: normaliseKey(e.key), modifiers: eventModifiers(e), enabled: true };
                     input.value = formatShortcut(shortcutMap[action]);
@@ -281,7 +283,17 @@ const StudyWeb = (function() {
                     saveShortcuts(shortcutMap); updateShortcutLabels(container, shortcutMap);
                 });
             });
-            shortcutPanel.querySelector('.study-shortcut-reset').addEventListener('click', function() { shortcutMap = defaultShortcuts(); saveShortcuts(shortcutMap); shortcutPanel.querySelectorAll('[data-shortcut]').forEach(function(i){i.value=formatShortcut(shortcutMap[i.getAttribute('data-shortcut')]);}); updateShortcutLabels(container, shortcutMap); });
+            shortcutPanel.querySelector('.study-shortcut-reset').addEventListener('click', function() {
+                shortcutMap = defaultShortcuts();
+                saveShortcuts(shortcutMap);
+                shortcutPanel.querySelectorAll('[data-shortcut]').forEach(function(input) {
+                    var action = input.getAttribute('data-shortcut');
+                    input.value = formatShortcut(shortcutMap[action]);
+                    var name = input.parentNode.querySelector('.shortcut-action-name');
+                    if (name) name.textContent = shortcutNames()[action] + (shortcutMap[action].enabled === false ? '（未启用）' : '');
+                });
+                updateShortcutLabels(container, shortcutMap);
+            });
         document.addEventListener('keydown', handleShortcutKeydown);
 
         return createMockInstance(container, function() {
@@ -292,14 +304,18 @@ const StudyWeb = (function() {
         });
 
         function handleShortcutKeydown(e) {
-            if (!studyControlsActive || studyAddWordOverlayOpen) return;
+            if (!studyControlsActive || studyAddWordOverlayOpen || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
             var target = e.target;
-            if (e.repeat || (target && target.closest && target.closest('.study-shortcut-panel, input, textarea, select, [contenteditable="true"]'))) return;
+            if (StudyShortcuts.isEditable(target) || (target && target.closest && target.closest('.study-shortcut-panel, button, a[href], [role="button"]'))) return;
+            shortcutMap = loadShortcuts();
             var action = findShortcutAction(shortcutMap, e);
             if (!action) return;
             e.preventDefault();
-            sendKey(iframe, shortcutMap[action]);
-            reportAnswer(action);
+            if (e.repeat) return;
+            var word = currentStudyWord();
+            if (!sendKey(iframe, shortcutMap[action])) return;
+            if (['FAMILIAR', 'VAGUE', 'FORGET', 'WELL_FAMILIAR'].includes(action))
+                reportStudyEvent({ type: 'answer', action: action, word: word });
             var activeButton = container.querySelector('.study-web-btn[data-action="' + action + '"]');
             if (activeButton) {
                 activeButton.classList.add('is-key-active');
