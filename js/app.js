@@ -768,7 +768,10 @@ const App = (function() {
         }
         const TTS_PACK_WEB_UPLOAD_MAX_BYTES = 256 * 1024 * 1024;
         const TTS_PACK_MOUNT_JOB_STORAGE_KEY = 'tts_pack_mount_job_id';
+        const TTS_PACK_MOUNT_POLL_MIN_DELAY = 650;
+        const TTS_PACK_MOUNT_POLL_MAX_DELAY = 10000;
         let packMountPollTimer = 0;
+        let packMountPollFailures = 0;
         let activePackMountJobId = '';
         let nativeTtsPackDropReady = Boolean(window.__memoNativeTtsPackImport && window.__memoNativeTtsPackImport.drop);
 
@@ -872,6 +875,14 @@ const App = (function() {
             if (packMountPollTimer) window.clearTimeout(packMountPollTimer);
             packMountPollTimer = 0;
         }
+        function schedulePackMountPolling() {
+            clearPackMountPolling();
+            const delay = Math.min(
+                TTS_PACK_MOUNT_POLL_MAX_DELAY,
+                TTS_PACK_MOUNT_POLL_MIN_DELAY * Math.pow(2, Math.max(0, packMountPollFailures))
+            );
+            packMountPollTimer = window.setTimeout(pollPackMountJob, delay);
+        }
         function getStoredPackMountJobId() {
             try { return sessionStorage.getItem(TTS_PACK_MOUNT_JOB_STORAGE_KEY) || ''; } catch (error) { return ''; }
         }
@@ -886,6 +897,7 @@ const App = (function() {
             activePackMountJobId = '';
             storePackMountJobId('');
             packMountInFlight = false;
+            packMountPollFailures = 0;
             setPackMountBusy(false);
             setRoleEditorSelectionLock(false);
             if (packMountInput) packMountInput.value = '';
@@ -902,6 +914,7 @@ const App = (function() {
                 closeRoleEditor();
             }
             packMountInFlight = true;
+            packMountPollFailures = 0;
             setPackMountBusy(true);
             setRoleEditorSelectionLock(true);
             renderPackMountMissing(null);
@@ -931,26 +944,66 @@ const App = (function() {
                 }
             }
         }
+        async function reconcileMissingPackMountJob() {
+            // Job snapshots live in the local process. A page reload after an app
+            // restart can therefore see 404 even though the package state itself is
+            // valid. Reconcile the authoritative status before unlocking the UI.
+            const current = await TTS.refresh();
+            renderStatus();
+            if (current && current.mounting) {
+                schedulePackMountPolling();
+                return;
+            }
+            try { await loadRoles(); } catch (error) { console.warn('刷新已挂载角色失败：', error); }
+            setPackMountMessage('未能找到语音包安装任务记录，已刷新当前语音包状态。', true);
+            if (actionEl) { actionEl.textContent = '语音包安装记录已失效，请核对当前状态'; actionEl.className = 'status-text'; }
+            releasePackMountUi();
+        }
         async function pollPackMountJob() {
             const jobId = activePackMountJobId;
             if (!jobId) return;
             try {
                 const response = await fetch('/api/tts/mount-pack/jobs/' + encodeURIComponent(jobId));
                 const job = await response.json().catch(function() { return {}; });
+                if (response.status === 404) {
+                    await reconcileMissingPackMountJob();
+                    return;
+                }
                 if (!response.ok || job.error && job.state !== 'failed') throw new Error(job.error || '读取语音包安装状态失败');
                 renderPackMountProgress(job);
                 if (job.state === 'completed') {
-                    await completePackMount(job.result || {}, job.source_name);
+                    try {
+                        await completePackMount(job.result || {}, job.source_name);
+                    } catch (error) {
+                        // The backend has already committed the package. A transient
+                        // roles/status refresh failure must not rewrite that success
+                        // into a false "mount failed" notification.
+                        console.error('语音包已挂载，但页面刷新失败：', error);
+                        setPackMountMessage('✓ 语音包已挂载，但页面刷新失败；重新打开设置即可读取角色资料。', true);
+                        if (actionEl) { actionEl.textContent = '✓ 语音包已挂载，等待页面刷新'; actionEl.className = 'status-text success'; }
+                    } finally {
+                        releasePackMountUi();
+                    }
+                    return;
+                }
+                if (job.state === 'failed') {
+                    setPackMountMessage('✗ ' + (job.error || '语音包挂载失败'), true);
+                    if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
                     releasePackMountUi();
                     return;
                 }
-                if (job.state === 'failed') throw new Error(job.error || '语音包挂载失败');
-                packMountPollTimer = window.setTimeout(pollPackMountJob, 650);
+                packMountPollFailures = 0;
+                schedulePackMountPolling();
             } catch (error) {
-                console.error('语音包挂载失败：', error);
-                setPackMountMessage('✗ ' + (error.message || '语音包挂载失败'), true);
-                if (actionEl) { actionEl.textContent = '✗ 语音包挂载失败'; actionEl.className = 'status-text error'; }
-                releasePackMountUi();
+                // A browser/WebView reconnect can fail while the background worker
+                // continues extracting. Keep the persisted job id and the write
+                // lock, then retry with a bounded backoff instead of exposing a
+                // second concurrent import path.
+                console.warn('语音包安装状态暂时不可达：', error);
+                packMountPollFailures += 1;
+                setPackMountMessage('语音包仍可能在后台安装，连接暂时中断，正在重试…', true);
+                if (actionEl) { actionEl.textContent = '正在挂载语音包，等待连接恢复…'; actionEl.className = 'status-text'; }
+                schedulePackMountPolling();
             }
         }
         function startPackMountPolling(job) {
@@ -958,6 +1011,7 @@ const App = (function() {
             if (!jobId) throw new Error('语音包安装未返回任务编号');
             activePackMountJobId = jobId;
             storePackMountJobId(jobId);
+            packMountPollFailures = 0;
             if (!packMountInFlight) {
                 packMountInFlight = true;
                 setPackMountBusy(true);
@@ -1446,7 +1500,10 @@ const App = (function() {
             if (!file) return;
             const query = '?kind=' + encodeURIComponent(kind) + '&name=' + encodeURIComponent(file.name) + (batchId ? '&batch=' + encodeURIComponent(batchId) : '');
             const response = await fetch('/api/tts/roles/' + encodeURIComponent(id) + '/upload' + query, {
-                method: 'POST', headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/octet-stream' }), body: await file.arrayBuffer()
+                // Keep large GPT/SoVITS weights as a browser stream. Converting a
+                // multi-GB File to ArrayBuffer creates a second WebView heap copy
+                // before the server can begin writing it to disk.
+                method: 'POST', headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/octet-stream' }), body: file
             });
             const data = await response.json().catch(function() { return {}; });
             if (!response.ok || data.error) throw new Error(data.error || ('上传失败：' + file.name));
@@ -1618,6 +1675,22 @@ const App = (function() {
             if (!statusEl) return;
             const st = TTS.getStatus();
             renderPackMountMissing(st);
+            if (st.mounting) {
+                statusEl.textContent = '语音包正在后台挂载；完成前已暂停语音和角色资料操作。';
+                if (enableBtn) { enableBtn.disabled = true; enableBtn.textContent = '正在挂载语音包'; }
+                if (preloadBtn) { preloadBtn.disabled = true; preloadBtn.style.display = 'none'; }
+                if (repairBtn) { repairBtn.disabled = true; repairBtn.style.display = 'none'; }
+                setPackMountBusy(true);
+                setRoleEditorSelectionLock(true);
+                return;
+            }
+            if (!packMountInFlight && !roleSaveInFlight) {
+                if (enableBtn) enableBtn.disabled = false;
+                if (preloadBtn) preloadBtn.disabled = false;
+                if (repairBtn) repairBtn.disabled = false;
+                setPackMountBusy(false);
+                if (!roleEditorOpen) setRoleEditorSelectionLock(false);
+            }
             if (!st.pack_ready) {
                 statusEl.textContent = '未检测到语音资源包（data/tts_pack/）';
                 if (enableBtn) enableBtn.textContent = '开启语音';

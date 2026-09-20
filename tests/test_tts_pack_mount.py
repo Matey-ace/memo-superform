@@ -80,6 +80,16 @@ class TTSPackMountTests(unittest.TestCase):
         worker.parent.mkdir(parents=True)
         python_exe.write_bytes(b"fixture interpreter")
         worker.write_text("# worker fixture\n", encoding="utf-8")
+        (path / "tts_engine" / "TTS_infer_pack").mkdir()
+        (path / "tts_engine" / "TTS_infer_pack" / "TTS.py").write_text("# TTS fixture\n", encoding="utf-8")
+        for name in (
+            "chinese-roberta-wwm-ext-large",
+            "chinese-hubert-base",
+            "fast_langdetect",
+        ):
+            model_dir = path / "tts_engine" / "pretrained_models" / name
+            model_dir.mkdir(parents=True)
+            (model_dir / ".fixture").write_text("fixture\n", encoding="utf-8")
         (path / "marker.txt").write_text(marker, encoding="utf-8")
         tts.save_role(str(path), {
             "role_id": role_id,
@@ -195,6 +205,10 @@ class TTSPackMountTests(unittest.TestCase):
         self.assertEqual(result["runtime_missing"], [
             ".venv311/Scripts/python.exe",
             "tts_engine/worker_main.py",
+            "tts_engine/TTS_infer_pack/TTS.py",
+            "tts_engine/pretrained_models/chinese-roberta-wwm-ext-large",
+            "tts_engine/pretrained_models/chinese-hubert-base",
+            "tts_engine/pretrained_models/fast_langdetect",
         ])
         missing_by_role = {item["role_id"]: item["missing_paths"] for item in result["incomplete_roles"]}
         self.assertEqual(missing_by_role["partial"], [
@@ -275,6 +289,61 @@ class TTSPackMountTests(unittest.TestCase):
         self.assertTrue(state["enabled"])
         self.assertEqual(state["language"], "日文")
         self.assertEqual(state["speed"], 1.2)
+
+    def test_recovery_restores_old_pack_and_voice_state_after_interrupted_switch(self):
+        """A crash after moving the old package must not leave voice disabled forever."""
+        previous = {"enabled": True, "language": "日文", "speed": 1.2}
+        tts._save_state(str(self.data), previous)
+        candidate = self.pack.parent / (".tts-pack-ready-" + "1" * 32)
+        backup = self.pack.parent / (".tts-pack-backup-" + "2" * 32)
+        self._make_pack(candidate, "newvoice", marker="new")
+        tts._write_tts_pack_switch_journal(
+            str(self.pack), str(self.data), str(backup), str(candidate), previous, True
+        )
+        os.replace(self.pack, backup)
+        tts._save_state(str(self.data), {"enabled": False, "language": "日文", "speed": 1.2})
+
+        tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+
+        self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "old")
+        self.assertEqual(tts._load_state(str(self.data)), previous)
+        self.assertFalse(backup.exists())
+        self.assertFalse(candidate.exists())
+        self.assertFalse((self.pack.parent / tts._TTS_PACK_SWITCH_JOURNAL_FILENAME).exists())
+
+    def test_recovery_keeps_new_pack_disabled_after_candidate_was_promoted(self):
+        """A crash after promotion is a committed replacement, not a rollback case."""
+        previous = {"enabled": True, "language": "日文", "speed": 1.2}
+        tts._save_state(str(self.data), previous)
+        candidate = self.pack.parent / (".tts-pack-ready-" + "3" * 32)
+        backup = self.pack.parent / (".tts-pack-backup-" + "4" * 32)
+        self._make_pack(candidate, "newvoice", marker="new")
+        tts._write_tts_pack_switch_journal(
+            str(self.pack), str(self.data), str(backup), str(candidate), previous, True
+        )
+        os.replace(self.pack, backup)
+        os.replace(candidate, self.pack)
+        tts._save_state(str(self.data), {"enabled": False, "language": "日文", "speed": 1.2})
+
+        tts.TTSPackMountJobManager(str(self.pack), str(self.data))
+
+        self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "new")
+        self.assertFalse(tts._load_state(str(self.data))["enabled"])
+        self.assertFalse(backup.exists())
+        self.assertFalse((self.pack.parent / tts._TTS_PACK_SWITCH_JOURNAL_FILENAME).exists())
+
+    def test_malformed_role_manifest_does_not_replace_existing_pack(self):
+        archive = self.root / "bad-roles.zip"
+        tts._save_state(str(self.data), {"enabled": True, "language": "中文", "speed": 1.0})
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+            output.writestr("tts_pack/pack.json", json.dumps({"name": "bad roles"}))
+            output.writestr("tts_pack/roles.json", "{not valid json")
+
+        with self.assertRaisesRegex(tts.TTSException, "roles.json"):
+            tts.mount_tts_pack_archive(str(self.pack), str(self.data), str(archive))
+
+        self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "old")
+        self.assertTrue(tts._load_state(str(self.data))["enabled"])
 
     def test_background_manager_reports_safe_progress_and_keeps_source_archive(self):
         archive = self._new_archive(wrapper="tts_pack")
@@ -392,6 +461,7 @@ class TTSPackMountTests(unittest.TestCase):
         self.assertEqual(probe.response[0], 202)
         self.assertTrue(probe.response[1]["ok"])
         self.assertEqual(job["state"], "completed", job.get("error"))
+        self.assertEqual(job["result"]["source_name"], "voice-pack.zip")
         self.assertEqual((self.pack / "marker.txt").read_text(encoding="utf-8"), "new")
 
     def test_mount_endpoint_rejects_large_web_upload_before_reading_stream(self):
