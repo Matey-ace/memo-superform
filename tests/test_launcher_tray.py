@@ -142,6 +142,37 @@ class LauncherTrayContracts(unittest.TestCase):
         finally:
             broker.close()
 
+    def test_malformed_and_truncated_broker_payloads_are_rejected(self):
+        broker = launcher.acquire_single_instance(0)
+        self.assertIsNotNone(broker)
+        try:
+            for payload in (b"[]", b'{"app":'):
+                with socket.create_connection(("127.0.0.1", broker.port), timeout=1.0) as connection:
+                    connection.sendall(payload)
+                    connection.shutdown(socket.SHUT_WR)
+                    reply = json.loads(connection.recv(256).decode("utf-8"))
+                self.assertFalse(reply["ok"])
+        finally:
+            broker.close()
+
+    def test_oversized_broker_payload_is_rejected(self):
+        broker = launcher.acquire_single_instance(0)
+        self.assertIsNotNone(broker)
+        payload = json.dumps({
+            "app": "memo-superform", "version": 1,
+            "action": launcher.InstanceBroker._OAUTH_ACTION,
+            "url": "memo-superform://maimemo-oauth/?code=abc&state=state",
+            "padding": "x" * launcher._BROKER_MAX_PAYLOAD_BYTES,
+        }).encode("utf-8")
+        self.assertGreater(len(payload), launcher._BROKER_MAX_PAYLOAD_BYTES)
+        try:
+            with socket.create_connection(("127.0.0.1", broker.port), timeout=1.0) as connection:
+                connection.sendall(payload)
+                reply = json.loads(connection.recv(256).decode("utf-8"))
+            self.assertFalse(reply["ok"])
+        finally:
+            broker.close()
+
     def test_oauth_callback_is_queued_then_delivered_to_running_instance(self):
         broker = launcher.acquire_single_instance(0)
         self.assertIsNotNone(broker)
@@ -158,6 +189,45 @@ class LauncherTrayContracts(unittest.TestCase):
             self.assertFalse(launcher.forward_maimemo_oauth_callback("memo-superform://maimemo-oauth", broker.port))
         finally:
             broker.close()
+
+    def test_large_oauth_callback_is_not_truncated_by_instance_broker(self):
+        broker = launcher.acquire_single_instance(0)
+        self.assertIsNotNone(broker)
+        delivered = threading.Event()
+        values = []
+        callback = "memo-superform://maimemo-oauth/?code=" + ("c" * 3000) + "&state=" + ("s" * 3000)
+        try:
+            broker.set_oauth_callback_handler(lambda url: (values.append(url), delivered.set()))
+            self.assertTrue(launcher.forward_maimemo_oauth_callback(callback, broker.port, timeout=1.0))
+            self.assertTrue(delivered.wait(1.0))
+            self.assertEqual([callback], values)
+        finally:
+            broker.close()
+
+    def test_instance_broker_response_reader_accepts_fragmented_json(self):
+        chunks = [b'{"ok"', b':', b' true}']
+
+        class FakeConnection:
+            def __init__(self):
+                self.chunks = list(chunks)
+
+            def recv(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        self.assertEqual({"ok": True}, launcher._recv_json_response(FakeConnection()))
+
+        class TruncatedConnection:
+            def __init__(self):
+                self.sent = False
+
+            def recv(self, _size):
+                if self.sent:
+                    return b""
+                self.sent = True
+                return b'{"ok":'
+
+        with self.assertRaises(ValueError):
+            launcher._recv_json_response(TruncatedConnection())
 
     def test_launcher_contains_tray_lifecycle_and_background_web_mode(self):
         source = (ROOT / "launcher.py").read_text(encoding="utf-8-sig")

@@ -33,6 +33,26 @@ _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
 
 
+_BROKER_MAX_PAYLOAD_BYTES = 16384
+
+
+def _recv_json_response(connection, limit=1024):
+    payload = bytearray()
+    while len(payload) < limit:
+        chunk = connection.recv(limit - len(payload))
+        if not chunk:
+            break
+        payload.extend(chunk)
+        try:
+            value = json.loads(payload.decode("utf-8", errors="strict").strip())
+            if not isinstance(value, dict):
+                raise ValueError("instance broker response is not an object")
+            return value
+        except (ValueError, UnicodeError):
+            continue
+    raise ValueError("instance broker response is incomplete")
+
+
 def _is_maimemo_oauth_callback_url(value):
     """接受浏览器/Windows 对自定义协议路径的等价序列化。"""
     callback_url = str(value or "")
@@ -386,8 +406,18 @@ class InstanceBroker:
                 with connection:
                     try:
                         connection.settimeout(0.75)
-                        payload = connection.recv(1024)
-                        message = json.loads(payload.decode("utf-8", errors="strict").strip())
+                        payload = bytearray()
+                        message = None
+                        while len(payload) < _BROKER_MAX_PAYLOAD_BYTES:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                break
+                            payload.extend(chunk)
+                            try:
+                                message = json.loads(payload.decode("utf-8", errors="strict").strip())
+                                break
+                            except (ValueError, UnicodeError):
+                                continue
                         valid = self._is_valid_message(message)
                     except (OSError, ValueError, UnicodeError):
                         valid = False
@@ -615,7 +645,7 @@ def activate_existing_instance(port=None, timeout=0.9):
         with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
             connection.settimeout(timeout)
             connection.sendall(json.dumps(InstanceBroker._REQUEST).encode("utf-8"))
-            response = json.loads(connection.recv(256).decode("utf-8"))
+            response = _recv_json_response(connection)
         return bool(response.get("ok"))
     except (OSError, ValueError, UnicodeError):
         return False
@@ -635,7 +665,7 @@ def forward_maimemo_oauth_callback(callback_url, port=None, timeout=0.9):
         with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
             connection.settimeout(timeout)
             connection.sendall(json.dumps(message).encode("utf-8"))
-            response = json.loads(connection.recv(256).decode("utf-8"))
+            response = _recv_json_response(connection)
         return bool(response.get("ok"))
     except (OSError, ValueError, UnicodeError):
         return False
