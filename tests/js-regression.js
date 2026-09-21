@@ -23,12 +23,17 @@ for (const route of ['/api/study-records','/api/study-sync','/api/study-sync/sta
 const syncUI = read('js/study-sync-ui.js');
 assert(syncUI.includes('完整核验'), 'missing manual reconciliation confirmation');
 assert(syncUI.includes("sync('incremental'"), 'normal refresh is not incremental');
+assert(syncUI.includes('sessionGeneration'), 'profile resets must invalidate in-flight sync responses');
 const studyWeb = read('js/study-web.js');
 assert(studyWeb.includes('hasAddWordOverlay'), 'missing add-word overlay detector');
 assert(studyWeb.includes('studyAddWordOverlayOpen'), 'missing add-word overlay state');
 assert(studyWeb.includes("actions.classList.toggle('is-add-word-overlay'"), 'actions are not hidden for add-word overlay');
 const studyCss = read('css/study-web.css') + read('css/study-web-standard.css') + read('css/study-web-notebook.css');
 assert(studyCss.includes('.study-web-actions.is-add-word-overlay'), 'missing add-word overlay hide style');
+const layout = read('js/layout.js');
+assert(!layout.includes('iframe.cloneNode(true)'), 'fullscreen study mode must keep the original iframe session');
+assert(layout.includes('study-web-fullscreen-placeholder'), 'fullscreen study mode must restore its original position');
+assert(layout.includes('fullscreenGeneration'), 'closing fullscreen must invalidate delayed opens');
 const companion = read('js/live2d-companion.js');
 for (const name of ['Live2DCompanion','CompanionSession','Live2DModelManager']) assert(new RegExp(`const\\s+${name}\\s*=`).test(companion), `missing ${name}`);
 for (const name of ['Live2DCompanion','CompanionSession','Live2DModelManager']) assert(companion.includes(`window.${name} = ${name}`), `${name} is not exposed to App.init`);
@@ -70,6 +75,12 @@ assert(read('js/app.js').includes('ttsCompanionRead'), 'companion voice toggle i
 assert(!index.includes('ttsModelDrop'), 'legacy duplicate TTS model drop zone must stay removed');
 assert(index.includes('ttsRoleIndexFile'), 'role editor is missing optional model index upload');
 const appJs = read('js/app.js');
+assert(appJs.includes('studyDataGeneration'), 'profile changes must invalidate stale dashboard data loads');
+assert(appJs.includes('settingsPreviousFocus') && appJs.includes('trapSettingsFocus'), 'settings dialog must preserve keyboard focus');
+assert(index.includes('role="dialog" aria-modal="true" aria-labelledby="settingsTitle"'), 'settings panel must expose modal semantics');
+assert(index.includes('id="fullscreenModal" class="fullscreen-modal" role="dialog" aria-modal="true"'), 'fullscreen panel must expose modal semantics');
+const standardCss = read('css/style.css');
+assert(/\.chart-selector\s*\{\s*display:\s*block/.test(standardCss), 'mobile layout must retain the chart selector');
 
 // A role package now owns its whole profile.  Keep this contract close to the
 // broad settings smoke test so a future UI cleanup cannot accidentally restore

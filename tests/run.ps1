@@ -6,6 +6,9 @@ $jsFiles = Get-ChildItem js -Filter *.js -File
 foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 & node tests/study-keyboard-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/js-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/api-connection-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/layout-fullscreen-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/study-sync-session-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/js-role-upload-ui-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/tts-pack-mount-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/live2d-renderer-diagnostics.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

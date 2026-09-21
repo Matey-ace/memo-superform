@@ -182,6 +182,8 @@ const Live2DModelManager = (function() {
     // 持久化偏好为兼容旧版本保留；当前角色绑定才是渲染器和人设的运行时权威。
     let roleBinding = null;
     let activeJob = null;
+    // 搜索请求可能乱序返回。只有最新一次查询可以更新模型列表或错误状态。
+    let catalogRequestGeneration = 0;
 
     function headers(json) {
         const result = { 'X-Requested-With': 'XMLHttpRequest' };
@@ -252,18 +254,25 @@ const Live2DModelManager = (function() {
         return preference.active_model_id || null;
     }
     async function searchCatalog(query, refresh) {
+        const requestGeneration = ++catalogRequestGeneration;
         const suffix = '?q=' + encodeURIComponent(query || '') + (refresh ? '&refresh=1' : '');
-        const data = await request('/api/live2d/catalog' + suffix);
-        const box = document.getElementById('live2dCatalogResults');
-        if (!box) return data;
-        box.innerHTML = (data.models || []).slice(0, 80).map(function(item) {
-            return '<div class="live2d-catalog-row"><span><strong>' + escape(item.character_name) + '</strong><small>' + escape(item.catalog_name) + '</small></span>' +
-                   '<button type="button" class="test-btn" data-live2d-download="' + escapeAttr(item.catalog_name) + '">下载</button></div>';
-        }).join('') || '<p class="hint">没有匹配的可下载模型。</p>';
-        box.querySelectorAll('[data-live2d-download]').forEach(function(button) {
-            button.addEventListener('click', function() { startDownload(button.getAttribute('data-live2d-download')); });
-        });
-        return data;
+        try {
+            const data = await request('/api/live2d/catalog' + suffix);
+            if (requestGeneration !== catalogRequestGeneration) return data;
+            const box = document.getElementById('live2dCatalogResults');
+            if (!box) return data;
+            box.innerHTML = (data.models || []).slice(0, 80).map(function(item) {
+                return '<div class="live2d-catalog-row"><span><strong>' + escape(item.character_name) + '</strong><small>' + escape(item.catalog_name) + '</small></span>' +
+                       '<button type="button" class="test-btn" data-live2d-download="' + escapeAttr(item.catalog_name) + '">下载</button></div>';
+            }).join('') || '<p class="hint">没有匹配的可下载模型。</p>';
+            box.querySelectorAll('[data-live2d-download]').forEach(function(button) {
+                button.addEventListener('click', function() { startDownload(button.getAttribute('data-live2d-download')); });
+            });
+            return data;
+        } catch (error) {
+            if (requestGeneration === catalogRequestGeneration) setStatus(error.message, true);
+            throw error;
+        }
     }
     function escape(text) { const el = document.createElement('span'); el.textContent = String(text || ''); return el.innerHTML; }
     function escapeAttr(text) { return escape(text).replace(/"/g, '&quot;'); }
@@ -359,6 +368,11 @@ const Live2DModelManager = (function() {
         list.querySelectorAll('[data-live2d-remove]').forEach(function(button) { button.addEventListener('click', function() { removeModel(button.getAttribute('data-live2d-remove')); }); });
         renderRoleBindingHint();
     }
+    function runCatalogSearch(query, refresh) {
+        // UI 入口已在 searchCatalog 中显示当前请求的错误；这里吸收 Promise，避免
+        // 网络错误在输入防抖或刷新按钮路径上变成未处理的拒绝。
+        searchCatalog(query, refresh).catch(function() {});
+    }
     function attachSettings() {
         const search = document.getElementById('live2dCatalogSearch');
         const refresh = document.getElementById('live2dCatalogRefreshBtn');
@@ -367,8 +381,8 @@ const Live2DModelManager = (function() {
         if (!search || search.dataset.live2dReady) return;
         search.dataset.live2dReady = 'true';
         let timer = 0;
-        search.addEventListener('input', function() { clearTimeout(timer); timer = setTimeout(function() { searchCatalog(search.value); }, 280); });
-        refresh.addEventListener('click', function() { searchCatalog(search.value, true); });
+        search.addEventListener('input', function() { clearTimeout(timer); timer = setTimeout(function() { runCatalogSearch(search.value); }, 280); });
+        refresh.addEventListener('click', function() { runCatalogSearch(search.value, true); });
         importBtn.addEventListener('click', importDirectory);
         cancel.addEventListener('click', cancelDownload);
         loadModels().catch(function(error) { setStatus(error.message, true); });
@@ -1072,7 +1086,9 @@ const Live2DCompanion = (function() {
         document.body.classList.remove('companion-mode');
         open = false;
         if (typeof LayoutManager !== 'undefined' && LayoutManager) LayoutManager.switchLayout(savedLayout);
-        if (typeof ChartManager !== 'undefined' && ChartManager) ChartManager.renderAll();
+        // enter() 会清空图表实例。此时 renderAll() 没有实例可遍历，导致退出陪伴
+        // 模式后仪表盘保持空白；根据磁贴当前选择重新创建可见图表。
+        if (typeof ChartManager !== 'undefined' && ChartManager) ChartManager.renderVisibleFromSelectors(false);
     }
     function isAnonBirthday() {
         const model = Live2DModelManager.current(); const now = new Date();

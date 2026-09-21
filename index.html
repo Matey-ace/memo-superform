@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
-    <script src="js/ui-style.js?v=20260831-auto-update"></script>
+    <script src="js/ui-style.js?v=20260921-frontend-audit"></script>
     <script src="vendor/echarts.min.js?v=40"></script>
 </head>
 <body>
@@ -213,12 +213,12 @@
     </section>
 
     <!-- 设置面板 -->
-    <div id="settingsPanel" class="settings-panel">
-        <div class="settings-overlay"></div>
-        <div class="settings-content">
+    <div id="settingsPanel" class="settings-panel" aria-hidden="true">
+        <div class="settings-overlay" aria-hidden="true"></div>
+        <div class="settings-content" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
             <div class="settings-header">
-                <h2>⚙️ 设置</h2>
-                <button id="closeSettings" class="close-btn">&times;</button>
+                <h2 id="settingsTitle">⚙️ 设置</h2>
+                <button id="closeSettings" class="close-btn" type="button" aria-label="关闭设置">&times;</button>
             </div>
             <div class="settings-body">
                 <div class="setting-group">
@@ -520,8 +520,8 @@
     </div>
 
     <!-- 全屏模态框 -->
-    <div id="fullscreenModal" class="fullscreen-modal">
-        <button id="closeFullscreen" class="fullscreen-close">&times;</button>
+    <div id="fullscreenModal" class="fullscreen-modal" role="dialog" aria-modal="true" aria-label="全屏图表" aria-hidden="true">
+        <button id="closeFullscreen" class="fullscreen-close" type="button" aria-label="关闭全屏图表">&times;</button>
         <div id="fullscreenChart" class="fullscreen-chart"></div>
     </div>
 

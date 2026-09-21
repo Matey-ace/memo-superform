@@ -29,6 +29,9 @@ assert(update.includes("'/api/app/update/apply'"), 'client is missing install ro
 assert(update.includes("'X-Requested-With': 'XMLHttpRequest'"), 'update mutations must use the local CSRF header');
 assert(update.includes('info.update_available && info.important'), 'only important updates may auto-open the modal');
 assert(update.includes('REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000'), 'later reminder must suppress only 24 hours');
+assert(update.includes('POLL_RETRY_MAX_MS = 5000'), 'download polling must bound retry delay after a transient status failure');
+assert(update.includes('if (!info)'), 'download polling must retry when a status check temporarily fails');
+assert(update.includes('failedChecks += 1'), 'download polling must back off repeated failed checks');
 assert(update.includes('textContent = String(info.release_notes'), 'release notes must be rendered as text');
 assert(!update.includes('innerHTML'), 'release notes must never be inserted as HTML');
 assert(update.includes("document.addEventListener('keydown'"), 'modal must trap Escape before lower overlays');

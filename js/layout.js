@@ -6,6 +6,9 @@
 const LayoutManager = (function() {
     let currentLayout = 'single';
     let fullscreenChartBackup = null;
+    let fullscreenOpenTimer = null;
+    let fullscreenGeneration = 0;
+    let fullscreenPreviousFocus = null;
 
     const layoutTileCount = MemoDashboard.layoutTileCount;
     const chartConfig = MemoDashboard.chartConfig;
@@ -65,27 +68,116 @@ const LayoutManager = (function() {
         document.getElementById('closeFullscreen').addEventListener('click', closeFullscreen);
         modal.addEventListener('click', function(e) { if (e.target === this) closeFullscreen(); });
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && modal.classList.contains('show')) closeFullscreen();
+            if (!modal.classList.contains('show')) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeFullscreen();
+            } else if (e.key === 'Tab') {
+                trapFullscreenFocus(e, modal);
+            }
         });
+    }
+
+    function cancelPendingFullscreenOpen() {
+        fullscreenGeneration += 1;
+        if (fullscreenOpenTimer) {
+            clearTimeout(fullscreenOpenTimer);
+            fullscreenOpenTimer = null;
+        }
+    }
+
+    function setFullscreenBackgroundInert(isOpen) {
+        const background = [
+            document.querySelector('.topbar'),
+            document.getElementById('dashboard'),
+            document.getElementById('companionStudy')
+        ];
+        background.forEach(function(element) {
+            if (element) element.inert = !!isOpen;
+        });
+    }
+
+    function focusableElements(container) {
+        return Array.prototype.slice.call(container.querySelectorAll(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter(function(element) {
+            return !element.hidden && !element.closest('[hidden]') && element.getAttribute('aria-hidden') !== 'true';
+        });
+    }
+
+    function trapFullscreenFocus(event, modal) {
+        const elements = focusableElements(modal);
+        if (!elements.length) {
+            event.preventDefault();
+            return;
+        }
+        const first = elements[0];
+        const last = elements[elements.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    function restoreFullscreenStudyRoot(backup) {
+        if (!backup || !backup.studyRoot) return;
+        const root = backup.studyRoot;
+        root.classList.remove('fullscreen');
+        if (backup.placeholder && backup.placeholder.parentNode) {
+            backup.placeholder.parentNode.replaceChild(root, backup.placeholder);
+        } else if (backup.parent) {
+            backup.parent.appendChild(root);
+        }
+    }
+
+    function clearFullscreenContent() {
+        if (fullscreenChartBackup) {
+            if (fullscreenChartBackup.instance) fullscreenChartBackup.instance.dispose();
+            restoreFullscreenStudyRoot(fullscreenChartBackup);
+            fullscreenChartBackup = null;
+        }
+        const fsEl = document.getElementById('fullscreenChart');
+        if (fsEl) fsEl.innerHTML = '';
     }
 
     function openFullscreen(tileIndex) {
         const chartType = ChartManager.getChartType(tileIndex);
         if (!chartType) return;
-        document.getElementById('fullscreenModal').classList.add('show');
-        setTimeout(() => {
+        const modal = document.getElementById('fullscreenModal');
+        cancelPendingFullscreenOpen();
+        clearFullscreenContent();
+        if (!modal.contains(document.activeElement)) fullscreenPreviousFocus = document.activeElement;
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+        setFullscreenBackgroundInert(true);
+        const generation = fullscreenGeneration;
+        const closeButton = document.getElementById('closeFullscreen');
+        if (closeButton) setTimeout(function() {
+            if (generation === fullscreenGeneration && modal.classList.contains('show')) closeButton.focus();
+        }, 0);
+        fullscreenOpenTimer = setTimeout(function() {
+            fullscreenOpenTimer = null;
+            if (generation !== fullscreenGeneration || !modal.classList.contains('show')) return;
             const inst = ChartManager.getInstance(tileIndex);
             if (!inst) return;
             if (chartType === 'study-web') {
-                // study-web 磁贴不是 ECharts 图表，直接全屏显示 iframe。
+                // study-web 的 iframe 和外层快捷键/观察器是一组状态。移动原节点，
+                // 而不是 cloneNode() 重新打开一个独立背词会话。
                 const fsEl = document.getElementById('fullscreenChart');
                 fsEl.innerHTML = '';
                 const tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
-                const iframe = tile ? tile.querySelector('.study-web-iframe') : null;
-                if (iframe) {
-                    const clone = iframe.cloneNode(true);
-                    clone.className = 'study-web-iframe fullscreen';
-                    fsEl.appendChild(clone);
+                const studyRoot = tile ? tile.querySelector('.study-web-container') : null;
+                if (studyRoot && studyRoot.parentNode) {
+                    const parent = studyRoot.parentNode;
+                    const placeholder = document.createComment('study-web-fullscreen-placeholder');
+                    parent.insertBefore(placeholder, studyRoot);
+                    studyRoot.classList.add('fullscreen');
+                    fsEl.appendChild(studyRoot);
+                    fullscreenChartBackup = { tileIndex: tileIndex, instance: null, studyRoot: studyRoot, placeholder: placeholder, parent: parent };
+                    return;
                 }
                 fullscreenChartBackup = { tileIndex, instance: null };
                 return;
@@ -112,12 +204,17 @@ const LayoutManager = (function() {
     }
 
     function closeFullscreen() {
-        document.getElementById('fullscreenModal').classList.remove('show');
-        if (fullscreenChartBackup) {
-            if (fullscreenChartBackup.instance) fullscreenChartBackup.instance.dispose();
-            fullscreenChartBackup = null;
-        }
-        document.getElementById('fullscreenChart').innerHTML = '';
+        const modal = document.getElementById('fullscreenModal');
+        const wasOpen = modal.classList.contains('show');
+        cancelPendingFullscreenOpen();
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+        clearFullscreenContent();
+        setFullscreenBackgroundInert(false);
+        const previousFocus = fullscreenPreviousFocus;
+        fullscreenPreviousFocus = null;
+        if (previousFocus && document.contains(previousFocus) && typeof previousFocus.focus === 'function') previousFocus.focus();
+        if (!wasOpen) return;
         setTimeout(() => ChartManager.rerenderAll(), 100);
     }
 

@@ -8,6 +8,9 @@ const MaimemoAPI = (function() {
     const PROXY_BASE = '/proxy/memo';
     // 令牌只保存在 Windows DPAPI 本机凭据库；网页脚本从不保留或读取令牌明文。
     let connection = { connected: false, mode: '', profile_id: '' };
+    // 状态查询可能比保存/断开凭据更晚返回。凭据变更会推进代次，避免旧状态
+    // 把新账号重新显示为“未连接”。
+    let connectionGeneration = 0;
     
     const CACHE_PREFIX = 'memo_cache_';
     const CACHE_TTL = 30 * 60 * 1000;
@@ -33,7 +36,9 @@ const MaimemoAPI = (function() {
     }
 
     async function refreshConnection() {
-        connection = await authRequest('/api/maimemo-auth/status');
+        const generation = connectionGeneration;
+        const next = await authRequest('/api/maimemo-auth/status');
+        if (generation === connectionGeneration) connection = next;
         return connection;
     }
 
@@ -42,10 +47,13 @@ const MaimemoAPI = (function() {
         // 后续请求由本机服务自动附加 Authorization。
         const legacyToken = localStorage.getItem('maimemo_token') || '';
         if (legacyToken.trim()) {
-            await authRequest('/api/maimemo-auth/manual-token', {
+            const generation = ++connectionGeneration;
+            const next = await authRequest('/api/maimemo-auth/manual-token', {
                 method: 'POST', body: { token: legacyToken.trim() }
             });
+            if (generation === connectionGeneration) connection = next;
             localStorage.removeItem('maimemo_token');
+            return connection;
         }
         return refreshConnection();
     }
@@ -55,15 +63,18 @@ const MaimemoAPI = (function() {
     }
 
     async function saveManualToken(value) {
-        connection = await authRequest('/api/maimemo-auth/manual-token', {
+        const generation = ++connectionGeneration;
+        const next = await authRequest('/api/maimemo-auth/manual-token', {
             method: 'POST', body: { token: String(value || '').trim() }
         });
+        if (generation === connectionGeneration) connection = next;
         return connection;
     }
 
     async function disconnect() {
+        const generation = ++connectionGeneration;
         const result = await authRequest('/api/maimemo-auth/disconnect', { method: 'POST', body: {} });
-        connection = { connected: false, mode: '', profile_id: '' };
+        if (generation === connectionGeneration) connection = { connected: false, mode: '', profile_id: '' };
         return result;
     }
 
