@@ -15,7 +15,8 @@ var TTS = (function() {
         role_ready: false,
         runtime_ready: false,
         runtime_error: '',
-        runtime_missing_files: []
+        runtime_missing_files: [],
+        mounting: false
     };
     let audio = new Audio();
     let playbackGeneration = 0;
@@ -25,8 +26,10 @@ var TTS = (function() {
     let queuedSynthesis = null;
     let preloadInFlight = null;
     let lastError = '';
+    let refreshGeneration = 0;
 
     async function refresh() {
+        const generation = ++refreshGeneration;
         let controller = null;
         let timer = null;
         try {
@@ -35,14 +38,18 @@ var TTS = (function() {
         } catch (e) { /* AbortController 不可用时退化为无超时请求 */ }
         try {
             const resp = await fetch('/api/tts/status', { signal: controller ? controller.signal : undefined });
-            if (resp.ok) status = await resp.json();
+            const next = resp.ok ? await resp.json() : null;
+            // Multiple settings actions may refresh status at once. A slower
+            // pre-mount response must never overwrite a newer mounting/result
+            // response and make the UI re-enable write controls mid-install.
+            if (next && generation === refreshGeneration) status = next;
         } catch (e) { /* 超时或代理未启动时保持上次状态 */ }
         finally { if (timer) clearTimeout(timer); }
         return status;
     }
 
     function isReady() {
-        return !!(status.enabled && status.engine_ready && status.role_ready && status.runtime_ready !== false);
+        return !!(!status.mounting && status.enabled && status.engine_ready && status.role_ready && status.runtime_ready !== false);
     }
 
     function play(url) {

@@ -7,6 +7,7 @@ const fs = require('fs');
 
 const index = fs.readFileSync('index.html', 'utf8');
 const app = fs.readFileSync('js/app.js', 'utf8');
+const ttsClient = fs.readFileSync('js/tts.js', 'utf8');
 const api = fs.readFileSync('app_api.py', 'utf8');
 const tts = fs.readFileSync('tts.py', 'utf8');
 const launcher = fs.readFileSync('launcher.py', 'utf8');
@@ -45,6 +46,16 @@ for (const contract of [
     assert(app.includes(contract), 'desktop mount client is missing: ' + contract);
 }
 assert(app.includes("/api/tts/mount-pack/jobs/"), 'client must poll job state');
+for (const contract of [
+    'schedulePackMountPolling', 'reconcileMissingPackMountJob',
+    'TTS_PACK_MOUNT_POLL_MAX_DELAY', '连接暂时中断，正在重试',
+    '语音包已挂载，但页面刷新失败', 'st.mounting'
+]) {
+    assert(app.includes(contract), 'mount client is missing recovery behaviour: ' + contract);
+}
+assert(ttsClient.includes('refreshGeneration'), 'TTS status refresh must reject stale responses');
+assert(ttsClient.includes('!status.mounting && status.enabled'),
+    'TTS readiness must reject synthesis during an active package mount');
 for (const eventName of ['dragover', 'dragleave', 'drop']) {
     assert(app.includes("addEventListener('" + eventName + "'"), 'missing quick-mount drag event: ' + eventName);
 }
@@ -64,7 +75,8 @@ for (const contract of [
     'TTS_PACK_WEB_UPLOAD_MAX_BYTES', 'def mount_tts_pack_stream',
     'def mount_tts_pack_archive', '_safe_zip_member_parts',
     '_extract_tts_pack_archive', '_replace_tts_pack_atomically',
-    '_check_tts_pack_can_be_replaced'
+    '_check_tts_pack_can_be_replaced', '_tts_pack_switch_journal_path',
+    '_recover_tts_pack_switch', '_validate_mount_role_library'
 ]) {
     assert(tts.includes(contract), 'missing safe/background mount contract: ' + contract);
 }
@@ -74,6 +86,14 @@ for (const contract of ['_inspect_tts_pack_root', '_runtime_layout_missing', '"i
 assert(tts.includes('_PERSONA_FILENAME') && tts.includes('角色人设'),
     'a mounted role package must report a missing persona.json profile alongside missing voice assets');
 assert(!tts.includes('def _validate_tts_pack_root'), 'mounting must not reject a structurally valid partial package');
+for (const contract of [
+    'TTS_ROLE_UPLOAD_MAX_BYTES', 'def upload_role_file_stream',
+    'def stage_role_file_stream', '_stream_role_upload_to_path'
+]) {
+    assert(tts.includes(contract), 'large role assets must have a streaming backend: ' + contract);
+}
+assert(api.includes('upload_role_file_stream(') && api.includes('stage_role_file_stream('),
+    'role upload API must use the streaming TTS backend');
 
 for (const contract of [
     'class _DesktopTtsPackBridge', 'js_api=desktop_tts_bridge',

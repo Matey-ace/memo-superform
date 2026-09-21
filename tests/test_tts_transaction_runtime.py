@@ -303,6 +303,14 @@ class TTSRoleTransactionRuntimeTests(unittest.TestCase):
         worker.parent.mkdir(parents=True)
         python_exe.write_bytes(b"placeholder interpreter")
         worker.write_text("# worker fixture\n", encoding="utf-8")
+        (self.pack / "tts_engine" / "TTS_infer_pack").mkdir()
+        (self.pack / "tts_engine" / "TTS_infer_pack" / "TTS.py").write_text("# TTS fixture\n", encoding="utf-8")
+        for name in (
+            "chinese-roberta-wwm-ext-large",
+            "chinese-hubert-base",
+            "fast_langdetect",
+        ):
+            (self.pack / "tts_engine" / "pretrained_models" / name).mkdir(parents=True)
         return python_exe
 
     def test_engine_dependency_preflight_surfaces_missing_module_before_touch(self):
@@ -326,12 +334,42 @@ class TTSRoleTransactionRuntimeTests(unittest.TestCase):
         self.assertEqual(command[1], "-c")
         self.assertIn("pyopenjtalk", command[2])
 
+    def test_fast_status_probe_and_full_runtime_probe_are_separate(self):
+        """状态轮询不应在冷启动时同步导入二十多秒的 GPT-SoVITS 栈。"""
+        self._make_engine_layout()
+        success = types.SimpleNamespace(
+            returncode=0, stdout="__MEMO_TTS_PROBE__[]\n", stderr=""
+        )
+        with mock.patch.object(tts.subprocess, "run", return_value=success) as run:
+            tts._engine_dependency_status(str(self.pack), force=True)
+            tts._engine_dependency_status(
+                str(self.pack), force=True, verify_runtime=True
+            )
+
+        status_probe = run.call_args_list[0].args[0][2]
+        runtime_probe = run.call_args_list[1].args[0][2]
+        self.assertIn("check_spec(name)", status_probe)
+        self.assertNotIn("check_import('worker_main')", status_probe)
+        self.assertIn("check_import('worker_main')", runtime_probe)
+        self.assertIn("check_import('TTS_infer_pack.TTS')", runtime_probe)
+
+    def test_engine_import_map_covers_the_shipped_runtime_requirements(self):
+        # These modules were present in requirements-tts.txt but omitted from
+        # the old preflight, so a copied/incomplete pack could still appear
+        # healthy until a late model load touched one of them.
+        required_modules = {
+            "av", "chardet", "ctranslate2", "filelock", "sentencepiece",
+            "rotary_embedding_torch", "x_transformers", "psutil", "pydantic",
+            "rapidfuzz", "onnxruntime", "regex", "requests",
+        }
+        self.assertTrue(required_modules.issubset(tts._ENGINE_IMPORT_PACKAGES))
+
     def test_successful_environment_repair_restores_previous_voice_switch(self):
         """Repair temporarily stops the worker but must preserve user intent."""
         python_exe = self._make_engine_layout()
         tts._save_state(str(self.data), {"enabled": True, "language": "日文", "speed": 1.1})
         probes = [
-            (False, "缺少 pyopenjtalk", ["pyopenjtalk"]),
+            (False, "缺少 peft、ffmpeg、yaml", ["peft", "ffmpeg", "yaml"]),
             (True, "", []),
         ]
         installed = types.SimpleNamespace(returncode=0, stdout="")
@@ -353,7 +391,34 @@ class TTSRoleTransactionRuntimeTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[:4], ["uv", "pip", "install", "--python"])
         self.assertEqual(os.path.normcase(command[4]), os.path.normcase(str(python_exe)))
-        self.assertIn(tts._ENGINE_IMPORT_PACKAGES["pyopenjtalk"], command)
+        for module in ("peft", "ffmpeg", "yaml"):
+            self.assertIn(tts._ENGINE_IMPORT_PACKAGES[module], command)
+
+    def test_korean_frontend_missing_eunjeon_is_reported_without_a_broken_pip_build(self):
+        self._make_engine_layout()
+        tts._save_state(str(self.data), {"enabled": False, "language": "韩文", "speed": 1.0})
+        with mock.patch.object(
+            tts, "_engine_dependency_status", return_value=(False, "缺少 eunjeon", ["eunjeon"])
+        ), mock.patch.object(tts.subprocess, "run") as run:
+            with self.assertRaisesRegex(tts.TTSException, "eunjeon"):
+                tts.repair_environment(str(self.pack), str(self.data))
+
+        run.assert_not_called()
+
+    def test_replacing_pack_clears_every_language_specific_dependency_cache_entry(self):
+        pack_key = os.path.abspath(str(self.pack))
+        with tts._ENGINE_PROBE_LOCK:
+            tts._ENGINE_PROBE_CACHE[(pack_key, ("torch",))] = {"ready": True}
+            tts._ENGINE_PROBE_CACHE[(pack_key, ("torch", "ToJyutping"))] = {"ready": False}
+            tts._ENGINE_PROBE_CACHE[(os.path.abspath(str(self.data)), ("torch",))] = {"ready": True}
+
+        tts._clear_engine_probe_cache(str(self.pack))
+
+        with tts._ENGINE_PROBE_LOCK:
+            self.assertFalse(any(isinstance(key, tuple) and key[0] == pack_key
+                                 for key in tts._ENGINE_PROBE_CACHE))
+            self.assertTrue(any(isinstance(key, tuple) and key[0] == os.path.abspath(str(self.data))
+                                for key in tts._ENGINE_PROBE_CACHE))
 
     def test_runtime_lock_is_exposed_as_not_ready_in_status(self):
         self._make_complete_role()
