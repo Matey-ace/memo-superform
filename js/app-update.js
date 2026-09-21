@@ -6,6 +6,8 @@
 
     const REMINDER_PREFIX = 'memo_app_update_reminder_';
     const REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000;
+    const POLL_RETRY_BASE_MS = 900;
+    const POLL_RETRY_MAX_MS = 5000;
     let initialized = false;
     let checkInFlight = false;
     let actionInFlight = false;
@@ -201,8 +203,18 @@
 
     function pollDownload() {
         stopPolling();
+        let failedChecks = 0;
         const poll = async function () {
             const info = await check({ silent: true });
+            if (!info) {
+                // 下载仍由本机更新器继续执行。临时的状态请求失败不应让界面
+                // 永久停在旧进度；有限退避后重新读取即可。
+                failedChecks += 1;
+                const retryDelay = Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_BASE_MS * Math.pow(2, failedChecks - 1));
+                pollTimer = window.setTimeout(poll, retryDelay);
+                return;
+            }
+            failedChecks = 0;
             const state = ((info && info.download) || {}).state;
             if (state === 'downloading' || state === 'applying') {
                 pollTimer = window.setTimeout(poll, 700);

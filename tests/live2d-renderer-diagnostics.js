@@ -41,6 +41,7 @@ function node(id, options) {
         appendChild: function(child) { if (child) child.parentNode = result; },
         removeChild: function(child) { if (child) child.parentNode = null; },
         remove: function() { if (result.parentNode && result.parentNode.removeChild) result.parentNode.removeChild(result); },
+        querySelectorAll: function() { return []; },
         getBoundingClientRect: function() {
             return { left: 0, top: 0, width: result.clientWidth, height: result.clientHeight };
         }
@@ -54,7 +55,8 @@ function buildHarness(options) {
         'companionModeBtn', 'exitCompanionModeBtn', 'companionAskBtn', 'closeCompanionBirthdayCard',
         'dashboard', 'companionStudy', 'companionBirthdayCard', 'companionStudyFrame',
         'companionLive2DHost', 'companionGifFallback', 'companionModelName', 'companionLive2DCanvas',
-        'companionBubble', 'companionMood', 'companionBirthdayBadge', 'companionTitle'
+        'companionBubble', 'companionMood', 'companionBirthdayBadge', 'companionTitle',
+        'live2dCatalogResults'
     ];
     const nodes = {};
     ids.forEach(function(id) {
@@ -112,11 +114,13 @@ function buildHarness(options) {
             getItem: function(key) { return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null; },
             setItem: function(key, value) { storage[key] = String(value); }
         },
-        fetch: async function(path) {
+        fetch: options.fetch || async function(path) {
             assert.strictEqual(path, '/api/live2d/models');
             return { ok: true, json: async function() { return { models: models, preference: preference, role_binding: roleBinding }; } };
         },
-        StudyWeb: { render: function() { return { dispose: function() {} }; } }
+        StudyWeb: { render: function() { return { dispose: function() {} }; } },
+        ChartManager: options.chartManager,
+        LayoutManager: options.layoutManager
     };
     vm.createContext(context);
     vm.runInContext(source, context, { filename: 'js/live2d-companion.js' });
@@ -269,11 +273,68 @@ async function testFallbackTouchStillReactsAndSpeaks() {
     assert(harness.nodes.companionBubble.textContent.length >= 4, 'fallback touch must visibly acknowledge the interaction');
 }
 
+async function testCatalogSearchKeepsNewestResult() {
+    let resolveSlowRequest;
+    const harness = buildHarness({
+        getContext: function() { return null; },
+        pixi: { VERSION: '6.5.10', Application: function() {}, live2d: { Live2DModel: { from: async function() {} } } },
+        fetch: function(path) {
+            if (path === '/api/live2d/catalog?q=first') {
+                return new Promise(function(resolve) { resolveSlowRequest = resolve; });
+            }
+            if (path === '/api/live2d/catalog?q=latest') {
+                return Promise.resolve({
+                    ok: true,
+                    json: async function() {
+                        return { models: [{ character_name: '新结果一', catalog_name: 'latest-one' }, { character_name: '新结果二', catalog_name: 'latest-two' }] };
+                    }
+                });
+            }
+            throw new Error('unexpected request: ' + path);
+        }
+    });
+    const slowSearch = harness.context.window.Live2DModelManager.searchCatalog('first');
+    const latestSearch = harness.context.window.Live2DModelManager.searchCatalog('latest');
+    await latestSearch;
+    const box = harness.nodes.live2dCatalogResults;
+    assert.strictEqual((box.innerHTML.match(/live2d-catalog-row/g) || []).length, 2, 'latest catalog response should render its two matches');
+    resolveSlowRequest({
+        ok: true,
+        json: async function() { return { models: [{ character_name: '旧结果', catalog_name: 'first-only' }] }; }
+    });
+    await slowSearch;
+    assert.strictEqual((box.innerHTML.match(/live2d-catalog-row/g) || []).length, 2, 'late catalog response must not overwrite the latest query');
+}
+
+async function testDashboardRecoversAfterCompanionExit() {
+    const calls = [];
+    const harness = buildHarness({
+        getContext: function() { return null; },
+        pixi: { VERSION: '6.5.10', Application: function() {}, live2d: { Live2DModel: { from: async function() {} } } },
+        chartManager: {
+            disposeAll: function() { calls.push('dispose'); },
+            renderAll: function() { calls.push('render-all'); },
+            renderVisibleFromSelectors: function(skipAI) { calls.push('render-visible:' + skipAI); }
+        },
+        layoutManager: {
+            getCurrentLayout: function() { return 'quad'; },
+            switchLayout: function(layout) { calls.push('layout:' + layout); }
+        }
+    });
+    await harness.context.window.Live2DCompanion.enter();
+    harness.context.window.Live2DCompanion.exit();
+    assert.deepStrictEqual(calls, ['dispose', 'layout:quad', 'render-visible:false'], 'exit should restore the saved layout and recreate visible dashboard charts');
+    assert.strictEqual(harness.nodes.dashboard.hidden, false, 'dashboard should be visible after companion exit');
+    assert.strictEqual(harness.nodes.companionStudy.hidden, true, 'companion study view should be hidden after exit');
+}
+
 Promise.resolve()
     .then(testLoaderFailureDiagnostic)
     .then(testMissingWebGLDiagnostic)
     .then(testSuccessfulRendererKeepsNormalFlow)
     .then(testRoleBindingWinsOverLegacyPreference)
     .then(testFallbackTouchStillReactsAndSpeaks)
+    .then(testCatalogSearchKeepsNewestResult)
+    .then(testDashboardRecoversAfterCompanionExit)
     .then(function() { console.log('LIVE2D_RENDERER_DIAGNOSTICS_PASS'); })
     .catch(function(error) { console.error(error); process.exitCode = 1; });

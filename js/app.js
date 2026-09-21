@@ -14,6 +14,8 @@ const App = (function() {
     let pendingRecords = null;
     let notepadDataLoaded = false;
     let notepadDataPromise = null;
+    let studyDataGeneration = 0;
+    let settingsPreviousFocus = null;
     const VALID_REFRESH_INTERVALS = [5, 10, 15, 30, 60];
     let autoRefreshEnabled = localStorage.getItem('auto_refresh_enabled') !== 'false';
     let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
@@ -157,7 +159,13 @@ const App = (function() {
         document.getElementById('closeSettings').addEventListener('click', closeSettings);
         panel.querySelector('.settings-overlay').addEventListener('click', closeSettings);
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && panel.classList.contains('show')) closeSettings();
+            if (!panel.classList.contains('show')) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeSettings();
+            } else if (e.key === 'Tab') {
+                trapSettingsFocus(e, panel);
+            }
         });
         
         const aiConfig = AIAPI.getConfig();
@@ -454,11 +462,73 @@ const App = (function() {
         });
     }
     
+    function setSettingsBackgroundInert(isOpen) {
+        [
+            document.querySelector('.topbar'),
+            document.getElementById('dashboard'),
+            document.getElementById('companionStudy'),
+            document.getElementById('welcomeOverlay')
+        ].forEach(function(element) {
+            if (element) element.inert = !!isOpen;
+        });
+    }
+
+    function settingsFocusableElements(panel) {
+        return Array.prototype.slice.call(panel.querySelectorAll(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter(function(element) {
+            return !element.hidden && !element.closest('[hidden], .hidden') && element.getAttribute('aria-hidden') !== 'true';
+        });
+    }
+
+    function trapSettingsFocus(event, panel) {
+        const elements = settingsFocusableElements(panel);
+        if (!elements.length) {
+            event.preventDefault();
+            return;
+        }
+        const first = elements[0];
+        const last = elements[elements.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    function canRestoreSettingsFocus(element) {
+        return !!(element && document.contains(element) && !element.hidden &&
+            !element.closest('[hidden], .hidden') && typeof element.focus === 'function');
+    }
+
     function openSettings() {
-        document.getElementById('settingsPanel').classList.add('show');
+        const panel = document.getElementById('settingsPanel');
+        if (panel.classList.contains('show')) return;
+        const active = document.activeElement;
+        settingsPreviousFocus = active && active !== document.body ? active : document.getElementById('settingsBtn');
+        panel.classList.add('show');
+        panel.setAttribute('aria-hidden', 'false');
+        setSettingsBackgroundInert(true);
+        const closeButton = document.getElementById('closeSettings');
+        setTimeout(function() {
+            if (panel.classList.contains('show') && closeButton) closeButton.focus();
+        }, 0);
         if (typeof StudySyncUI !== 'undefined' && StudySyncUI) StudySyncUI.refreshStatus();
     }
-    function closeSettings() { document.getElementById('settingsPanel').classList.remove('show'); }
+    function closeSettings() {
+        const panel = document.getElementById('settingsPanel');
+        if (!panel.classList.contains('show')) return;
+        panel.classList.remove('show');
+        panel.setAttribute('aria-hidden', 'true');
+        setSettingsBackgroundInert(false);
+        const previousFocus = settingsPreviousFocus;
+        settingsPreviousFocus = null;
+        const fallback = document.getElementById('settingsBtn');
+        if (canRestoreSettingsFocus(previousFocus)) previousFocus.focus();
+        else if (fallback && typeof fallback.focus === 'function') fallback.focus();
+    }
     
     // ---- AI 分类按钮（事件委托）----
     
@@ -1713,10 +1783,20 @@ const App = (function() {
     // ---- 本地数据更新、刷新与图表重绘 ----
 
     function resetStudyDataForProfileChange() {
+        studyDataGeneration += 1;
+        // 允许新账号立即开始读取，旧账号的 finally 分支由代次检查忽略。
+        isLoading = false;
+        pendingSyncAfterDrag = false;
         pendingRecords = null;
         notepadDataLoaded = false;
         notepadDataPromise = null;
+        ChartManager.setRecords([]);
+        ChartManager.setNotepadWords([]);
+        ChartManager.setAIClassification(null);
+        localStorage.removeItem('ai_classification_cache');
+        localStorage.removeItem('memo_snapshot_date');
         StudySyncUI.reset();
+        ChartManager.renderVisibleFromSelectors(false);
     }
 
     function restoreAICache() {
@@ -1730,40 +1810,45 @@ const App = (function() {
         } catch (e) {}
     }
 
-    function queueDailySnapshot(records) {
+    function queueDailySnapshot(records, generation) {
+        if (generation !== studyDataGeneration) return;
         if (!Array.isArray(records) || !records.length) return;
         const today = MemoDashboard.todayBeijing();
         if (localStorage.getItem('memo_snapshot_date') === today) return;
         RecommendAPI.saveSnapshot(records, false).then(function() {
-            localStorage.setItem('memo_snapshot_date', today);
+            if (generation === studyDataGeneration) localStorage.setItem('memo_snapshot_date', today);
         }).catch(function(e) {
-            console.warn('快照保存失败:', e);
+            if (generation === studyDataGeneration) console.warn('快照保存失败:', e);
         });
     }
 
     function loadSupplementalData() {
         if (notepadDataLoaded) return Promise.resolve();
         if (notepadDataPromise) return notepadDataPromise;
+        const generation = studyDataGeneration;
         notepadDataPromise = MaimemoAPI.getAllNotepadWords().then(function(notepadWords) {
+            if (generation !== studyDataGeneration) return;
             ChartManager.setNotepadWords(notepadWords);
             notepadDataLoaded = true;
             // 词书进度图依赖词本数据；只在它到达后补渲染一次。
             ChartManager.renderVisibleFromSelectors(false);
         }).catch(function(e) {
-            console.warn('加载云词本失败:', e.message);
+            if (generation === studyDataGeneration) console.warn('加载云词本失败:', e.message);
         }).finally(function() {
-            notepadDataPromise = null;
+            if (generation === studyDataGeneration) notepadDataPromise = null;
         });
         return notepadDataPromise;
     }
 
-    function renderStudyRecords(records) {
+    function renderStudyRecords(records, generation) {
+        const currentGeneration = generation === undefined ? studyDataGeneration : generation;
+        if (currentGeneration !== studyDataGeneration) return;
         ChartManager.setRecords(records);
-        queueDailySnapshot(records);
+        queueDailySnapshot(records, currentGeneration);
         restoreAICache();
         if (records.length) loadSupplementalData();
         setTimeout(function() {
-            ChartManager.renderVisibleFromSelectors(false);
+            if (currentGeneration === studyDataGeneration) ChartManager.renderVisibleFromSelectors(false);
         }, 100);
     }
 
@@ -1773,7 +1858,7 @@ const App = (function() {
             pendingRecords = records;
             return;
         }
-        renderStudyRecords(records);
+        renderStudyRecords(records, studyDataGeneration);
     }
 
     // ---- 刷新按钮 ----
@@ -1800,7 +1885,7 @@ const App = (function() {
             if (pendingRecords) {
                 const records = pendingRecords;
                 pendingRecords = null;
-                renderStudyRecords(records);
+                renderStudyRecords(records, studyDataGeneration);
             }
             if (pendingSyncAfterDrag) {
                 pendingSyncAfterDrag = false;
@@ -1891,15 +1976,18 @@ const App = (function() {
 
     // 启动时优先显示 SQLite 中的已提交数据；有数据时后台增量更新，无数据才等待首次建库。
     async function loadAllData(forceRefresh = false) {
+        const generation = studyDataGeneration;
         if (isLoading) return;
         isLoading = true;
         try {
             await StudySyncUI.loadInitialData(forceRefresh ? 'manual-refresh' : null);
+            if (generation !== studyDataGeneration) return;
         } catch (e) {
+            if (generation !== studyDataGeneration) return;
             console.error('加载数据失败:', e);
             alert('加载数据失败: ' + e.message + '\n\n请检查：\n1. 代理服务器是否已启动\n2. Token 是否正确');
         } finally {
-            isLoading = false;
+            if (generation === studyDataGeneration) isLoading = false;
         }
     }
     

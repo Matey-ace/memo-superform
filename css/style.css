@@ -892,7 +892,8 @@ body {
     }
     
     .tile-header {
-        padding: 10px 14px;
+        padding: 10px;
+        gap: 6px;
     }
     
     .tile-title {
@@ -900,7 +901,105 @@ body {
     }
     
     .chart-selector {
+        display: block;
+        width: min(132px, 42vw);
+        min-width: 0;
+        padding: 4px 6px;
+        font-size: 11px;
+    }
+
+    .tile-actions {
+        gap: 4px;
+    }
+}
+
+@media (max-width: 700px) {
+    .topbar {
+        height: auto;
+        min-height: 56px;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 10px;
+    }
+
+    .topbar-left {
+        flex: 0 0 auto;
+    }
+
+    .topbar-center {
+        flex: 1 1 auto;
+        justify-content: flex-end;
+        min-width: 0;
+    }
+
+    .layout-switcher {
+        padding: 2px;
+    }
+
+    .layout-btn {
+        padding: 5px 7px;
+    }
+
+    .topbar-right {
+        width: 100%;
+        justify-content: space-between;
+        gap: 4px;
+    }
+
+    .server-status {
+        max-width: calc(100% - 166px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-right: 0;
+    }
+
+    .auto-refresh-group {
+        margin-right: auto;
+    }
+
+    .dashboard {
+        height: calc(100vh - 104px);
+        height: calc(100dvh - 104px);
+    }
+
+    .welcome-overlay {
+        top: 104px;
+        padding: 16px;
+        overflow-y: auto;
+    }
+
+    .welcome-card {
+        width: min(440px, 100%);
+        padding: 30px 24px;
+    }
+}
+
+@media (max-width: 390px) {
+    .topbar-brand {
         display: none;
+    }
+
+    .chart-selector {
+        width: min(112px, 38vw);
+    }
+
+    .welcome-card {
+        padding: 26px 18px;
+    }
+
+    .welcome-card h2 {
+        font-size: 20px;
+        overflow-wrap: anywhere;
+    }
+
+    .welcome-icon {
+        font-size: 48px;
+        margin-bottom: 10px;
+    }
+
+    .welcome-steps {
+        margin: 12px 0 18px;
+        padding: 12px;
     }
 }
 /* ========== 代理服务器状态 ========== */

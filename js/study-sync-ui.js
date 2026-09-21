@@ -14,6 +14,13 @@ const StudySyncUI = (function() {
     let currentStatus = null;
     let transientMessage = '';
     let transientTimer = null;
+    // 账号切换会让上一轮本地读取和同步轮询失去意义。用代次丢弃这些迟到
+    // 响应，避免旧账号数据覆盖新账号仪表盘。
+    let sessionGeneration = 0;
+
+    function isCurrentSession(generation) {
+        return generation === sessionGeneration;
+    }
 
     function recordSignature(records) {
         return (Array.isArray(records) ? records : []).map(function(record) {
@@ -163,7 +170,8 @@ const StudySyncUI = (function() {
         });
     }
 
-    function deliverRecords(records, source, force) {
+    function deliverRecords(records, source, force, generation) {
+        if (generation !== undefined && !isCurrentSession(generation)) return false;
         const normalized = Array.isArray(records) ? records : [];
         const signature = recordSignature(normalized);
         const changed = !!force || !recordsDelivered || signature !== recordsFingerprint;
@@ -179,13 +187,16 @@ const StudySyncUI = (function() {
         return new Promise(function(resolve) { setTimeout(resolve, milliseconds); });
     }
 
-    async function reloadRecordsIfNeeded(status, force) {
+    async function reloadRecordsIfNeeded(status, force, generation) {
+        if (!isCurrentSession(generation)) return false;
         if (!force && !hasChanges(status) && recordsDelivered) return false;
         const records = await MaimemoAPI.getAllStudyRecords(false);
-        return deliverRecords(records, 'sync', force);
+        if (!isCurrentSession(generation)) return false;
+        return deliverRecords(records, 'sync', force, generation);
     }
 
     async function sync(mode, reason) {
+        const generation = sessionGeneration;
         if (syncInProgress) return activeSyncPromise || Promise.resolve(currentStatus);
         syncInProgress = true;
         currentStatus = { status: 'active', active: true, phase: mode, mode: mode };
@@ -195,6 +206,7 @@ const StudySyncUI = (function() {
             let status = currentStatus;
             try {
                 const started = await MaimemoAPI.startStudySync(mode, { reason: reason });
+                if (!isCurrentSession(generation)) return null;
                 status = unwrapStatus(started);
                 if (!status.status && started && started.task_id) {
                     status = { status: 'active', active: true, phase: mode, mode: mode, task_id: started.task_id };
@@ -205,24 +217,29 @@ const StudySyncUI = (function() {
                 while (isActive(status)) {
                     if (Date.now() > deadline) throw new Error('数据更新等待超时，请稍后重试');
                     await sleep(POLL_INTERVAL);
+                    if (!isCurrentSession(generation)) return null;
                     status = unwrapStatus(await MaimemoAPI.getStudySyncStatus());
+                    if (!isCurrentSession(generation)) return null;
                     renderStatus(status);
                 }
                 if (String(status.status || '').toLowerCase() === 'failed') {
                     throw new Error(status.error || '数据更新失败');
                 }
                 if (String(status.status || '').toLowerCase() !== 'cancelled') {
-                    await reloadRecordsIfNeeded(status, mode === 'bootstrap');
+                    await reloadRecordsIfNeeded(status, mode === 'bootstrap', generation);
                 }
+                if (!isCurrentSession(generation)) return null;
                 renderStatus(status || { status: 'completed' });
                 setTransientMessage(messageFor(status || { status: 'completed' }));
                 return status;
             } catch (error) {
+                if (!isCurrentSession(generation)) return null;
                 status = Object.assign({}, status || {}, { status: 'failed', active: false, error: error.message });
                 renderStatus(status);
                 setTransientMessage(messageFor(status));
                 throw error;
             } finally {
+                if (!isCurrentSession(generation)) return;
                 syncInProgress = false;
                 activeSyncPromise = null;
                 renderStatus(status || { status: 'idle' });
@@ -232,7 +249,9 @@ const StudySyncUI = (function() {
         return work;
     }
 
-    async function refreshStatus() {
+    async function refreshStatus(expectedGeneration) {
+        const generation = expectedGeneration === undefined ? sessionGeneration : expectedGeneration;
+        if (!isCurrentSession(generation)) return null;
         if (!MaimemoAPI.hasToken()) {
             renderStatus({ status: 'idle', records_count: 0 });
             const stateEl = document.getElementById('studySyncStatus');
@@ -241,9 +260,11 @@ const StudySyncUI = (function() {
         }
         try {
             const status = unwrapStatus(await MaimemoAPI.getStudySyncStatus());
+            if (!isCurrentSession(generation)) return null;
             renderStatus(status);
             return status;
         } catch (error) {
+            if (!isCurrentSession(generation)) return null;
             const stateEl = document.getElementById('studySyncStatus');
             if (stateEl) { stateEl.textContent = '本地数据服务待连接'; stateEl.className = 'hint'; }
             return null;
@@ -260,12 +281,14 @@ const StudySyncUI = (function() {
     }
 
     async function loadInitialData(reason) {
+        const generation = sessionGeneration;
         const records = await MaimemoAPI.getAllStudyRecords(true);
+        if (!isCurrentSession(generation)) return { stale: true, records: [], hadLocalRecords: false };
         const hadLocalRecords = records.length > 0;
         if (!hadLocalRecords) setChartsLoading(true);
         try {
-            deliverRecords(records, 'startup', true);
-            refreshStatus();
+            deliverRecords(records, 'startup', true, generation);
+            refreshStatus(generation);
             if (hadLocalRecords) {
                 const startupReason = reason || (dashboardIsIdleForWeeklyCheck() ? 'startup-idle' : 'startup');
                 sync('incremental', startupReason).catch(function(error) {
@@ -274,9 +297,10 @@ const StudySyncUI = (function() {
             } else {
                 await sync('bootstrap', reason || 'startup-bootstrap');
             }
+            if (!isCurrentSession(generation)) return { stale: true, records: [], hadLocalRecords: false };
             return { records: records, hadLocalRecords: hadLocalRecords };
         } finally {
-            if (!hadLocalRecords) setChartsLoading(false);
+            if (!hadLocalRecords && isCurrentSession(generation)) setChartsLoading(false);
         }
     }
 
@@ -293,14 +317,17 @@ const StudySyncUI = (function() {
     }
 
     async function cancelCurrent() {
+        const generation = sessionGeneration;
         if (!syncInProgress && !isActive(currentStatus)) return null;
         const stateEl = document.getElementById('studySyncStatus');
         if (stateEl) { stateEl.textContent = '正在取消更新...'; stateEl.className = 'hint'; }
         try {
             const status = unwrapStatus(await MaimemoAPI.cancelStudySync());
+            if (!isCurrentSession(generation)) return null;
             renderStatus(status || { status: 'cancelled', active: false });
             return status;
         } catch (error) {
+            if (!isCurrentSession(generation)) return null;
             if (stateEl) { stateEl.textContent = '取消失败：' + error.message; stateEl.className = 'status-text error'; }
             throw error;
         }
@@ -325,10 +352,18 @@ const StudySyncUI = (function() {
     }
 
     function reset() {
+        sessionGeneration += 1;
         recordsFingerprint = null;
         recordsDelivered = false;
         currentStatus = null;
+        syncInProgress = false;
+        activeSyncPromise = null;
         transientMessage = '';
+        if (transientTimer) {
+            clearTimeout(transientTimer);
+            transientTimer = null;
+        }
+        setChartsLoading(false);
     }
 
     function getCountdownText() {
