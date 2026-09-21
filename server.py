@@ -25,7 +25,7 @@ import io
 import webbrowser
 import threading
 import traceback
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import codex_auth
 import maimemo_auth
@@ -586,7 +586,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         # 代理墨墨 API: /proxy/memo/xxx -> https://open.maimemo.com/open/api/v1/memo/xxx
         if path.startswith("/proxy/memo/"):
             api_path = path[len("/proxy/memo/"):]
-            if not self._official_api_allowed(api_path, "GET"):
+            if not self._official_api_allowed(api_path, "GET", parsed.query):
                 self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
                 return
             target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
@@ -660,7 +660,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         # 代理墨墨 API
         if path.startswith("/proxy/memo/"):
             api_path = path[len("/proxy/memo/"):]
-            if not self._official_api_allowed(api_path, "POST"):
+            if not self._official_api_allowed(api_path, "POST", parsed.query):
                 self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
                 return
             target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
@@ -739,6 +739,16 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             self._handle_api_delete(parsed.path, parsed)
             return
+        if parsed.path.startswith("/proxy/memo/"):
+            api_path = parsed.path[len("/proxy/memo/"):]
+            if not self._official_api_allowed(api_path, "DELETE", parsed.query):
+                self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
+                return
+            target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
+            if parsed.query:
+                target_url += "?" + parsed.query
+            self._proxy_request(target_url, method="DELETE")
+            return
         self.send_error(404, "Not Found")
 
     # ===================== 辅助方法 =====================
@@ -760,21 +770,49 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     @staticmethod
-    def _official_api_allowed(api_path, method):
-        """将桌面代理收口为产品实际所需的开放 API 白名单。"""
+    def _official_api_allowed(api_path, method, query=""):
+        """将桌面代理收口为产品实际所需的开放 API 白名单。
+
+        内容接口属于明确的云端写入能力，只允许词汇查询、释义/助记
+        CRUD 和现有学习/词本读取路由；查询参数也按接口逐项收口。
+        """
         clean = str(api_path or "").strip("/")
         if not clean or ".." in clean or "//" in clean or "\\" in clean:
             return False
+        params = parse_qs(str(query or ""), keep_blank_values=True)
+
+        def only(keys):
+            return all(key in keys for key in params)
+
+        def has_one(name, max_length=200):
+            values = params.get(name, [])
+            return len(values) == 1 and 0 < len(values[0]) <= max_length
+
         if method == "POST":
-            return clean in {
+            if clean in {
                 "study/get_study_progress",
                 "study/get_today_items",
                 "study/query_study_records",
-            }
+            } and not params:
+                return True
+            return bool(re.fullmatch(r"(?:interpretations|notes)(?:/[A-Za-z0-9_-]{1,160})?", clean)) and not params
+        if method == "DELETE":
+            return bool(re.fullmatch(r"(?:interpretations|notes)/[A-Za-z0-9_-]{1,160}", clean)) and not params
         if method == "GET":
             if clean == "notepads":
-                return True
-            return bool(re.fullmatch(r"notepads/[A-Za-z0-9_-]{1,160}", clean))
+                if not only({"limit", "offset"}):
+                    return False
+                return all(
+                    len(values) == 1 and re.fullmatch(r"\d{1,6}", values[0] or "")
+                    for key, values in params.items()
+                    if key in {"limit", "offset"}
+                )
+            if re.fullmatch(r"notepads/[A-Za-z0-9_-]{1,160}", clean):
+                return not params
+            if clean == "vocabulary":
+                return only({"spelling"}) and has_one("spelling")
+            if clean in {"interpretations", "notes"}:
+                return only({"voc_id"}) and has_one("voc_id", 160)
         return False
 
     def _proxy_request(self, target_url, method="GET", body=None):

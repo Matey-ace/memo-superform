@@ -20,8 +20,10 @@ OAuth 使用 Authorization Code + PKCE S256。GitHub Pages 只承载介绍页、
 - 今日条目：`study/get_today_items`
 - 学习记录：`study/query_study_records`
 - 云词本：`notepads`、`notepads/{id}`
+- 内容查询：`vocabulary`、`interpretations`、`notes`
+- 用户内容写入：`interpretations`、`notes` 的创建、更新和删除
 
-开放平台已批准 study/content 的读写 scope；当前版本仍在本机代理层强制白名单，只使用上述读取接口，不会向墨墨云端写入学习记录、云词本或内容。
+开放平台已批准 study/content 的读写 scope。本机代理层只白名单放行产品实际使用的接口：学习数据与云词本读取，以及用户在背词详情中主动触发的释义/助记查询和内容写入。不会自动改写学习记录或云词本。
 
 ## 嵌入式学习页确认项
 

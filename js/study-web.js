@@ -62,6 +62,12 @@ const StudyWeb = (function() {
                     '<button class="study-web-btn well" data-action="WELL_FAMILIAR" data-key="4" title="快捷键 4：熟知">' +
                         '\u719f\u77e5<span class="key-hint">4</span></button>' +
                 '</div>' +
+                '<button class="study-content-edit-trigger" type="button" hidden aria-label="编辑当前单词的释义和助记">✎ 编辑内容</button>' +
+                '<section class="study-content-editor" hidden aria-hidden="true" role="dialog" aria-modal="false" aria-labelledby="studyContentEditorTitle">' +
+                    '<div class="study-content-editor-head"><div><strong id="studyContentEditorTitle">单词内容</strong><span class="study-content-editor-word"></span></div><button type="button" data-close-content-editor aria-label="关闭内容编辑">×</button></div>' +
+                    '<p class="study-content-editor-status" data-editor-status role="status" aria-live="polite"></p>' +
+                    '<div class="study-content-editor-body" data-editor-body></div>' +
+                '</section>' +
                 '<button class="study-shortcut-toggle" type="button" hidden aria-label="查看和修改快捷键">⌘ 快捷键</button>' +
                 '<section class="study-shortcut-panel" hidden aria-label="背单词快捷键设置">' +
                     '<div class="study-shortcut-head"><strong>快捷键设置</strong><button type="button" data-close-shortcuts aria-label="关闭快捷键设置">×</button></div>' +
@@ -74,6 +80,8 @@ const StudyWeb = (function() {
         var iframe = container.querySelector('.study-web-iframe');
         var loading = container.querySelector('.study-web-loading');
         var actions = container.querySelector('.study-web-actions');
+        var contentTrigger = container.querySelector('.study-content-edit-trigger');
+        var contentEditorPanel = container.querySelector('.study-content-editor');
         var shortcutToggle = container.querySelector('.study-shortcut-toggle');
         var shortcutPanel = container.querySelector('.study-shortcut-panel');
         var studyControlsActive = false;
@@ -87,12 +95,36 @@ const StudyWeb = (function() {
                 var activePage = idoc && getActiveTaroPage(idoc);
                 var scope = activePage || idoc;
                 if (!scope) return '';
-                var node = scope.querySelector('.phrase-spelling, .phrase-word, .rev-word, [data-word], .phrase-title, .rev-root .spelling');
-                var text = node && (node.getAttribute('data-word') || node.innerText || node.textContent);
+                var selector =
+                    '.phrase-spelling, .phrase-word, .rev-word, [data-word], .phrase-title, .rev-root .spelling, ' +
+                    '.word-popup .spelling, .word-popup [data-spelling], .memo-word-popup .spelling, ' +
+                    '.memo-word-popup [data-spelling], .word-detail .spelling, .word-detail [data-word]';
+                var nodes = scope.querySelectorAll(selector);
+                // Taro 的搜索详情有时会把弹窗 portal 到 body，而不是当前页面节点。
+                if (!nodes.length && activePage && idoc !== activePage) nodes = idoc.querySelectorAll(selector);
+                var node = null;
+                for (var i = 0; i < nodes.length; i++) {
+                    var candidate = nodes[i];
+                    var style = iframe.contentWindow.getComputedStyle(candidate);
+                    if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+                        node = candidate;
+                        break;
+                    }
+                }
+                var text = node && (node.getAttribute('data-word') || node.getAttribute('data-spelling') || node.innerText || node.textContent);
                 text = (text || '').replace(/\s+/g, ' ').trim();
                 return /^[A-Za-z][A-Za-z' -]{0,80}$/.test(text) ? text : '';
             } catch(e) { return ''; }
         }
+
+        var contentEditor = (typeof StudyContentEditor !== 'undefined' && StudyContentEditor &&
+            typeof StudyContentEditor.mount === 'function') ? StudyContentEditor.mount({
+                container: container,
+                iframe: iframe,
+                trigger: contentTrigger,
+                panel: contentEditorPanel,
+                getWord: currentStudyWord
+            }) : { refresh: function() {}, dispose: function() {} };
 
         // URL 只能说明墨墨 SPA 已加载，公测说明、词书和设置页也共用
         // /webstudy/app。只有学习页的语义根节点实际挂载后才显示操作栏，
@@ -299,6 +331,7 @@ const StudyWeb = (function() {
         return createMockInstance(container, function() {
             document.removeEventListener('keydown', handleShortcutKeydown);
             window.removeEventListener('message', handleStudyNavigationMessage);
+            contentEditor.dispose();
             stopStudyScreenWatch();
             reportStudyEvent({ type: 'screen', active: false });
         });
