@@ -228,11 +228,16 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                     r'\1' + proxy_prefix + r'\2',
                     text
                 )
-                # 重写内联 JavaScript 中的相对 URL（例如 fetch 调用），使
-                # /interaction/xxx 变为 /memo-accounts/interaction/xxx。
+                # 重写内联 JavaScript 中的绝对路径字符串（例如 fetch、
+                # verifycodePath 和 location.replace），使 /interaction/xxx
+                # 变为 /memo-accounts/interaction/xxx。只匹配引号后的根路径，
+                # 不会重复改写已经带代理前缀的 URL。
                 for pfx in ['/interaction/', '/oidc/', '/static/']:
-                    text = text.replace("'" + pfx + "'", "'" + proxy_prefix + pfx + "'")
-                    text = text.replace('"' + pfx + '"', '"' + proxy_prefix + pfx + '"')
+                    text = re.sub(
+                        r"(['\"])" + re.escape(pfx),
+                        lambda m: m.group(1) + proxy_prefix + pfx,
+                        text
+                    )
 
         return text.encode('utf-8') if isinstance(body, bytes) else text
 
