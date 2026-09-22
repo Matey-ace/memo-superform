@@ -11,6 +11,7 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/study-sync-session-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/js-role-upload-ui-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/tts-pack-mount-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/tts-status-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/live2d-renderer-diagnostics.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/tts-playback-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/tts-single-flight-persona-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

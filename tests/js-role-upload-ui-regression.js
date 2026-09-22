@@ -92,6 +92,12 @@ assert(app.includes('await discardRoleUpdate(id, batchId);'), 'failed staged upd
 assert(app.includes('editingExistingRole && selectedAssets.length'), 'only existing roles with new assets should enter the staged update transaction');
 assert(app.includes("postRoleJson('/api/tts/roles', body)"), 'new role drafts must first receive their own role id before direct draft uploads');
 assert(app.includes("await uploadSelectedAssets();"), 'new role drafts must still upload their selected assets into their own package');
+const roleUploadStart = app.indexOf('async function uploadRoleAsset(');
+const roleUploadEnd = app.indexOf('async function postRoleJson(', roleUploadStart);
+assert(roleUploadStart >= 0 && roleUploadEnd > roleUploadStart, 'role asset upload handler bounds changed');
+const roleUploadBody = app.slice(roleUploadStart, roleUploadEnd);
+assert(roleUploadBody.includes('body: file'), 'large role weights must stream from the browser File');
+assert(!roleUploadBody.includes('file.arrayBuffer'), 'role upload must not duplicate model weights in WebView memory');
 
 const runtimeStart = app.indexOf('async function refreshActiveRoleRuntime()');
 const runtimeEnd = app.indexOf('async function saveRoleEditor()', runtimeStart);

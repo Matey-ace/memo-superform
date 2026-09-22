@@ -32,6 +32,16 @@ class _ApiProbe(app_api.LocalApiMixin):
         return "test-profile"
 
 
+class _RecordingStream(io.BytesIO):
+    def __init__(self, value):
+        super().__init__(value)
+        self.read_sizes = []
+
+    def read(self, size=-1):
+        self.read_sizes.append(size)
+        return super().read(size)
+
+
 class _Live2DProbe:
     def __init__(self, fail_set=False):
         self.fail_set = fail_set
@@ -127,6 +137,31 @@ class TTSRoleApiTests(unittest.TestCase):
                 self.assertEqual(probe.response[0], 409)
                 self.assertIn("一次性角色更新", probe.response[1]["error"])
             self.assertEqual(target.read_bytes(), before)
+
+    def test_role_upload_api_streams_large_weight_in_bounded_chunks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pack = Path(temp) / "tts_pack"
+            pack.mkdir()
+            (pack / "pack.json").write_text(json.dumps({"name": "test", "voices": []}), encoding="utf-8")
+            tts.save_role(str(pack), {
+                "role_id": "draft", "name": "草稿角色", "reference_text": "参考文本",
+                "reference_language": "中文", "live2d_model_id": "draft-live2d",
+            })
+            payload = b"x" * (tts._TTS_ROLE_UPLOAD_CHUNK_BYTES + 37)
+            stream = _RecordingStream(payload)
+            with _configured_local_api(TTS_PACK_DIR=str(pack), DATA_DIR=temp, LIVE2D_SERVICE=_Live2DProbe()):
+                probe = _ApiProbe()
+                probe.rfile = stream
+                probe._upload_length = len(payload)
+                probe._handle_api_post(
+                    "/api/tts/roles/draft/upload",
+                    types.SimpleNamespace(query="kind=ckpt&name=voice.ckpt"),
+                )
+
+            self.assertEqual(probe.response[0], 200)
+            self.assertEqual((pack / "roles" / "draft" / "gpt.ckpt").read_bytes(), payload)
+            self.assertTrue(stream.read_sizes)
+            self.assertLessEqual(max(stream.read_sizes), tts._TTS_ROLE_UPLOAD_CHUNK_BYTES)
 
     def test_staged_role_api_keeps_active_assets_unchanged_until_commit_and_syncs_live2d(self):
         with tempfile.TemporaryDirectory() as temp:

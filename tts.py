@@ -74,21 +74,77 @@ _ROLE_MANIFEST_FIELDS = (
     "reference_text", "reference_language", "live2d_model_id",
 )
 
-# 这些导入覆盖 worker 入口以及日文、英文文本前处理器。仅有
-# ``install.json`` 并不能证明复制过来或安装中断的虚拟环境确实能合成语音。
+# ``install.json`` 只代表安装脚本曾经写入过标记，不能证明 GPT-SoVITS
+# 的真实推理链仍完整。这里按 ``import 名 -> 可修复发行包`` 覆盖随资源包发布的
+# ``requirements-tts.txt``：不仅覆盖 worker 和 ``TTS_infer_pack``，也涵盖模型
+# 加载时才会触及的文本、音频和 ONNX 依赖。新增依赖时，探测与“修复语音环境”会
+# 同步获得同一份来源，而不会再次出现状态显示就绪、第一次 load_model 才报
+# ``ModuleNotFoundError`` 的情况。
 _ENGINE_IMPORT_PACKAGES = {
     "torch": "torch>=2.7,<2.8",
     "torchaudio": "torchaudio>=2.7,<2.8",
     "numpy": "numpy<2.0",
     "soundfile": "soundfile>=0.13.1",
+    "av": "av>=11",
+    "chardet": "chardet>=5.2.0",
     "matplotlib": "matplotlib>=3.8.0",
-    "transformers": "transformers>=4.57,<5",
+    "tqdm": "tqdm>=4.67.1",
+    "ffmpeg": "ffmpeg-python>=0.2.0",
+    "yaml": "pyyaml>=6.0.3",
     "librosa": "librosa==0.10.2",
+    "scipy": "scipy>=1.16.3",
+    "ctranslate2": "ctranslate2>=4.0,<5",
+    "filelock": "filelock>=3.20.0",
+    "transformers": "transformers>=4.57,<5",
+    "peft": "peft>=0.18.0",
+    "pytorch_lightning": "pytorch-lightning>=2.4",
+    "torchmetrics": "torchmetrics<=1.5",
+    "cn2an": "cn2an>=0.5.23",
+    "pypinyin": "pypinyin>=0.55.0",
+    "jieba": "jieba>=0.42.1",
+    "fast_langdetect": "fast-langdetect>=0.3.1",
+    "split_lang": "split-lang>=2.1.1",
     "wordsegment": "wordsegment>=1.3.1",
+    "g2p_en": "g2p-en>=2.1.0",
+    "nltk": "nltk>=3.8",
+    "inflect": "inflect>=7.0.0",
+    "opencc": "opencc>=1.1.9",
+    "sentencepiece": "sentencepiece>=0.2.1",
+    "rotary_embedding_torch": "rotary-embedding-torch>=0.8.9",
+    "x_transformers": "x-transformers>=2.11.23",
+    "psutil": "psutil>=7.1.3",
+    "pydantic": "pydantic<=2.10.6",
+    "rapidfuzz": "rapidfuzz>=3.14.3",
+    "rich": "rich>=13.0.0",
+    "onnxruntime": "onnxruntime>=1.17.0",
+    "regex": "regex>=2024.0.0",
+    "requests": "requests>=2.32.0",
     # 上游软件包在 Windows 上需要本地 C/C++ 工具链。
     # pyopenjtalk-plus 导出同名的 ``pyopenjtalk`` 模块，并提供 CPython 3.11
     # Windows wheel，因此普通用户电脑也能直接执行修复。
     "pyopenjtalk": "pyopenjtalk-plus>=0.4.1.post9",
+}
+
+# 粤语和韩语实现由 ``text.cleaner`` 按实际文本/参考语言延迟导入。不应因为用户
+# 从未使用过其中一种语言就让整个中文语音环境显示不可用，因此仅在请求涉及该语言
+# 时把这些模块并入探测。``None`` 表示不能安全地通过通用 pip 修复：当前 Windows
+# 资源包未随带可用的 Korean MeCab/eunjeon 发行版，盲目触发源码编译只会让普通用户
+# 遇到 MSVC 安装失败。
+_LANGUAGE_IMPORT_PACKAGES = {
+    "粤语": {"ToJyutping": "tojyutping>=3.2.0"},
+    "粤英混合": {"ToJyutping": "tojyutping>=3.2.0"},
+    "韩文": {
+        "jamo": "jamo>=0.4.1",
+        "ko_pron": "ko-pron>=1.3",
+        "g2pk2": "g2pk2>=0.0.3",
+        "eunjeon": None,
+    },
+    "韩英混合": {
+        "jamo": "jamo>=0.4.1",
+        "ko_pron": "ko-pron>=1.3",
+        "g2pk2": "g2pk2>=0.0.3",
+        "eunjeon": None,
+    },
 }
 _ENGINE_PROBE_LOCK = threading.RLock()
 _ENGINE_PROBE_CACHE = {}
@@ -116,9 +172,17 @@ _TTS_PACK_MOUNT_LOCK = threading.RLock()
 TTS_PACK_WEB_UPLOAD_MAX_BYTES = _mount_limit(
     "MEMO_TTS_PACK_WEB_UPLOAD_MAX_BYTES", 256 * 1024 ** 2
 )
+# 单个 GPT/SoVITS 权重会远大于普通表单附件。网页端直接将流写入角色暂存区，
+# 上限仅用于避免错误请求耗尽磁盘；完整多角色运行时仍应走原生语音包导入。
+TTS_ROLE_UPLOAD_MAX_BYTES = _mount_limit(
+    "MEMO_TTS_ROLE_UPLOAD_MAX_BYTES", 8 * 1024 ** 3
+)
+_TTS_ROLE_UPLOAD_CHUNK_BYTES = 1024 * 1024
 _TTS_PACK_MOUNT_PROGRESS_MIN_SECONDS = 0.25
 _TTS_PACK_MOUNT_PROGRESS_MIN_BYTES = 4 * 1024 ** 2
 _TTS_PACK_MOUNT_DISK_RESERVE_BYTES = 256 * 1024 ** 2
+_TTS_PACK_SWITCH_JOURNAL_FILENAME = ".tts-pack-switch.json"
+_TTS_PACK_SWITCH_ENTRY_RE = re.compile(r"^\.tts-pack-(?:backup|ready)-[a-f0-9]{32}$")
 
 # 后台挂载进入提交流程前会标记该资料包，防止新的 synthesize/preload 或角色写入
 # 与最终目录交换竞争。标记只存在于本地进程；跨进程竞争仍由 .tts.lock 兜底。
@@ -1080,29 +1144,104 @@ def update_role_persona(pack_dir, role_id, persona):
         return _public_role(role, pack_dir, persona_document=document)
 
 
+def _stream_role_upload_to_path(stream, content_length, target):
+    """把 HTTP 文件流原子写入目标位置，不在主进程复制整份模型权重。"""
+    try:
+        remaining = int(content_length)
+    except (TypeError, ValueError):
+        remaining = 0
+    if remaining <= 0:
+        raise TTSException("未收到角色资料文件")
+    if remaining > TTS_ROLE_UPLOAD_MAX_BYTES:
+        raise TTSException("角色资料文件超过允许大小，请使用完整语音包 ZIP 原生导入")
+    temp = target + "." + uuid.uuid4().hex + ".upload"
+    try:
+        with open(temp, "xb") as output:
+            while remaining:
+                chunk = stream.read(min(_TTS_ROLE_UPLOAD_CHUNK_BYTES, remaining))
+                if not chunk:
+                    raise TTSException("角色资料上传中断")
+                if not isinstance(chunk, (bytes, bytearray)):
+                    raise TTSException("角色资料上传内容无效")
+                output.write(chunk)
+                remaining -= len(chunk)
+            output.flush()
+        os.replace(temp, target)
+    except OSError as exc:
+        raise TTSException("保存角色资料文件失败：%s" % exc)
+    finally:
+        if os.path.exists(temp):
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+
+
+def _role_upload_target(kind, filename, directory):
+    kind = str(kind or "").lower()
+    if kind not in _ROLE_FILE_KINDS:
+        raise TTSException("不支持的角色文件类型")
+    target_name, suffixes = _ROLE_FILE_KINDS[kind]
+    suffix = os.path.splitext(str(filename or ""))[1].lower()
+    if suffix not in suffixes:
+        raise TTSException("文件扩展名与类型不匹配")
+    if kind == "audio":
+        target_name += suffix
+    return kind, target_name, os.path.join(directory, target_name)
+
+
+def _remove_superseded_reference_audio(directory, target_name):
+    """新参考音频已经安全落盘后，才移除同目录的旧规范音频。"""
+    for suffix in _ROLE_FILE_KINDS["audio"][1]:
+        old_name = "reference" + suffix
+        if old_name == target_name:
+            continue
+        try:
+            old = os.path.join(directory, old_name)
+            if os.path.isfile(old):
+                os.unlink(old)
+        except OSError:
+            pass
+
+
 @_role_write_operation
 def upload_role_file(pack_dir, role_id, kind, filename, data):
     with _ROLE_LIBRARY_LOCK:
         state = ensure_role_library(pack_dir)
         role = _find_role(state, role_id)
-        kind = str(kind or "").lower()
-        if kind not in _ROLE_FILE_KINDS or not data:
+        if not data:
             raise TTSException("不支持的角色文件类型或文件为空")
-        target_name, suffixes = _ROLE_FILE_KINDS[kind]
-        suffix = os.path.splitext(str(filename or ""))[1].lower()
-        if suffix not in suffixes:
-            raise TTSException("文件扩展名与类型不匹配")
-        if kind == "audio": target_name += suffix
         folder = _role_folder(pack_dir, role)
+        kind, target_name, target = _role_upload_target(kind, filename, folder)
         if state.get("active_role_id") == role["role_id"]:
             _reset_manager()
         os.makedirs(folder, exist_ok=True)
-        target = os.path.join(folder, target_name)
         temp = target + ".tmp"
         with open(temp, "wb") as out:
             out.write(data)
             out.flush()
         os.replace(temp, target)
+        if kind == "audio":
+            _remove_superseded_reference_audio(folder, target_name)
+        role[{"ckpt": "gpt_file", "pth": "sovits_file", "index": "index_file", "audio": "audio_file"}[kind]] = target_name
+        _write_roles(pack_dir, state)
+    return _public_role(role, pack_dir)
+
+
+@_role_write_operation
+def upload_role_file_stream(pack_dir, role_id, kind, filename, stream, content_length):
+    """流式写入一份未启用角色的资料文件，避免模型权重占用 Python 堆。"""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        folder = _role_folder(pack_dir, role)
+        kind, target_name, target = _role_upload_target(kind, filename, folder)
+        if state.get("active_role_id") == role["role_id"]:
+            raise TTSException("当前已启用角色必须通过一次性角色更新保存，避免模型与参考资料半更新")
+        os.makedirs(folder, exist_ok=True)
+        _stream_role_upload_to_path(stream, content_length, target)
+        if kind == "audio":
+            _remove_superseded_reference_audio(folder, target_name)
         role[{"ckpt": "gpt_file", "pth": "sovits_file", "index": "index_file", "audio": "audio_file"}[kind]] = target_name
         _write_roles(pack_dir, state)
     return _public_role(role, pack_dir)
@@ -1129,27 +1268,32 @@ def stage_role_file(pack_dir, role_id, batch_id, kind, filename, data):
         stage_dir = _role_stage_dir(pack_dir, role["role_id"], batch_id)
         if not os.path.isdir(stage_dir):
             raise TTSException("角色更新批次不存在或已结束")
-        kind = str(kind or "").lower()
-        if kind not in _ROLE_FILE_KINDS or not data:
+        if not data:
             raise TTSException("不支持的角色文件类型或文件为空")
-        target_name, suffixes = _ROLE_FILE_KINDS[kind]
-        suffix = os.path.splitext(str(filename or ""))[1].lower()
-        if suffix not in suffixes:
-            raise TTSException("文件扩展名与类型不匹配")
-        if kind == "audio":
-            # 暂存包只保留一条参考音频，确保同一次编辑保存中重新选择音频的结果
-            # 确定且唯一。
-            for old_suffix in _ROLE_FILE_KINDS["audio"][1]:
-                old = os.path.join(stage_dir, "reference" + old_suffix)
-                if os.path.isfile(old):
-                    os.unlink(old)
-            target_name += suffix
-        target = os.path.join(stage_dir, target_name)
+        kind, target_name, target = _role_upload_target(kind, filename, stage_dir)
         temp = target + ".tmp"
         with open(temp, "wb") as out:
             out.write(data)
             out.flush()
         os.replace(temp, target)
+        if kind == "audio":
+            _remove_superseded_reference_audio(stage_dir, target_name)
+        return {"batch_id": _safe_stage_id(batch_id), "kind": kind, "file": target_name}
+
+
+@_role_write_operation
+def stage_role_file_stream(pack_dir, role_id, batch_id, kind, filename, stream, content_length):
+    """流式暂存已启用角色的一次性更新资料。"""
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        role = _find_role(state, role_id)
+        stage_dir = _role_stage_dir(pack_dir, role["role_id"], batch_id)
+        if not os.path.isdir(stage_dir):
+            raise TTSException("角色更新批次不存在或已结束")
+        kind, target_name, target = _role_upload_target(kind, filename, stage_dir)
+        _stream_role_upload_to_path(stream, content_length, target)
+        if kind == "audio":
+            _remove_superseded_reference_audio(stage_dir, target_name)
         return {"batch_id": _safe_stage_id(batch_id), "kind": kind, "file": target_name}
 
 
@@ -1336,38 +1480,94 @@ def _venv_python(pack_dir):
     return os.path.join(pack_dir, ".venv311", "Scripts", "python.exe")
 
 
-def _engine_dependency_status(pack_dir, *, force=False):
+def _engine_import_packages(languages=()):
+    """返回一次实际推理请求所需的 ``模块 -> 发行包`` 映射。
+
+    可选语言前端并不在 worker 启动时全部导入。把它们限定到当前角色参考语言和
+    本次目标语言，既能在真正会用到时提前报错，也不会让未使用的韩文/粤语依赖阻断
+    普通中文语音。
+    """
+    packages = dict(_ENGINE_IMPORT_PACKAGES)
+    for language in languages or ():
+        packages.update(_LANGUAGE_IMPORT_PACKAGES.get(str(language or "").strip(), {}))
+    return packages
+
+
+def _engine_dependency_status(pack_dir, *, force=False, languages=(), verify_runtime=False):
     """返回 worker 运行时的 ``(ready, reason, missing_modules)``。
 
     A resource pack used to declare itself installed as soon as setup wrote
     install.json.  That misses interrupted uv/pip installs (and specifically
     a missing Japanese ``pyopenjtalk`` module), which then only surfaces after
-    a user touches the character.  Probe imports in the pack's own interpreter
-    and cache briefly so normal status refreshes remain inexpensive.
+    a user touches the character. A settings-page status refresh only checks
+    whether the declared modules are discoverable; importing PyTorch and the
+    complete GPT-SoVITS entry stack in that request takes tens of seconds on
+    a cold Windows process. ``verify_runtime=True`` performs that expensive
+    real-entry import before enabling, preloading, speaking, or declaring a
+    repair successful. Both modes are cached independently.
     """
     pack_dir = os.path.abspath(pack_dir)
     python_exe = os.path.abspath(_venv_python(pack_dir))
+    packages = _engine_import_packages(languages)
+    engine_dir = os.path.join(pack_dir, "tts_engine")
+    tts_entry = os.path.join(engine_dir, "TTS_infer_pack", "TTS.py")
     try:
-        stamp = os.path.getmtime(python_exe)
+        stamp = tuple(os.path.getmtime(path) for path in (python_exe, engine_dir, tts_entry))
     except OSError:
         stamp = None
-    key = os.path.abspath(pack_dir)
+    key = (os.path.abspath(pack_dir), tuple(packages), bool(verify_runtime))
     now = time.monotonic()
     with _ENGINE_PROBE_LOCK:
         cached = _ENGINE_PROBE_CACHE.get(key)
         if (not force and cached and cached.get("stamp") == stamp and
                 now - cached.get("checked_at", 0) < _ENGINE_PROBE_TTL):
             return cached["ready"], cached["reason"], list(cached["missing"])
+        # A recent full probe is authoritative when it has already found an
+        # import-time failure. This makes the next fast status response show
+        # the useful failure instead of incorrectly returning to "ready".
+        if not force and not verify_runtime:
+            runtime_cached = _ENGINE_PROBE_CACHE.get(
+                (os.path.abspath(pack_dir), tuple(packages), True)
+            )
+            if (runtime_cached and not runtime_cached.get("ready") and
+                    runtime_cached.get("stamp") == stamp and
+                    now - runtime_cached.get("checked_at", 0) < _ENGINE_PROBE_TTL):
+                return (runtime_cached["ready"], runtime_cached["reason"],
+                        list(runtime_cached["missing"]))
 
-    imports_json = json.dumps(list(_ENGINE_IMPORT_PACKAGES), ensure_ascii=True)
+    imports_json = json.dumps(list(packages), ensure_ascii=True)
+    engine_json = json.dumps(engine_dir, ensure_ascii=True)
+    runtime_probe = (
+        "engine_dir=" + engine_json + "\n"
+        "if os.path.isdir(engine_dir):\n"
+        "    sys.path.insert(0, engine_dir); os.chdir(engine_dir)\n"
+        "    check_import('worker_main')\n"
+        "    check_import('TTS_infer_pack.TTS')\n"
+    ) if verify_runtime else ""
     probe = (
-        "import importlib,json\n"
+        "import importlib,importlib.util,json,os,sys\n"
         "missing=[]\n"
-        "for name in " + imports_json + ":\n"
+        "seen=set()\n"
+        "def record(name, exc):\n"
+        "    name=str(name or 'runtime')\n"
+        "    if name not in seen:\n"
+        "        seen.add(name); missing.append([name, str(exc)])\n"
+        "def check_import(name):\n"
         "    try:\n"
         "        importlib.import_module(name)\n"
+        "    except ModuleNotFoundError as exc:\n"
+        "        record(getattr(exc, 'name', '') or name, exc)\n"
         "    except Exception as exc:\n"
-        "        missing.append([name, str(exc)])\n"
+        "        record(name, exc)\n"
+        "def check_spec(name):\n"
+        "    try:\n"
+        "        if importlib.util.find_spec(name) is None:\n"
+        "            record(name, 'module is not installed')\n"
+        "    except Exception as exc:\n"
+        "        record(name, exc)\n"
+        "for name in " + imports_json + ":\n"
+        "    " + ("check_import(name)" if verify_runtime else "check_spec(name)") + "\n"
+        + runtime_probe +
         "print('__MEMO_TTS_PROBE__'+json.dumps(missing, ensure_ascii=True))\n"
     )
     missing, detail = [], ""
@@ -1375,7 +1575,7 @@ def _engine_dependency_status(pack_dir, *, force=False):
         completed = subprocess.run(
             [python_exe, "-c", probe], cwd=pack_dir, text=True,
             encoding="utf-8", errors="replace", stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=25,
+            stderr=subprocess.PIPE, timeout=45,
             **_hidden_windows_subprocess_kwargs()
         )
         output = (completed.stdout or "") + "\n" + (completed.stderr or "")
@@ -1416,6 +1616,27 @@ def _engine_dependency_status(pack_dir, *, force=False):
     return ready, reason, missing
 
 
+def _engine_languages_for_request(pack_dir, *, text_language="", role_id="", role_library=None):
+    """收集一次模型预加载/合成会实际触及的语言前端。"""
+    languages = []
+    if text_language:
+        languages.append(str(text_language).strip())
+    library = role_library
+    if library is None:
+        try:
+            library = list_roles(pack_dir)
+        except Exception:
+            library = {}
+    selected = str(role_id or (library or {}).get("active_role_id") or "").strip()
+    role = next((item for item in (library or {}).get("roles") or []
+                 if isinstance(item, dict) and item.get("role_id") == selected), None)
+    if role and role.get("reference_language"):
+        languages.append(str(role["reference_language"]).strip())
+    # Preserve order for stable probe-cache keys and human-readable repair output.
+    return tuple(language for index, language in enumerate(languages)
+                 if language and language not in languages[:index])
+
+
 def repair_environment(pack_dir, data_dir):
     """原地修复 worker 缺失的软件包，并在完成后验证。
 
@@ -1432,26 +1653,39 @@ def repair_environment(pack_dir, data_dir):
             raise TTSException("未找到 .venv311 解释器，请先运行资源包 setup.bat")
         if not os.path.exists(os.path.join(pack_dir, "tts_engine", "worker_main.py")):
             raise TTSException("资源包缺少 tts_engine/worker_main.py")
-        _ready, _reason, missing = _engine_dependency_status(pack_dir, force=True)
+        runtime_missing = _runtime_layout_missing(pack_dir)
+        if runtime_missing:
+            raise TTSException("语音包尚待补齐，缺少：" + "、".join(runtime_missing))
+        state = _load_state(data_dir)
+        languages = _engine_languages_for_request(
+            pack_dir,
+            text_language=state.get("language"),
+        )
+        requirements = _engine_import_packages(languages)
+        _ready, _reason, missing = _engine_dependency_status(
+            pack_dir, force=True, languages=languages, verify_runtime=True
+        )
         if _ready:
             return {"ok": True, "message": "语音环境已完整，无需修复", "installed": []}
+        unrepairable = [name for name in missing if name in requirements and requirements[name] is None]
+        if unrepairable:
+            names = "、".join(unrepairable)
+            raise TTSException(
+                "当前 GPT-SoVITS 资源包缺少无法自动安装的运行时（%s）。"
+                "请导入包含该语言完整运行时的语音包；Windows 韩文前端不能通过此处源码编译修复。" % names
+            )
         _assert_role_write_allowed(pack_dir)
         _reset_manager()
-        state = _load_state(data_dir)
         # 原地修复成功后，不要让此前可用的陪伴语音悄悄保持关闭。解释器变更期间
         # 临时停止，只有子进程探测确认运行时恢复可用后，才恢复用户之前的选择。
         was_enabled = bool(state.get("enabled"))
         state["enabled"] = False
         _save_state(data_dir, state)
         packages = [
-            _ENGINE_IMPORT_PACKAGES[name] for name in missing
-            if name in _ENGINE_IMPORT_PACKAGES
+            requirements[name] for name in missing
+            if name in requirements and requirements[name]
         ]
-        # ``pyopenjtalk`` 是已知的日文运行时依赖，即使导入探测在列出模块前被
-        # 中断，也必须使用其兼容 Windows 的预编译发行版。
-        japanese_package = _ENGINE_IMPORT_PACKAGES["pyopenjtalk"]
-        if japanese_package not in packages:
-            packages.append(japanese_package)
+        packages = list(dict.fromkeys(packages))
         if not packages:
             raise TTSException("未能识别需要修复的语音依赖：" + (_reason or "请重新运行资源包 setup.bat"))
 
@@ -1478,7 +1712,10 @@ def repair_environment(pack_dir, data_dir):
             raise TTSException("语音环境修复超时，请检查网络后重试")
         if installed.returncode:
             raise TTSException("语音环境修复失败：" + (installed.stdout or "")[-900:])
-        ready, reason, still_missing = _engine_dependency_status(pack_dir, force=True)
+        _clear_engine_probe_cache(pack_dir)
+        ready, reason, still_missing = _engine_dependency_status(
+            pack_dir, force=True, languages=languages, verify_runtime=True
+        )
         if not ready:
             raise TTSException("修复后语音环境仍不可用：" + (reason or "、".join(still_missing)))
         state["enabled"] = was_enabled
@@ -1510,15 +1747,32 @@ def _write_install_meta(pack_dir, source="ModelScope"):
 
 
 def _runtime_layout_missing(pack_dir):
-    """返回已挂载包仍缺少的精确运行时文件。"""
-    required = (
+    """返回已挂载包仍缺少的精确 GPT-SoVITS 运行时资料。
+
+    只检查解释器和 worker 会让一个空的 ``tts_engine`` 目录被误报为完整包；真正
+    load_model 还必需 GPT-SoVITS 的推理入口、BERT、CN-HuBERT 与本地语言识别模型。
+    这些都是资源包内容，不能由“修复语音环境”的 pip 路径凭空补回。
+    """
+    engine_dir = os.path.join(pack_dir, "tts_engine")
+    required_files = (
         (".venv311/Scripts/python.exe", _venv_python(pack_dir)),
-        ("tts_engine/worker_main.py", os.path.join(pack_dir, "tts_engine", "worker_main.py")),
+        ("tts_engine/worker_main.py", os.path.join(engine_dir, "worker_main.py")),
+        ("tts_engine/TTS_infer_pack/TTS.py", os.path.join(engine_dir, "TTS_infer_pack", "TTS.py")),
     )
-    return [label for label, path in required if not os.path.isfile(path)]
+    required_dirs = (
+        ("tts_engine/pretrained_models/chinese-roberta-wwm-ext-large",
+         os.path.join(engine_dir, "pretrained_models", "chinese-roberta-wwm-ext-large")),
+        ("tts_engine/pretrained_models/chinese-hubert-base",
+         os.path.join(engine_dir, "pretrained_models", "chinese-hubert-base")),
+        ("tts_engine/pretrained_models/fast_langdetect",
+         os.path.join(engine_dir, "pretrained_models", "fast_langdetect")),
+    )
+    missing = [label for label, path in required_files if not os.path.isfile(path)]
+    missing.extend(label for label, path in required_dirs if not os.path.isdir(path))
+    return missing
 
 
-def _engine_ready(pack_dir):
+def _engine_ready(pack_dir, *, languages=(), verify_runtime=False):
     """合成前校验安装元数据、worker 文件和模块导入。
 
     install.json 只是安装完成标记；若它丢失但环境实际完整
@@ -1530,7 +1784,9 @@ def _engine_ready(pack_dir):
     meta = _install_meta(pack_dir)
     if not meta or not meta.get("installed"):
         _write_install_meta(pack_dir)
-    dependency_ready, dependency_reason, _missing = _engine_dependency_status(pack_dir)
+    dependency_ready, dependency_reason, _missing = _engine_dependency_status(
+        pack_dir, languages=languages, verify_runtime=verify_runtime
+    )
     if not dependency_ready:
         return False, dependency_reason
     return True, ""
@@ -1747,6 +2003,23 @@ def _incomplete_role_reports(roles):
     return reports
 
 
+def _validate_mount_role_library(pack_root):
+    """拒绝损坏角色清单，避免挂载时把它静默覆盖成迁移草稿。"""
+    path = _roles_path(pack_root)
+    if not os.path.exists(path):
+        # 完全没有角色清单的包仍可作为草稿挂载；现有迁移逻辑会建立空白角色库。
+        return
+    try:
+        with open(path, "r", encoding="utf-8-sig") as source:
+            document = json.load(source)
+    except (OSError, ValueError) as exc:
+        raise TTSException("语音包的 roles.json 格式无效，未替换当前资料包：%s" % exc)
+    if not isinstance(document, dict) or not isinstance(document.get("roles"), list):
+        raise TTSException("语音包的 roles.json 必须包含 roles 列表，未替换当前资料包")
+    if any(not isinstance(role, dict) for role in document["roles"]):
+        raise TTSException("语音包的 roles.json 包含无效角色条目，未替换当前资料包")
+
+
 def _inspect_tts_pack_root(pack_root):
     """读取待挂载归档并报告缺项，而不因资料未齐而拒绝。
 
@@ -1757,6 +2030,7 @@ def _inspect_tts_pack_root(pack_root):
     pack = _pack_meta(pack_root)
     if not isinstance(pack, dict):
         raise TTSException("语音包的 pack.json 格式无效")
+    _validate_mount_role_library(pack_root)
     library = list_roles(pack_root)
     voice_ready = []
     for role in library.get("roles") or []:
@@ -1777,8 +2051,12 @@ def _inspect_tts_pack_root(pack_root):
 
 
 def _clear_engine_probe_cache(pack_dir):
+    pack_dir = os.path.abspath(pack_dir)
     with _ENGINE_PROBE_LOCK:
-        _ENGINE_PROBE_CACHE.pop(os.path.abspath(pack_dir), None)
+        stale = [key for key in _ENGINE_PROBE_CACHE
+                 if key == pack_dir or (isinstance(key, tuple) and key and key[0] == pack_dir)]
+        for key in stale:
+            _ENGINE_PROBE_CACHE.pop(key, None)
 
 
 def _check_tts_pack_can_be_replaced(pack_dir):
@@ -1794,27 +2072,163 @@ def _check_tts_pack_can_be_replaced(pack_dir):
     _release_pack_lock(probe)
 
 
+def _tts_pack_switch_journal_path(pack_dir):
+    return os.path.join(os.path.dirname(os.path.abspath(pack_dir)), _TTS_PACK_SWITCH_JOURNAL_FILENAME)
+
+
+def _is_tts_pack_switch_entry_name(value):
+    return bool(_TTS_PACK_SWITCH_ENTRY_RE.fullmatch(str(value or "")))
+
+
+def _write_tts_pack_switch_journal(pack_dir, data_dir, backup_dir, candidate_dir, previous_state, had_previous):
+    """持久化目录交换意图，使进程异常退出后仍可恢复旧包和开关状态。"""
+    pack_dir = os.path.abspath(pack_dir)
+    parent = os.path.dirname(pack_dir)
+    backup_name = os.path.basename(os.path.abspath(backup_dir))
+    candidate_name = os.path.basename(os.path.abspath(candidate_dir))
+    if (os.path.dirname(os.path.abspath(backup_dir)) != parent or
+            os.path.dirname(os.path.abspath(candidate_dir)) != parent or
+            not _is_tts_pack_switch_entry_name(backup_name) or
+            not _is_tts_pack_switch_entry_name(candidate_name)):
+        raise TTSException("语音包切换暂存路径无效")
+    document = {
+        "version": 1,
+        "pack_name": os.path.basename(pack_dir),
+        "backup_name": backup_name,
+        "candidate_name": candidate_name,
+        "had_previous": bool(had_previous),
+        "previous_state": {
+            "enabled": _coerce_enabled((previous_state or {}).get("enabled")),
+            "language": _coerce_str((previous_state or {}).get("language"), "中英混合"),
+            "speed": _coerce_speed((previous_state or {}).get("speed")),
+        },
+    }
+    if not _write_json(_tts_pack_switch_journal_path(pack_dir), document):
+        raise TTSException("无法保存语音包切换恢复记录")
+
+
+def _read_tts_pack_switch_journal(pack_dir):
+    """读取并严格校验本模块生成的切换记录，不接受外部路径。"""
+    pack_dir = os.path.abspath(pack_dir)
+    document = _read_json(_tts_pack_switch_journal_path(pack_dir))
+    if not isinstance(document, dict) or document.get("version") != 1:
+        return None
+    if document.get("pack_name") != os.path.basename(pack_dir):
+        return None
+    backup_name = str(document.get("backup_name") or "")
+    candidate_name = str(document.get("candidate_name") or "")
+    if not (_is_tts_pack_switch_entry_name(backup_name) and
+            _is_tts_pack_switch_entry_name(candidate_name)):
+        return None
+    previous = document.get("previous_state")
+    if not isinstance(previous, dict):
+        return None
+    return {
+        "backup_name": backup_name,
+        "candidate_name": candidate_name,
+        "had_previous": bool(document.get("had_previous")),
+        "previous_state": {
+            "enabled": _coerce_enabled(previous.get("enabled")),
+            "language": _coerce_str(previous.get("language"), "中英混合"),
+            "speed": _coerce_speed(previous.get("speed")),
+        },
+    }
+
+
+def _remove_tts_pack_switch_journal(pack_dir):
+    path = _tts_pack_switch_journal_path(pack_dir)
+    try:
+        if os.path.isfile(path) and not os.path.islink(path):
+            os.unlink(path)
+    except OSError:
+        pass
+
+
+def _recover_tts_pack_switch(pack_dir, data_dir):
+    """恢复一次被进程中断的目录交换；返回是否已安全处理或无需处理。"""
+    pack_dir = os.path.abspath(pack_dir)
+    if os.path.islink(pack_dir):
+        return False
+    journal = _read_tts_pack_switch_journal(pack_dir)
+    if journal is None:
+        return True
+    parent = os.path.dirname(pack_dir)
+    backup_dir = os.path.join(parent, journal["backup_name"])
+    candidate_dir = os.path.join(parent, journal["candidate_name"])
+    pack_exists = os.path.lexists(pack_dir)
+    backup_exists = os.path.isdir(backup_dir) and not os.path.islink(backup_dir)
+    candidate_exists = os.path.isdir(candidate_dir) and not os.path.islink(candidate_dir)
+
+    if not pack_exists and journal["had_previous"] and backup_exists:
+        try:
+            os.replace(backup_dir, pack_dir)
+        except OSError:
+            return False
+        if not _save_state(data_dir, journal["previous_state"]):
+            # The old package is back but the original user choice is not yet durable.
+            # Keep the journal so the next launch can finish restoring it.
+            return False
+        _remove_tts_pack_switch_journal(pack_dir)
+        return True
+
+    if (pack_exists and journal["had_previous"] and not backup_exists and candidate_exists):
+        # The process stopped after disabling the old state but before moving the
+        # old package aside. The current pack is still the original one.
+        if not _save_state(data_dir, journal["previous_state"]):
+            return False
+        _remove_tts_pack_switch_journal(pack_dir)
+        return True
+
+    if pack_exists:
+        # A live package plus a backup means candidate promotion completed. Keep
+        # the intentionally disabled state; only stale private recovery material
+        # is removed here.
+        if backup_exists:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+        _remove_tts_pack_switch_journal(pack_dir)
+        return True
+
+    if not journal["had_previous"]:
+        # There was no old package to restore. Return the prior (normally off)
+        # state and let the normal staging cleanup discard the unpromoted candidate.
+        if not _save_state(data_dir, journal["previous_state"]):
+            return False
+        _remove_tts_pack_switch_journal(pack_dir)
+        return True
+    return False
+
+
 def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
     """用已完成结构校验的暂存包替换当前资料包目录。"""
     pack_dir = os.path.abspath(pack_dir)
     data_dir = os.path.abspath(data_dir)
+    candidate_dir = os.path.abspath(candidate_dir)
     parent = os.path.dirname(pack_dir)
     if os.path.islink(pack_dir):
         raise TTSException("语音资源包目录不能是链接路径")
+    if (os.path.dirname(candidate_dir) != parent or
+            not _is_tts_pack_switch_entry_name(os.path.basename(candidate_dir)) or
+            not os.path.isdir(candidate_dir) or os.path.islink(candidate_dir)):
+        raise TTSException("语音包候选目录无效")
     os.makedirs(parent, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
 
     previous_state = _load_state(data_dir)
+    backup_dir = os.path.join(parent, ".tts-pack-backup-" + uuid.uuid4().hex)
+    had_previous = os.path.lexists(pack_dir)
+    _write_tts_pack_switch_journal(
+        pack_dir, data_dir, backup_dir, candidate_dir, previous_state, had_previous
+    )
     disabled_state = dict(previous_state)
     disabled_state["enabled"] = False
     if not _save_state(data_dir, disabled_state):
+        _remove_tts_pack_switch_journal(pack_dir)
         raise TTSException("保存语音开关状态失败")
 
-    backup_dir = os.path.join(parent, ".tts-pack-backup-" + uuid.uuid4().hex)
     moved_previous = False
     mounted = False
     try:
-        if os.path.lexists(pack_dir):
+        if had_previous:
             os.replace(pack_dir, backup_dir)
             moved_previous = True
         os.replace(candidate_dir, pack_dir)
@@ -1822,18 +2236,23 @@ def _replace_tts_pack_atomically(pack_dir, data_dir, candidate_dir):
     except Exception:
         # 同时回滚状态与目录。任何部分解压结果都不会进入正式路径，因此挂载失败
         # 后旧资料包仍保持用户原先的完整状态。
+        restored_previous = not moved_previous
         if moved_previous and not os.path.lexists(pack_dir):
             try:
                 os.replace(backup_dir, pack_dir)
+                restored_previous = True
             except OSError:
                 pass
-        _save_state(data_dir, previous_state)
+        if restored_previous and _save_state(data_dir, previous_state):
+            _remove_tts_pack_switch_journal(pack_dir)
         raise
     finally:
         # 只有新目录正式生效后才丢弃旧完整包。清理失败最多留下私有回滚副本，
         # 不会影响正在使用的资料包。
         if mounted and moved_previous and os.path.isdir(backup_dir):
             shutil.rmtree(backup_dir, ignore_errors=True)
+    if mounted:
+        _remove_tts_pack_switch_journal(pack_dir)
     _clear_engine_probe_cache(pack_dir)
 
 
@@ -2259,11 +2678,12 @@ class TTSPackMountJobManager:
             _set_tts_pack_mounting(self.pack_dir, True)
             mounting = True
             self._update(job_id, state="running", stage="checking", message="正在检查语音包…")
+            source_name = self.get_job(job_id).get("source_name") or os.path.basename(archive_path)
             result = mount_tts_pack_archive(
                 self.pack_dir,
                 self.data_dir,
                 archive_path,
-                source_name=os.path.basename(archive_path),
+                source_name=source_name,
                 on_progress=lambda stage, payload: self._on_progress(job_id, stage, payload),
                 before_switch=lambda: self._wait_for_voice(job_id),
             )
@@ -2291,6 +2711,9 @@ class TTSPackMountJobManager:
             return False
         try:
             parent = self._parent_dir
+            if not _recover_tts_pack_switch(self.pack_dir, self.data_dir):
+                # 切换记录仍指向可恢复的旧包时，绝不让通用清理删除它。
+                return False
             try:
                 os.makedirs(parent, exist_ok=True)
                 entries = list(os.scandir(parent))
@@ -2298,7 +2721,9 @@ class TTSPackMountJobManager:
                 return False
             backups = []
             for entry in entries:
-                if entry.name.startswith(".tts-pack-backup-") and entry.is_dir(follow_symlinks=False):
+                if (entry.name.startswith(".tts-pack-backup-") and
+                        _is_tts_pack_switch_entry_name(entry.name) and
+                        entry.is_dir(follow_symlinks=False)):
                     backups.append(entry)
             if not os.path.lexists(self.pack_dir) and backups:
                 try:
@@ -2860,10 +3285,16 @@ def _get_status_inner(pack_dir, data_dir):
             "runtime_missing_files": [],
             "incomplete_roles": [],
         }
-    ready, reason = _engine_ready(pack_dir)
     role_library = list_roles(pack_dir)
     active_role_id, role_ready = _active_role_status(role_library)
     state = _load_state(data_dir)
+    languages = _engine_languages_for_request(
+        pack_dir,
+        text_language=state.get("language"),
+        role_id=active_role_id,
+        role_library=role_library,
+    )
+    ready, reason = _engine_ready(pack_dir, languages=languages)
     role_error = ""
     # 修复历史遗留状态：从未启用完整角色，但全局功能开关仍为开启。若仍报告已启用，
     # 触摸会表现为静默失败，也可能让旧 worker 模型残留内存。此处关闭开关；用户必须
@@ -2915,12 +3346,17 @@ def set_enabled(pack_dir, data_dir, enabled):
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
-    ready, reason = _engine_ready(pack_dir)
-    if enabled and not ready:
-        raise TTSException(reason)
     state = _load_state(data_dir)
     if enabled:
-        _active_role_for_request(pack_dir)
+        voice_name = _active_role_for_request(pack_dir)
+        languages = _engine_languages_for_request(
+            pack_dir, text_language=state.get("language"), role_id=voice_name
+        )
+        ready, reason = _engine_ready(
+            pack_dir, languages=languages, verify_runtime=True
+        )
+        if not ready:
+            raise TTSException(reason)
         # 关闭会释放跨进程资料包锁。重新启用前先丢弃管理器，避免旧对象保留过期锁标记
         # 并与另一个 Memo 实例同时运行。
         _reset_manager()
@@ -2946,15 +3382,20 @@ def speak(pack_dir, data_dir, text, voice=None, language=None, speed=None, *,
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
-    ready, reason = _engine_ready(pack_dir)
-    if not ready:
-        raise TTSException(reason)
     state = _load_state(data_dir)
     if not state.get("enabled"):
         raise TTSException("语音功能未启用，请在设置中开启")
     cleaned = clean_text(text)
     voice_name = _active_role_for_request(pack_dir, voice)
     language = language or state.get("language") or "中文"
+    languages = _engine_languages_for_request(
+        pack_dir, text_language=language, role_id=voice_name
+    )
+    ready, reason = _engine_ready(
+        pack_dir, languages=languages, verify_runtime=True
+    )
+    if not ready:
+        raise TTSException(reason)
     speed = _coerce_speed(speed if speed is not None else state.get("speed"))
     manager = _get_manager(pack_dir, data_dir)
     if manager.is_busy:
@@ -2979,13 +3420,18 @@ def preload(pack_dir, data_dir, voice=None):
     pack = _pack_meta(pack_dir)
     if pack is None:
         raise TTSException("未检测到语音资源包")
-    ready, reason = _engine_ready(pack_dir)
-    if not ready:
-        raise TTSException(reason)
     state = _load_state(data_dir)
     if not state.get("enabled"):
         raise TTSException("语音功能未启用，请在设置中开启")
     voice_name = _active_role_for_request(pack_dir, voice)
+    languages = _engine_languages_for_request(
+        pack_dir, text_language=state.get("language"), role_id=voice_name
+    )
+    ready, reason = _engine_ready(
+        pack_dir, languages=languages, verify_runtime=True
+    )
+    if not ready:
+        raise TTSException(reason)
     manager = _get_manager(pack_dir, data_dir)
     return manager.preload(voice_name)
 

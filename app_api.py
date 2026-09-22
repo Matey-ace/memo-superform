@@ -753,17 +753,25 @@ class LocalApiMixin:
         name = (query.get("name") or [""])[0]
         batch_id = (query.get("batch") or [""])[0]
         length = self._safe_content_length()
-        data = self.rfile.read(length) if length > 0 else b""
+        if length > tts.TTS_ROLE_UPLOAD_MAX_BYTES:
+            return self._send_json(413, {
+                "error": "角色资料文件超过允许大小，请使用完整语音包 ZIP 原生导入",
+                "max_bytes": tts.TTS_ROLE_UPLOAD_MAX_BYTES,
+            })
         try:
             if batch_id:
-                staged = tts.stage_role_file(TTS_PACK_DIR, parts[3], batch_id, kind, name, data)
+                staged = tts.stage_role_file_stream(
+                    TTS_PACK_DIR, parts[3], batch_id, kind, name, self.rfile, length
+                )
                 return self._send_json(200, {"ok": True, "staged": staged})
             active_id = tts.list_roles(TTS_PACK_DIR).get("active_role_id") or ""
             if parts[3] == active_id:
                 return self._send_json(409, {
                     "error": "当前已启用角色必须通过一次性角色更新保存，避免模型与参考资料半更新",
                 })
-            role = tts.upload_role_file(TTS_PACK_DIR, parts[3], kind, name, data)
+            role = tts.upload_role_file_stream(
+                TTS_PACK_DIR, parts[3], kind, name, self.rfile, length
+            )
             return self._send_json(200, {"ok": True, "role": role})
         except tts.TTSException as exc:
             return self._send_json(400, {"error": str(exc)})
