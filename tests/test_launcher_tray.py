@@ -16,6 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import launcher  # noqa: E402
+from build_info import BUILD_VERSION  # noqa: E402
 
 
 class LauncherTrayContracts(unittest.TestCase):
@@ -177,15 +178,17 @@ class LauncherTrayContracts(unittest.TestCase):
         self.assertIn("'webview.dom'", spec)
         self.assertIn("'webview.dom.element'", spec)
 
-    def test_v085_uses_a_build_scoped_broker_instead_of_the_old_8891_port(self):
-        # A new executable must not activate an older v0.76 process and exit.
+    def test_build_uses_a_scoped_broker_instead_of_the_old_8891_port(self):
+        # A new executable must not activate an older process and exit.
         # Explicit MEMO_INSTANCE_PORT remains an opt-in operator override, so
         # remove it only for this default-release contract.
         environment = dict(os.environ)
         environment.pop("MEMO_INSTANCE_PORT", None)
         with mock.patch.dict(os.environ, environment, clear=True):
-            self.assertEqual(launcher.BUILD_VERSION, "0.85")
-            self.assertEqual(launcher._instance_port(), 15185)
+            self.assertEqual(launcher.BUILD_VERSION, BUILD_VERSION)
+            major, minor = (int(item) for item in BUILD_VERSION.split(".", 1))
+            expected_port = 15100 + ((major * 100 + minor) % 800)
+            self.assertEqual(launcher._instance_port(), expected_port)
             self.assertNotEqual(launcher._instance_port(), 8891)
 
 
