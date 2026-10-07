@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-07",
+  "candidate_version": "0.88",
+  "status": "hardening-candidate",
+  "baseline_commit": "354e5bf",
+  "baseline_merge_commit": "f819478",
+  "regression": {
+    "python_tests": 181,
+    "javascript_suites": 16,
+    "edge_browser_suites": 2,
+    "publication_guards": "passed",
+    "compile_and_diff_check": "passed"
+  },
+  "windows_build": {
+    "python": "3.13.12",
+    "pyinstaller": "6.20.0",
+    "pywebview": "6.2.1",
+    "bytes": 97979266,
+    "sha256": "3b48a4329ed048a9c4a78799b8db22ccf60bf04dc538b20b2294d7b980a3855b",
+    "isolated_unicode_space_path_report": {
+      "version": "0.88",
+      "frozen": true,
+      "passed": true,
+      "checks": [
+        "sqlite-initialization",
+        "import:webview",
+        "import:webview.dom",
+        "import:webview.platforms.winforms",
+        "import:webview.platforms.edgechromium",
+        "import:windows_tray",
+        "http:/",
+        "http:/index-anon.html",
+        "http:/js/api.js",
+        "http:/js/study-content-editor.js",
+        "http:/css/style.css",
+        "http:/css/diary.css",
+        "http:/vendor/echarts.min.js",
+        "http:/img/icon.ico",
+        "http:/api/maimemo-auth/status",
+        "sqlite-online-backup"
+      ]
+    }
+  },
+  "gpt_sovits": {
+    "dependency_check_languages": [
+      "zh",
+      "ja"
+    ],
+    "torch": "2.7.1+cu128",
+    "cuda": "12.8",
+    "cuda_available": true,
+    "actual_synthesis_language": "zh",
+    "generated_audio_bytes": 201004,
+    "audio_storage": "temporary; removed after worker shutdown"
+  },
+  "remaining_acceptance": [
+    "independent Windows user/computer and desktop GUI/tray",
+    "real cloud authorization, cross-account and content CRUD permissions",
+    "valid Cubism 2/3 GPU rendering and WebGL context recovery",
+    "another GPT-SoVITS pack, CPU, actual Japanese audio and role-switch concurrency",
+    "real EXE in-place upgrade, rollback and file occupation",
+    "visual scale/narrow-screen/touch/reduced-motion checks",
+    "large word library and sustained performance/resource measurements"
+  ],
+  "published_latest": false,
+  "fix_commits": [
+    "24b6354",
+    "7f6748a",
+    "f6589f3",
+    "b9c0836",
+    "7a14718"
+  ]
+}
