@@ -68,7 +68,8 @@
 |E03 / R06|建立/结束同步运行记录时数据库失败使后台线程无终态；管理器兜底 failed/needs_reconcile|线程初始化错误终态回归|
 |E04 / R16|路径校验未区分新安装目标尚未存在；不存在不是链接，存在的链接仍拒绝|新模型首次导入、回滚、链接拒绝测试|
 |E05 / R14|预加载的 HTML/空对象被当成功，停止后旧预加载仍标 warm；明确 ok:true，绑定播放和状态代次|非 JSON、空对象、延迟成功后停止的实际客户端回归|
-|E06 / C36|真实 GitHub 未打标签草稿按标签查询返回 404；查询授权发布列表并检查分页，避免重复建草稿|实际草稿 ID 405925333 检出；列表错误、重复草稿、跨页固定样本通过|
+|E06 / C36|真实 GitHub 未打标签草稿按标签查询返回 404；授权列表/分页/重复检查；更新明确保留版本及源码身份，草稿 URL 可变化|实际草稿 ID 405925333 检出；列表错误、重复草稿、跨页固定样本通过；资产摘要保持一致|
+|E07 / R19|发布辅助脚本 UTF-8 无 BOM 被 Windows PowerShell 5.1 误读；保留 BOM，自动入口追加自带 PowerShell 回归|PowerShell 7 与 Windows PowerShell 5.1 的发布保护和语法检查均通过|
 
 ## 风险验证矩阵
 
@@ -117,7 +118,7 @@
 - 冻结包：`MemoSuperform.exe --verify-build <report.json>`。只在报告同级创建临时数据目录、随机本机端口；验证两种入口页面、静态资源、桌面动态依赖、SQLite 初始化与在线备份；不注册 OAuth 协议、不打开窗口、不读实际账号、不请求云端。此检查不代替真实 WebView/托盘/更新全流程。
 - 实际 GPT-SoVITS：当前独立语音环境 torch 2.7.1+cu128、CUDA 12.8；中/日依赖检查通过，真实中文合成生成 201004 字节音频；临时音频清理、worker 退出，未改变启用开关和角色绑定。
 - 本地详细日志与包验收报告在忽略目录 `_verification/` 和 `quality-test-output.txt`；可提交的证据摘要见 [quality-runtime.json](quality-runtime.json)。
-- GitHub [草稿 PR #6](https://github.com/Matey-ace/memo-superform/pull/6) 已推送；[0.88 候选草稿](https://github.com/Matey-ace/memo-superform/releases/tag/untagged-18f02c88e3be2e5d615a) 已上传 `MemoSuperform-v0.88.exe`，97979862 字节，远端 SHA-256 与本地一致：`0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5`。草稿仅对有权限的仓库用户可见。
+- GitHub [草稿 PR #6](https://github.com/Matey-ace/memo-superform/pull/6) 已推送；[0.88 候选草稿](https://github.com/Matey-ace/memo-superform/releases/tag/untagged-d1cad2a53af6d4fd7214) 已上传 `MemoSuperform-v0.88.exe`，97979862 字节，远端 SHA-256 与本地一致：`0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5`。草稿仅对有权限的仓库用户可见。
 - 本轮没有通过真实墨墨账号执行内容写入，没有将候选标为 GitHub Latest。下一阶段先完成表中真实运行边界，再冻结参赛发布。
 
 ## 审查流程依据

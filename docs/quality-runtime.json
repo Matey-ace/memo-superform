@@ -92,16 +92,21 @@
     ]
   },
   "github_candidate": {
-    "url": "https://github.com/Matey-ace/memo-superform/releases/tag/untagged-18f02c88e3be2e5d615a",
+    "url": "https://github.com/Matey-ace/memo-superform/releases/tag/untagged-d1cad2a53af6d4fd7214",
     "release_id": 405925333,
     "draft": true,
     "asset": "MemoSuperform-v0.88.exe",
     "bytes": 97979862,
-    "sha256": "0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5"
+    "sha256": "0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5",
+    "source_commit": "30b38ff4ff757ec0853a29bdfda63fd536fd3559"
   },
   "publication_draft_guard": {
     "live_release_id": 405925333,
     "authenticated_list_fallback": "passed",
-    "pagination_and_duplicate_guards": "passed"
+    "pagination_and_duplicate_guards": "passed",
+    "powershell_hosts": [
+      "PowerShell 7",
+      "Windows PowerShell 5.1"
+    ]
   }
 }
