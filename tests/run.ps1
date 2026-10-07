@@ -29,6 +29,7 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 if ($Browser) {
     & node tests/browser/study-keyboard.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & node tests/browser/quality-hardening.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & node tests/browser/dashboard-smoke.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 & python -m compileall -q @((Get-ChildItem -File *.py).FullName); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & python -m unittest discover -s tests -p "test_*.py" -v; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
