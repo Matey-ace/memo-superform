@@ -2,7 +2,7 @@
   "name": "memo-superform-regression",
   "private": true,
   "scripts": {
-    "test:browser": "node tests/browser/study-keyboard.js && node tests/browser/quality-hardening.js"
+    "test:browser": "node tests/browser/study-keyboard.js && node tests/browser/quality-hardening.js && node tests/browser/dashboard-smoke.js"
   },
   "devDependencies": {
     "playwright": "1.62.1"

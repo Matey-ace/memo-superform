@@ -7,7 +7,7 @@
   "regression": {
     "python_tests": 181,
     "javascript_suites": 16,
-    "edge_browser_suites": 2,
+    "edge_browser_suites": 3,
     "publication_guards": "passed",
     "compile_and_diff_check": "passed"
   },
@@ -15,8 +15,8 @@
     "python": "3.13.12",
     "pyinstaller": "6.20.0",
     "pywebview": "6.2.1",
-    "bytes": 97979266,
-    "sha256": "3b48a4329ed048a9c4a78799b8db22ccf60bf04dc538b20b2294d7b980a3855b",
+    "bytes": 97979862,
+    "sha256": "0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5",
     "isolated_unicode_space_path_report": {
       "version": "0.88",
       "frozen": true,
@@ -68,6 +68,26 @@
     "7f6748a",
     "f6589f3",
     "b9c0836",
-    "7a14718"
-  ]
+    "7a14718",
+    "4e651c5"
+  ],
+  "dashboard_smoke": {
+    "actual_local_backend": true,
+    "css_zoom_scenarios": 36,
+    "themes": [
+      "standard-light",
+      "standard-dark",
+      "notebook-light"
+    ],
+    "settings_focus": "passed",
+    "cloud_routes": "offline fixtures"
+  },
+  "independent_windows_ci": {
+    "commit": "102233b",
+    "conclusion": "success",
+    "runs": [
+      "https://github.com/Matey-ace/memo-superform/actions/runs/37646410182",
+      "https://github.com/Matey-ace/memo-superform/actions/runs/37646270138"
+    ]
+  }
 }
