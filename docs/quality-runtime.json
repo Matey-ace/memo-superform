@@ -70,7 +70,8 @@
     "b9c0836",
     "7a14718",
     "4e651c5",
-    "4c1931b"
+    "4c1931b",
+    "1735125"
   ],
   "dashboard_smoke": {
     "actual_local_backend": true,
@@ -92,13 +93,13 @@
     ]
   },
   "github_candidate": {
-    "url": "https://github.com/Matey-ace/memo-superform/releases/tag/untagged-d1cad2a53af6d4fd7214",
+    "url": "https://github.com/Matey-ace/memo-superform/releases",
     "release_id": 405925333,
     "draft": true,
     "asset": "MemoSuperform-v0.88.exe",
     "bytes": 97979862,
     "sha256": "0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5",
-    "source_commit": "30b38ff4ff757ec0853a29bdfda63fd536fd3559"
+    "artifact_source_commit": "08ace64"
   },
   "publication_draft_guard": {
     "live_release_id": 405925333,

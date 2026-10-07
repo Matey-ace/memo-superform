@@ -7,7 +7,7 @@
 - 起点：`354e5bf`，0.85，`codex/openai-codex-oauth`。
 - 工作分支：`codex/full-quality-hardening`。
 - `f819478` 合并 `codex/frontend-audit-fixes` 的 `413e3af`：整合 0.86 内容编辑、0.87 登录代理修复，保留原分支的单实例分段通信处理。
-- 修复提交：`24b6354`（账号/代理/同步）、`7f6748a`（资源事务）、`f6589f3`（前端）、`b9c0836`（更新/构建/发布）、`7a14718`（测试数据隔离）、`4e651c5`（实际仪表盘入口验收）、`4c1931b`（未发布草稿识别）。
+- 修复提交：`24b6354`（账号/代理/同步）、`7f6748a`（资源事务）、`f6589f3`（前端）、`b9c0836`（更新/构建/发布）、`7a14718`（测试数据隔离）、`4e651c5`（实际仪表盘入口验收）、`4c1931b`（未发布草稿识别）、`1735125`（版本身份保留、跨页重复检查及 Windows PowerShell 兼容）。
 - 本轮版本标识：0.88。C 类故障路径已实现修复；下表区分自动验证与真实运行边界。
 - 完成自动回归和本机冻结包检查，实际 GPT-SoVITS 合成通过。独立 Windows GUI、真实云端写权限、完整模型 GPU 渲染和长时间运行尚待验收，当前包是整顿候选，尚未达到计划中的参赛冻结条件。
 - 逐文件范围见 [quality-coverage.csv](quality-coverage.csv)。对只审查重点故障路径的文件标记“部分审查”；执行测试不等同逐行审查第三方代码。
@@ -118,7 +118,7 @@
 - 冻结包：`MemoSuperform.exe --verify-build <report.json>`。只在报告同级创建临时数据目录、随机本机端口；验证两种入口页面、静态资源、桌面动态依赖、SQLite 初始化与在线备份；不注册 OAuth 协议、不打开窗口、不读实际账号、不请求云端。此检查不代替真实 WebView/托盘/更新全流程。
 - 实际 GPT-SoVITS：当前独立语音环境 torch 2.7.1+cu128、CUDA 12.8；中/日依赖检查通过，真实中文合成生成 201004 字节音频；临时音频清理、worker 退出，未改变启用开关和角色绑定。
 - 本地详细日志与包验收报告在忽略目录 `_verification/` 和 `quality-test-output.txt`；可提交的证据摘要见 [quality-runtime.json](quality-runtime.json)。
-- GitHub [草稿 PR #6](https://github.com/Matey-ace/memo-superform/pull/6) 已推送；[0.88 候选草稿](https://github.com/Matey-ace/memo-superform/releases/tag/untagged-d1cad2a53af6d4fd7214) 已上传 `MemoSuperform-v0.88.exe`，97979862 字节，远端 SHA-256 与本地一致：`0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5`。草稿仅对有权限的仓库用户可见。
+- GitHub [草稿 PR #6](https://github.com/Matey-ace/memo-superform/pull/6) 已推送；[0.88 候选草稿列表](https://github.com/Matey-ace/memo-superform/releases) 已上传 `MemoSuperform-v0.88.exe`，97979862 字节，远端 SHA-256 与本地一致：`0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5`。草稿仅对有权限的仓库用户可见，Release ID 405925333；GitHub 在修改草稿时可能重新生成临时 URL，因此长期入口使用发布列表。
 - 本轮没有通过真实墨墨账号执行内容写入，没有将候选标为 GitHub Latest。下一阶段先完成表中真实运行边界，再冻结参赛发布。
 
 ## 审查流程依据

@@ -33,8 +33,8 @@ db.py,部分审查,重点故障路径、生命周期和相应差异已检查；�
 diagnostics.py,已审查,本轮阅读或新增的完整小文件；详见问题总账,927,10321ca1b5c2c7c6ea6b4efe5be3da220cbe6a7f65a8e18a2bc05f78751c062a
 docs/maimemo-open-platform-submission.md,已审查,本轮阅读或新增的完整小文件；详见问题总账,2084,269cc38c9e39e4c76dab5a8e58bb97e56c364381874ae4a0826afd57b5d333c6
 docs/quality-coverage.csv,已审查,生成的覆盖清单；摘要留空避免自引用,,
-docs/quality-hardening.md,已审查,本轮阅读或新增的完整小文件；详见问题总账,17582,1404780ef3947e64d18727c97099be34c250772c15a78d6de81a561818a65a9b
-docs/quality-runtime.json,已审查,本轮阅读或新增的完整小文件；详见问题总账,3491,eed68c69abf1a65f878be0db00f3fa35de46980e987935c844258e923d555620
+docs/quality-hardening.md,已审查,本轮阅读或新增的完整小文件；详见问题总账,17758,389f3e5c13f003f468f5151416eb761c2a3a1d1cc542af44a50a5fed9c82d07b
+docs/quality-runtime.json,已审查,本轮阅读或新增的完整小文件；详见问题总账,3449,90b6ab3da630d4f996e86dfda2e8a0373ef75bc319889f82442bdfd707531671
 fonts/OFL-1.1.txt,排除,第三方组件/字体/素材；记录资源摘要，未逐行审查，声明与运行另验,4537,443d13fb1a485867db69c43b6fcaff374792e3004b81e40000b57c866a800886
 fonts/mplusrounded1c-400-0996b3ab8b.woff2,排除,第三方组件/字体/素材；记录资源摘要，未逐行审查，声明与运行另验,12152,4c9821281b820cf43120f7d19076adb6efee9b2222fdf3724821ff3d30d75efb
 fonts/mplusrounded1c-400-09db3008e6.woff2,排除,第三方组件/字体/素材；记录资源摘要，未逐行审查，声明与运行另验,13392,c5d443177f5ce55b52563a40556ef86ddc19061a1dfadd19b44aa9a5b96a6d21
