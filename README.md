@@ -99,7 +99,7 @@ Windows 版运行后会在系统托盘保留状态图标。网页模式关闭浏
 - 旧用户可展开「高级连接方式」填入手动 API Token。首次打开新版本时，旧版 localStorage Token 会自动迁入本机加密凭据并从浏览器删除。
 - 「断开连接」只删除授权；「删除本机墨墨学习数据」会单独清除当前档案的学习记录、同步状态和派生统计，不影响墨墨云端数据。
 
-OAuth 审核主页、回调页和隐私说明位于 [GitHub Pages](https://matey-ace.github.io/memo-superform/)。正式 Windows 发布包已内置获批的公开 `client_id`，用户无需配置它；开发/测试时可用 `MEMO_MAIMEMO_CLIENT_ID` 临时覆盖。该值不是 secret，应用不会保存 `client_secret`。当前授权请求会包含 `openid profile offline_access open.memo.study open.memo.content`；虽然平台已批准 study/content 的读写 scope，本版本的本机代理仍只放行学习进度、今日条目、学习记录和云词本的读取接口。
+ OAuth 审核主页、回调页和隐私说明位于 [GitHub Pages](https://matey-ace.github.io/memo-superform/)。正式 Windows 发布包已内置获批的公开 `client_id`，用户无需配置它；开发/测试时可用 `MEMO_MAIMEMO_CLIENT_ID` 临时覆盖。该值不是 secret，应用不会保存 `client_secret`。当前授权请求会包含 `openid profile offline_access open.memo.study open.memo.content`；本机代理只放行产品实际使用的学习/词本读取接口，以及用户在单词详情中主动触发的释义、助记读取和云端写入。
 
 > SQLite 主库会在 `data/memo-superform.db` 自动建立，无需安装数据库。已有 SQL Server 数据库只会通过可选的只读迁移器导入，原库不会被修改。
 
@@ -174,6 +174,17 @@ memo-superform/
 - GET /api/v1/memo/notepads - 查询云词本列表
 - GET /api/v1/memo/notepads/{id} - 获取云词本详情
 - POST /api/v1/memo/study/get_study_progress - 获取今日进度
+- GET /api/v1/memo/vocabulary?spelling={word} - 解析单词 ID
+- GET /api/v1/memo/interpretations?voc_id={id} - 查询公开释义
+- POST /api/v1/memo/interpretations - 创建个人释义
+- POST /api/v1/memo/interpretations/{id} - 更新个人释义
+- DELETE /api/v1/memo/interpretations/{id} - 删除个人释义
+- GET /api/v1/memo/notes?voc_id={id} - 查询公开助记
+- POST /api/v1/memo/notes - 创建个人助记
+- POST /api/v1/memo/notes/{id} - 更新个人助记
+- DELETE /api/v1/memo/notes/{id} - 删除个人助记
+
+背词页的单词详情会展示墨墨公开的释义和助记。当前账号创建的内容可以在网页端编辑或删除；其他用户的内容保持只读，可以复制成自己的版本后保存。写入操作需要 OAuth 的 `open.memo.content` 权限，并会直接同步到墨墨云端。
 
 本地推荐 API（由 server.py 提供）：
 - GET /api/recommendations/today - 获取当日推荐

@@ -4,15 +4,18 @@ const assert = require('assert');
 const vm = require('vm');
 const read = p => fs.readFileSync(p, 'utf8');
 const index = read('index.html');
-const files = ['js/ui-style.js','js/api.js','js/tts.js','js/dashboard-core.js','js/charts.js','js/layout.js','js/study-shortcuts.js','js/study-lifecycle.js','js/study-web.js','js/live2d-companion.js','js/study-sync-ui.js','js/app-update.js','js/app.js'];
+const files = ['js/ui-style.js','js/api.js','js/tts.js','js/dashboard-core.js','js/charts.js','js/layout.js','js/study-shortcuts.js','js/study-lifecycle.js','js/study-content-editor.js','js/study-web.js','js/live2d-companion.js','js/study-sync-ui.js','js/app-update.js','js/app.js'];
 for (const file of files) assert(index.includes(file), `missing script load: ${file}`);
 const study = read('js/study-shortcuts.js');
 const actions = ['FAMILIAR','VAGUE','FORGET','WELL_FAMILIAR','START_SPELLING','SHOW_ANSWER','PREVIOUS_WORD','EXIT_SPELLING','CLEAR_INPUT','PLAY_AUDIO','TTS_PHRASE_1','TTS_PHRASE_2','TTS_PHRASE_3','SEARCH'];
 for (const action of actions) assert(study.includes(action), `missing shortcut ${action}`);
 assert.strictEqual(new Set(actions).size, 14);
-const globals = {App:'js/app.js',MaimemoAPI:'js/api.js',AIAPI:'js/api.js',RecommendAPI:'js/api.js',ChartManager:'js/charts.js',LayoutManager:'js/layout.js',StudyWeb:'js/study-web.js',TTS:'js/tts.js',MemoUIStyle:'js/ui-style.js'};
+const globals = {App:'js/app.js',MaimemoAPI:'js/api.js',AIAPI:'js/api.js',RecommendAPI:'js/api.js',ChartManager:'js/charts.js',LayoutManager:'js/layout.js',StudyWeb:'js/study-web.js',StudyContentEditor:'js/study-content-editor.js',TTS:'js/tts.js',MemoUIStyle:'js/ui-style.js'};
 for (const [name,file] of Object.entries(globals)) assert(new RegExp(`(?:const|var)\\s+${name}\\s*=`).test(read(file)) || read(file).includes(`window.${name} =`), `missing global ${name}`);
 const api = read('js/api.js');
+for (const contract of ['getVocabulary', 'listInterpretations', 'listNotes', 'createInterpretation', 'updateInterpretation', 'deleteInterpretation', 'createNote', 'updateNote', 'deleteNote']) {
+  assert(api.includes(contract), `missing content API method ${contract}`);
+}
 assert(!api.includes('fetchByOffset'), 'unsupported study-record offset pagination returned');
 assert(!api.includes('catchAll'), 'unfiltered full-fetch fallback returned');
 assert(!api.includes("['2020-01-01T00:00:00'"), 'ordinary frontend still hard-codes old history ranges');
@@ -25,11 +28,18 @@ assert(syncUI.includes('完整核验'), 'missing manual reconciliation confirmat
 assert(syncUI.includes("sync('incremental'"), 'normal refresh is not incremental');
 assert(syncUI.includes('sessionGeneration'), 'profile resets must invalidate in-flight sync responses');
 const studyWeb = read('js/study-web.js');
+const contentEditor = read('js/study-content-editor.js');
+assert(index.includes('js/study-content-editor.js'), 'missing study content editor script');
+assert(studyWeb.includes('StudyContentEditor.mount'), 'study page does not mount content editor');
+for (const contract of ['data-editor-action', '复制到我的内容', '保存到墨墨', '正在从墨墨读取公开内容']) {
+  assert(contentEditor.includes(contract), `missing content editor contract ${contract}`);
+}
 assert(studyWeb.includes('hasAddWordOverlay'), 'missing add-word overlay detector');
 assert(studyWeb.includes('studyAddWordOverlayOpen'), 'missing add-word overlay state');
 assert(studyWeb.includes("actions.classList.toggle('is-add-word-overlay'"), 'actions are not hidden for add-word overlay');
 const studyCss = read('css/study-web.css') + read('css/study-web-standard.css') + read('css/study-web-notebook.css');
 assert(studyCss.includes('.study-web-actions.is-add-word-overlay'), 'missing add-word overlay hide style');
+assert(studyCss.includes('.study-content-editor'), 'missing study content editor styles');
 const layout = read('js/layout.js');
 assert(!layout.includes('iframe.cloneNode(true)'), 'fullscreen study mode must keep the original iframe session');
 assert(layout.includes('study-web-fullscreen-placeholder'), 'fullscreen study mode must restore its original position');

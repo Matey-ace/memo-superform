@@ -85,6 +85,7 @@ const MaimemoAPI = (function() {
     // 供尚未迁移的角色/Live2D 代码检测使用；始终为空，避免浏览器侧重新泄漏 token。
     function getToken() { return ''; }
     function hasToken() { return Boolean(connection.connected); }
+    function connectionStatus() { return Object.assign({}, connection); }
     
     function getCache(key) {
         try {
@@ -120,6 +121,18 @@ const MaimemoAPI = (function() {
         keys.forEach(k => localStorage.removeItem(k));
         return keys.length;
     }
+
+    function invalidateCacheEntries(match) {
+        const keys = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && match(key)) keys.push(key);
+            }
+            keys.forEach(function(key) { localStorage.removeItem(key); });
+        } catch (e) {}
+        return keys.length;
+    }
     
     async function request(path, options = {}) {
         if (!connection.connected) throw new Error('请先连接墨墨账号');
@@ -135,7 +148,7 @@ const MaimemoAPI = (function() {
         };
         
         const response = await fetch(url, config);
-        const json = await response.json();
+        const json = await response.json().catch(function() { return {}; });
         
         if (!response.ok || json.success === false) {
             let errMsg = 'API 错误: ' + response.status;
@@ -144,7 +157,17 @@ const MaimemoAPI = (function() {
                 if (json.errors[0].info) errMsg += ' (' + json.errors[0].info + ')';
             }
             if (json.error) errMsg = json.error;
-            throw new Error(errMsg);
+            if (response.status === 401) {
+                errMsg = '墨墨授权已失效，请重新连接账号';
+            } else if (response.status === 403) {
+                errMsg = '墨墨账号没有内容写权限，请重新授权或复制为我的内容';
+            } else if (response.status === 429) {
+                errMsg = '墨墨请求过于频繁，请稍后再试';
+            }
+            const error = new Error(errMsg);
+            error.status = response.status;
+            error.payload = json;
+            throw error;
         }
         
         return json.data !== undefined ? json.data : json;
@@ -333,6 +356,127 @@ const MaimemoAPI = (function() {
         if (useCache) setCache(cacheKey, data);
         return data;
     }
+
+    // ---- 单词内容接口（释义 / 助记） ----
+    // 内容接口由墨墨云端维护。浏览器端只发送内容本身，访问令牌仍由本机
+    // 代理从 DPAPI 凭据库注入，避免把 token 暴露给 iframe 或 localStorage。
+    async function getVocabulary(spelling, useCache = true) {
+        const normalized = String(spelling || '').trim();
+        if (!normalized) throw new Error('请输入单词');
+        const cacheKey = 'vocabulary_' + cacheScope() + '_' + normalized.toLowerCase();
+        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
+        const data = await request('/vocabulary?spelling=' + encodeURIComponent(normalized));
+        if (useCache) setCache(cacheKey, data);
+        return data;
+    }
+
+    async function listInterpretations(vocId, useCache = true) {
+        const id = String(vocId || '').trim();
+        if (!id) throw new Error('缺少单词 ID');
+        const cacheKey = 'interpretations_' + cacheScope() + '_' + id;
+        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
+        const data = await request('/interpretations?voc_id=' + encodeURIComponent(id));
+        if (useCache) setCache(cacheKey, data);
+        return data;
+    }
+
+    async function listNotes(vocId, useCache = true) {
+        const id = String(vocId || '').trim();
+        if (!id) throw new Error('缺少单词 ID');
+        const cacheKey = 'notes_' + cacheScope() + '_' + id;
+        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
+        const data = await request('/notes?voc_id=' + encodeURIComponent(id));
+        if (useCache) setCache(cacheKey, data);
+        return data;
+    }
+
+    function invalidateWordContentCache(vocId) {
+        const id = String(vocId || '').trim();
+        invalidateCacheEntries(function(key) {
+            return key.indexOf(CACHE_PREFIX + 'interpretations_' + cacheScope() + '_' + id) === 0 ||
+                key.indexOf(CACHE_PREFIX + 'notes_' + cacheScope() + '_' + id) === 0;
+        });
+    }
+
+    function invalidateContentCaches(kind) {
+        const prefix = CACHE_PREFIX + String(kind || '') + '_' + cacheScope() + '_';
+        invalidateCacheEntries(function(key) { return key.indexOf(prefix) === 0; });
+    }
+
+    async function createInterpretation(vocId, interpretation, tags) {
+        const id = String(vocId || '').trim();
+        const text = String(interpretation || '').trim();
+        if (!id || !text) throw new Error('释义不能为空');
+        const data = await request('/interpretations', {
+            method: 'POST',
+            body: { interpretation: {
+                voc_id: id,
+                interpretation: text,
+                tags: Array.isArray(tags) ? tags : [],
+                status: 'PUBLISHED'
+            } }
+        });
+        invalidateWordContentCache(id);
+        return data;
+    }
+
+    async function updateInterpretation(contentId, interpretation, tags) {
+        const id = String(contentId || '').trim();
+        const text = String(interpretation || '').trim();
+        if (!id || !text) throw new Error('释义不能为空');
+        const data = await request('/interpretations/' + encodeURIComponent(id), {
+            method: 'POST',
+            body: { interpretation: {
+                interpretation: text,
+                tags: Array.isArray(tags) ? tags : [],
+                status: 'PUBLISHED'
+            } }
+        });
+        invalidateContentCaches('interpretations');
+        return data;
+    }
+
+    async function deleteInterpretation(contentId) {
+        const id = String(contentId || '').trim();
+        if (!id) throw new Error('缺少释义 ID');
+        const data = await request('/interpretations/' + encodeURIComponent(id), { method: 'DELETE' });
+        invalidateContentCaches('interpretations');
+        return data;
+    }
+
+    async function createNote(vocId, noteType, note) {
+        const id = String(vocId || '').trim();
+        const type = String(noteType || '').trim();
+        const text = String(note || '').trim();
+        if (!id || !type || !text) throw new Error('助记类型和内容不能为空');
+        const data = await request('/notes', {
+            method: 'POST',
+            body: { note: { voc_id: id, note_type: type, note: text } }
+        });
+        invalidateWordContentCache(id);
+        return data;
+    }
+
+    async function updateNote(contentId, noteType, note) {
+        const id = String(contentId || '').trim();
+        const type = String(noteType || '').trim();
+        const text = String(note || '').trim();
+        if (!id || !type || !text) throw new Error('助记类型和内容不能为空');
+        const data = await request('/notes/' + encodeURIComponent(id), {
+            method: 'POST',
+            body: { note: { note_type: type, note: text } }
+        });
+        invalidateContentCaches('notes');
+        return data;
+    }
+
+    async function deleteNote(contentId) {
+        const id = String(contentId || '').trim();
+        if (!id) throw new Error('缺少助记 ID');
+        const data = await request('/notes/' + encodeURIComponent(id), { method: 'DELETE' });
+        invalidateContentCaches('notes');
+        return data;
+    }
     
     async function getAllNotepadWords(useCache = true) {
         const cacheKey = 'all_notepad_words_' + cacheScope();
@@ -378,11 +522,14 @@ const MaimemoAPI = (function() {
     
     return {
         bootstrap, refreshConnection, connect, saveManualToken, disconnect, deleteLocalData,
-        getToken, hasToken, clearCache,
+        getToken, hasToken, connectionStatus, clearCache,
         getStudyProgress, queryStudyRecords, getAllStudyRecords,
         startStudySync, getStudySyncStatus, cancelStudySync,
         getWordsFromStudyRecords,
         listNotepads, listAllNotepads, getNotepad, getAllNotepadWords,
+        getVocabulary, listInterpretations, listNotes,
+        createInterpretation, updateInterpretation, deleteInterpretation,
+        createNote, updateNote, deleteNote,
         testToken
     };
 })();

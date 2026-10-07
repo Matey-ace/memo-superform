@@ -9,6 +9,32 @@ body.notebook-mode .study-web-actions {
     backdrop-filter:blur(7px);
     transition:opacity .18s ease,transform .28s cubic-bezier(.22,1,.36,1),visibility 0s linear .28s;
 }
+
+body.notebook-mode .study-content-edit-trigger {
+    border-color:#e8cfc6; border-radius:6px 11px 7px 5px;
+    background:rgba(255,253,249,.96); color:#7a6650;
+    box-shadow:0 4px 12px rgba(139,115,85,.18);
+    font-family:'M PLUS Rounded 1c','Microsoft YaHei',sans-serif;
+}
+body.notebook-mode .study-content-editor {
+    border-color:#f0dfd9; border-radius:15px 8px 16px 10px;
+    background:linear-gradient(90deg,rgba(255,183,197,.18) 0 8px,transparent 8px),repeating-linear-gradient(0deg,transparent 0 25px,rgba(122,102,80,.055) 25px 26px),rgba(255,253,254,.98);
+    color:#4a3728; font-family:'Noto Sans SC','Microsoft YaHei',sans-serif;
+    box-shadow:0 10px 32px rgba(139,115,85,.22);
+}
+body.notebook-mode .study-content-editor-word,
+body.notebook-mode .study-content-card-meta,
+body.notebook-mode .study-content-form label,
+body.notebook-mode .study-content-empty,
+body.notebook-mode .study-content-loading { color:#a89880; }
+body.notebook-mode .study-content-group + .study-content-group { border-color:#f0dfd9; }
+body.notebook-mode .study-content-card { border-color:#e8cfc6; border-radius:5px 9px 6px 4px; background:rgba(255,253,249,.82); }
+body.notebook-mode .study-content-card.is-owned { border-color:#b9cdbd; background:rgba(243,251,246,.9); }
+body.notebook-mode .study-content-card.is-readonly { border-color:#e1ca93; background:rgba(255,250,236,.92); }
+body.notebook-mode .study-content-card-text { color:#4a3728; }
+body.notebook-mode .study-content-form input,
+body.notebook-mode .study-content-form textarea { border-color:#e8cfc6; background:rgba(255,255,255,.72); color:#4a3728; }
+body.notebook-mode .study-content-primary { border-radius:999px; background:linear-gradient(135deg,#ff8899,#e8788a); }
 body.notebook-mode .study-web-actions.is-add-word-overlay {
     transform:translateX(-50%) translateY(calc(100% + 84px)) rotate(-.18deg);
 }
