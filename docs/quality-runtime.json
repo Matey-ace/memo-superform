@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-07",
+  "date": "2026-10-08",
   "candidate_version": "0.88",
   "status": "hardening-candidate",
   "baseline_commit": "354e5bf",
@@ -69,7 +69,8 @@
     "f6589f3",
     "b9c0836",
     "7a14718",
-    "4e651c5"
+    "4e651c5",
+    "4c1931b"
   ],
   "dashboard_smoke": {
     "actual_local_backend": true,
@@ -83,11 +84,24 @@
     "cloud_routes": "offline fixtures"
   },
   "independent_windows_ci": {
-    "commit": "102233b",
+    "commit": "08ace64",
     "conclusion": "success",
     "runs": [
-      "https://github.com/Matey-ace/memo-superform/actions/runs/37646410182",
-      "https://github.com/Matey-ace/memo-superform/actions/runs/37646270138"
+      "https://github.com/Matey-ace/memo-superform/actions/runs/37647470307",
+      "https://github.com/Matey-ace/memo-superform/actions/runs/37647463582"
     ]
+  },
+  "github_candidate": {
+    "url": "https://github.com/Matey-ace/memo-superform/releases/tag/untagged-18f02c88e3be2e5d615a",
+    "release_id": 405925333,
+    "draft": true,
+    "asset": "MemoSuperform-v0.88.exe",
+    "bytes": 97979862,
+    "sha256": "0f567594b588ad964762079bd6116665ef394eda49253da938d991beea6692f5"
+  },
+  "publication_draft_guard": {
+    "live_release_id": 405925333,
+    "authenticated_list_fallback": "passed",
+    "pagination_and_duplicate_guards": "passed"
   }
 }
