@@ -11,13 +11,16 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import shutil
+import stat
 import threading
 import time
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -29,6 +32,8 @@ import db
 CATALOG_TTL_SECONDS = 24 * 60 * 60
 MAX_MODEL_BYTES = 500 * 1024 * 1024
 MAX_SINGLE_FILE_BYTES = 64 * 1024 * 1024
+MAX_MODEL_FILES = 10000
+MODEL_DISK_RESERVE_BYTES = 32 * 1024 * 1024
 ASSETS_BASE = "https://bestdori.com/assets/jp"
 ASSETS_INDEX = "https://bestdori.com/api/explorer/jp/assets/_info.json"
 CHARACTERS_INDEX = "https://bestdori.com/api/characters/all.5.json"
@@ -49,6 +54,7 @@ class DownloadJob:
     total: int = 0
     error: str = ""
     model_id: str = ""
+    downloaded_bytes: int = 0
     cancel: threading.Event = field(default_factory=threading.Event)
 
     def snapshot(self) -> dict[str, Any]:
@@ -67,8 +73,94 @@ class Live2DService:
         self.models_root.mkdir(parents=True, exist_ok=True)
         self.partial_root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._catalog_lock = threading.Lock()
         self._active_job: Optional[DownloadJob] = None
         self._jobs: dict[str, DownloadJob] = {}
+        self._recovery_errors = []
+        self._recover_transactions()
+
+    @contextmanager
+    def _transaction_guard(self):
+        # Reuse the application's Windows/POSIX file-lock implementation; the
+        # lock lives outside directories replaced by a model transaction.
+        import tts
+        lock, acquired = tts._acquire_file_lock(str(self.root / ".transactions.lock"))
+        if not acquired:
+            raise Live2DError("模型事务正由另一实例处理，请稍后重试")
+        try:
+            yield
+        finally:
+            tts._release_pack_lock(lock)
+
+    def _journal_path(self, transaction_id):
+        if not re.fullmatch(r"[a-f0-9]{32}", str(transaction_id)):
+            raise Live2DError("模型事务标识无效")
+        return self.partial_root / (".transaction-" + transaction_id + ".json")
+
+    def _write_journal(self, document):
+        path = self._journal_path(document["transaction_id"])
+        temp = path.with_suffix(".tmp")
+        try:
+            with temp.open("w", encoding="utf-8") as stream:
+                json.dump(document, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temp.replace(path)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def _recover_transactions(self):
+        try:
+            with self._transaction_guard():
+                for path in self.partial_root.glob(".transaction-*.json"):
+                    try:
+                        document = json.loads(path.read_text(encoding="utf-8"))
+                        transaction_id = document["transaction_id"]
+                        if path != self._journal_path(transaction_id) or self._is_link(path):
+                            raise Live2DError("模型事务记录无效")
+                        model_id = document["model_id"]
+                        if not _SAFE_ID.fullmatch(str(model_id)):
+                            raise Live2DError("模型事务目标无效")
+                        final = self.models_root / model_id
+                        backup = self.partial_root / (".rollback-" + transaction_id)
+                        if self._is_link(final) or self._is_link(backup):
+                            raise Live2DError("模型事务路径无效")
+                        model = db.get_live2d_model(model_id)
+                        if document["operation"] == "install":
+                            manifest = (model or {}).get("manifest") or {}
+                            if isinstance(manifest, str):
+                                manifest = json.loads(manifest)
+                            committed = manifest.get("install_id") == transaction_id
+                            if committed:
+                                if not final.is_dir():
+                                    raise Live2DError("已提交模型目录缺失，保留恢复记录")
+                                self._remove_private_model_path(backup)
+                            elif backup.exists():
+                                self._remove_private_model_path(final)
+                                backup.replace(final)
+                            elif not document.get("had_previous"):
+                                self._remove_private_model_path(final)
+                        elif document["operation"] == "delete":
+                            if model:
+                                if backup.exists():
+                                    if final.exists():
+                                        raise Live2DError("恢复模型删除时发现路径冲突")
+                                    backup.replace(final)
+                            else:
+                                self._remove_private_model_path(backup)
+                        else:
+                            raise Live2DError("模型事务操作无效")
+                        path.unlink()
+                    except (OSError, ValueError, TypeError, KeyError, Live2DError):
+                        self._recovery_errors.append("模型恢复记录待处理")
+        except Live2DError:
+            # Another live process owns the transaction; its staging files
+            # must remain untouched.
+            pass
+
+    def _assert_recovery_ready(self):
+        if self._recovery_errors:
+            raise Live2DError("模型事务尚有待恢复记录，请检查模型存储后重新启动")
 
     # ---------------- 在线目录 ----------------
     @staticmethod
@@ -152,15 +244,19 @@ class Live2DService:
                 "source": "bestdori-jp", "format": "cubism2",
             })
         payload = {"fetched_at": time.time(), "models": models}
-        temp = self.cache_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temp.replace(self.cache_path)
+        temp = self.cache_path.with_name("catalog-cache-" + uuid.uuid4().hex + ".tmp")
+        try:
+            temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            temp.replace(self.cache_path)
+        finally:
+            temp.unlink(missing_ok=True)
         return payload
 
     def catalog(self, query: str = "", refresh: bool = False) -> dict[str, Any]:
-        payload = None if refresh else self._read_catalog_cache()
-        if payload is None:
-            payload = self._fetch_catalog()
+        with self._catalog_lock:
+            payload = None if refresh else self._read_catalog_cache()
+            if payload is None:
+                payload = self._fetch_catalog()
         text = str(query or "").strip().lower()
         rows = payload.get("models") or []
         if text:
@@ -211,6 +307,8 @@ class Live2DService:
                 length = int(response.headers.get("Content-Length") or 0)
                 if length > MAX_SINGLE_FILE_BYTES:
                     raise Live2DError("单个模型文件过大")
+                if job.downloaded_bytes + length > MAX_MODEL_BYTES:
+                    raise Live2DError("模型超过允许总大小")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 total, tmp = 0, target.with_suffix(target.suffix + ".tmp")
                 with open(tmp, "wb") as out:
@@ -221,8 +319,11 @@ class Live2DService:
                         if not chunk:
                             break
                         total += len(chunk)
-                        if total > MAX_SINGLE_FILE_BYTES:
+                        job.downloaded_bytes += len(chunk)
+                        if total > MAX_SINGLE_FILE_BYTES or job.downloaded_bytes > MAX_MODEL_BYTES:
                             raise Live2DError("单个模型文件过大")
+                        if shutil.disk_usage(self.root).free < len(chunk) + MODEL_DISK_RESERVE_BYTES:
+                            raise Live2DError("模型下载磁盘空间不足")
                         out.write(chunk)
                 tmp.replace(target)
                 job.completed += 1
@@ -264,31 +365,45 @@ class Live2DService:
             raw = json.loads(entry.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise Live2DError("模型描述文件无效: %s" % exc)
+        if not isinstance(raw, dict):
+            raise Live2DError("模型描述文件必须是对象")
         refs: list[str] = []
         if model_format == "cubism3":
             files = raw.get("FileReferences") if isinstance(raw, dict) else None
             if not isinstance(files, dict):
                 raise Live2DError("Cubism 3/4 模型缺少 FileReferences")
-            refs.append(str(files.get("Moc") or ""))
-            refs.extend(str(value) for value in files.get("Textures") or [])
+            primary, textures = files.get("Moc"), files.get("Textures")
+            self._validate_primary_assets(primary, textures)
+            refs.append(primary)
+            refs.extend(textures)
             for key in ("Physics", "Pose", "DisplayInfo", "UserData"):
                 if files.get(key): refs.append(str(files[key]))
-            for item in files.get("Expressions") or []:
+            expressions = files.get("Expressions") or []
+            motions = files.get("Motions") or {}
+            self._validate_groups(expressions, motions)
+            for item in expressions:
                 if isinstance(item, dict) and item.get("File"): refs.append(str(item["File"]))
-            for group in (files.get("Motions") or {}).values():
+            for group in motions.values():
                 for item in group or []:
                     if isinstance(item, dict) and item.get("File"): refs.append(str(item["File"]))
         else:
-            refs.append(str(raw.get("model") or raw.get("Model") or ""))
-            refs.extend(str(value) for value in (raw.get("textures") or raw.get("Textures") or []))
+            if model_format != "cubism2":
+                raise Live2DError("不支持的模型格式")
+            primary = raw.get("model") or raw.get("Model")
+            textures = raw.get("textures") or raw.get("Textures")
+            self._validate_primary_assets(primary, textures)
+            refs.append(primary)
+            refs.extend(textures)
             for key in ("physics", "Physics", "pose"):
                 if raw.get(key): refs.append(str(raw[key]))
             motions = raw.get("motions") or raw.get("Motions") or {}
+            expressions = raw.get("expressions") or raw.get("Expressions") or []
+            self._validate_groups(expressions, motions)
             if isinstance(motions, dict):
                 for group in motions.values():
                     for item in group or []:
                         if isinstance(item, dict) and item.get("file"): refs.append(str(item["file"]))
-            for item in raw.get("expressions") or raw.get("Expressions") or []:
+            for item in expressions:
                 if isinstance(item, dict) and item.get("file"): refs.append(str(item["file"]))
         refs = [self._safe_relative(value) for value in refs if value]
         if len(refs) < 2:
@@ -298,6 +413,20 @@ class Live2DService:
             if root not in target.parents or not target.is_file():
                 raise Live2DError("模型引用文件不存在: " + relative)
         return refs
+
+    @staticmethod
+    def _validate_primary_assets(primary, textures):
+        if not isinstance(primary, str) or not primary.strip():
+            raise Live2DError("模型缺少主文件")
+        if not isinstance(textures, list) or not textures or any(not isinstance(p, str) or not p.strip() for p in textures):
+            raise Live2DError("模型缺少有效贴图列表")
+
+    @staticmethod
+    def _validate_groups(expressions, motions):
+        if not isinstance(expressions, list) or any(not isinstance(item, dict) for item in expressions):
+            raise Live2DError("模型表情列表格式无效")
+        if not isinstance(motions, dict) or any(not isinstance(group, list) or any(not isinstance(item, dict) for item in group) for group in motions.values()):
+            raise Live2DError("模型动作列表格式无效")
 
     def _registration_metadata(self, root: Path, *, model_id: str, source: str, character_id: str,
                                display_name: str, catalog_name: str, entry_file: str,
@@ -322,6 +451,8 @@ class Live2DService:
     @staticmethod
     def _remove_private_model_path(path: Path) -> None:
         """只清理模型安装事务创建的受控私有路径。"""
+        if path.exists() and Live2DService._is_link(path):
+            raise Live2DError("模型事务路径包含链接，保留恢复记录")
         if path.is_symlink() or path.is_file():
             path.unlink(missing_ok=True)
         elif path.exists():
@@ -330,9 +461,18 @@ class Live2DService:
     def _install_staged_model(self, stage: Path, final: Path, **registration: Any) -> dict[str, Any]:
         """原子提交候选模型；文件或数据库提交失败时恢复旧模型。"""
         metadata = self._registration_metadata(stage, **registration)
-        rollback = self.partial_root / (".rollback-" + uuid.uuid4().hex)
+        transaction_id = uuid.uuid4().hex
+        metadata["manifest"]["install_id"] = transaction_id
+        (stage / "memo-live2d.json").write_text(json.dumps(metadata["manifest"], ensure_ascii=False), encoding="utf-8")
+        rollback = self.partial_root / (".rollback-" + transaction_id)
+        journal = self._journal_path(transaction_id)
         promoted = False
-        with self._lock:
+        with self._lock, self._transaction_guard():
+            self._assert_recovery_ready()
+            if self._is_link(final) or self._is_link(rollback):
+                raise Live2DError("模型事务路径无效")
+            self._write_journal({"transaction_id": transaction_id, "operation": "install",
+                                 "model_id": metadata["model_id"], "had_previous": final.exists()})
             try:
                 if final.exists() or final.is_symlink():
                     final.replace(rollback)
@@ -344,10 +484,12 @@ class Live2DService:
                     self._remove_private_model_path(final)
                 if rollback.exists() or rollback.is_symlink():
                     rollback.replace(final)
+                journal.unlink(missing_ok=True)
                 raise
             else:
                 try:
                     self._remove_private_model_path(rollback)
+                    journal.unlink(missing_ok=True)
                 except OSError:
                     # 新模型和数据库已经提交；残留的私有回滚目录不应把成功
                     # 安装伪装成失败，后续维护可安全清理该目录。
@@ -367,9 +509,13 @@ class Live2DService:
             resources += [(part, stage / "data" / "motions" / part["file"], False) for part in build["motions"] if part["file"]]
             resources += [(part, stage / "data" / "expressions" / part["file"], False) for part in build["expressions"] if part["file"]]
             resources = [entry for entry in resources if entry[0].get("bundle") and entry[0].get("file")]
+            if len(resources) > MAX_MODEL_FILES:
+                raise Live2DError("模型文件数量过多")
             job.total = len(resources)
             for part, target, optional in resources:
-                self._download_file(part["bundle"], part["file"], target, job, optional)
+                downloaded = self._download_file(part["bundle"], part["file"], target, job, optional)
+                if optional and not downloaded:
+                    build["physics"] = {"bundle": "", "file": ""}
             if job.cancel.is_set():
                 raise Live2DError("下载已取消")
             descriptor = "memo.model.json"
@@ -427,13 +573,72 @@ class Live2DService:
         return {"ok": False, "status": "unknown"}
 
     # ---------------- 本地导入与资源服务 ----------------
+    @staticmethod
+    def _is_link(path: Path) -> bool:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return False
+        return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 1024))
+
+    def _inspect_import_tree(self, source: Path):
+        files, total, pending = [], 0, [source]
+        while pending:
+            directory = pending.pop()
+            if self._is_link(directory):
+                raise Live2DError("模型目录不支持链接或重解析点")
+            for path in directory.iterdir():
+                if path.name == "__pycache__" or path.name.endswith(".tmp"):
+                    continue
+                if self._is_link(path):
+                    raise Live2DError("模型目录不支持链接或重解析点")
+                if path.is_dir():
+                    pending.append(path)
+                elif path.is_file():
+                    size = path.stat().st_size
+                    total += size
+                    files.append((path, size))
+                    if size > MAX_SINGLE_FILE_BYTES or total > MAX_MODEL_BYTES or len(files) > MAX_MODEL_FILES:
+                        raise Live2DError("导入模型超过文件大小或数量限制")
+                else:
+                    raise Live2DError("模型目录包含不支持的文件")
+        if shutil.disk_usage(self.root).free < total + MODEL_DISK_RESERVE_BYTES:
+            raise Live2DError("导入模型磁盘空间不足")
+        return files
+
+    def _copy_import_tree(self, source: Path, stage: Path, files):
+        stage.mkdir()
+        total = 0
+        for path, _size in files:
+            if self._is_link(path) or source not in path.resolve().parents:
+                raise Live2DError("模型来源在复制期间发生变化")
+            target = stage / path.relative_to(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            written = 0
+            with path.open("rb") as inp, target.open("xb") as out:
+                while True:
+                    chunk = inp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    total += len(chunk)
+                    if written > MAX_SINGLE_FILE_BYTES or total > MAX_MODEL_BYTES:
+                        raise Live2DError("导入模型在复制期间超过大小限制")
+                    if shutil.disk_usage(self.root).free < len(chunk) + MODEL_DISK_RESERVE_BYTES:
+                        raise Live2DError("导入模型磁盘空间不足")
+                    out.write(chunk)
+
     def import_directory(self, source_path: str, profile_id: str) -> dict[str, Any]:
-        source = Path(str(source_path or "")).expanduser().resolve()
+        selected = Path(str(source_path or "")).expanduser()
+        if selected.exists() and self._is_link(selected):
+            raise Live2DError("模型目录不支持链接或重解析点")
+        source = selected.resolve()
         if not source.is_dir():
             raise Live2DError("请选择存在的模型文件夹")
         candidates = sorted(list(source.glob("*.model3.json")) + list(source.glob("*.model.json")) + list(source.glob("model.json")))
         if not candidates:
             raise Live2DError("未找到 .model3.json、.model.json 或 model.json")
+        files = self._inspect_import_tree(source)
         entry = candidates[0]
         model_format = "cubism3" if entry.name.endswith(".model3.json") else "cubism2"
         raw = entry.read_text(encoding="utf-8")
@@ -445,7 +650,7 @@ class Live2DService:
         model_id = "import-" + re.sub(r"[^a-z0-9_-]+", "-", source.name.lower())[:72] + "-" + digest
         stage, final = self.partial_root / ("import-" + uuid.uuid4().hex), self.models_root / model_id
         try:
-            shutil.copytree(source, stage, ignore=shutil.ignore_patterns("*.tmp", "__pycache__"))
+            self._copy_import_tree(source, stage, files)
             if self._directory_size(stage) > MAX_MODEL_BYTES:
                 raise Live2DError("导入模型超过 500 MB")
             relative_entry = entry.relative_to(source).as_posix()
@@ -494,7 +699,8 @@ class Live2DService:
             raise Live2DError("无法核验角色资料包绑定，已阻止删除：%s" % exc) from exc
 
     def delete_model(self, model_id: str) -> bool:
-        with self._lock:
+        with self._lock, self._transaction_guard():
+            self._assert_recovery_ready()
             model = db.get_live2d_model(model_id)
             if not model:
                 return False
@@ -502,11 +708,38 @@ class Live2DService:
             if references:
                 names = "、".join(item["name"] or item["role_id"] for item in references)
                 raise Live2DError("该 Live2D 模型仍被角色绑定：%s；请先在角色管理中更换绑定" % names)
-            target = (self.models_root / str(model["relative_path"])).resolve()
+            original = self.models_root / str(model["relative_path"])
+            if self._is_link(original):
+                raise Live2DError("模型路径无效")
+            target = original.resolve()
             if self.models_root not in target.parents:
                 raise Live2DError("模型路径无效")
-            shutil.rmtree(target, ignore_errors=True)
-            return db.remove_live2d_model(model_id)
+            if target.name != model_id or self._is_link(target):
+                raise Live2DError("模型路径无效")
+            transaction_id = uuid.uuid4().hex
+            backup = self.partial_root / (".rollback-" + transaction_id)
+            journal = self._journal_path(transaction_id)
+            self._write_journal({"transaction_id": transaction_id, "operation": "delete", "model_id": model_id})
+            moved = False
+            try:
+                target.replace(backup)
+                moved = True
+                removed = db.remove_live2d_model(model_id)
+                if not removed:
+                    raise Live2DError("模型删除未提交")
+            except Exception:
+                if moved:
+                    backup.replace(target)
+                journal.unlink(missing_ok=True)
+                raise
+            try:
+                self._remove_private_model_path(backup)
+                journal.unlink(missing_ok=True)
+            except OSError:
+                # The registry commit succeeded. Leave the exact owned path
+                # and journal for startup cleanup instead of reporting failure.
+                pass
+            return True
 
     def asset_path(self, model_id: str, relative_path: str) -> Path:
         if not _SAFE_ID.match(str(model_id)):
