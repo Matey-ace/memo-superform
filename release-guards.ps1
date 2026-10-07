@@ -1,9 +1,28 @@
 # Testable publication boundaries. These functions do not modify local processes.
 function Get-ExistingRelease {
-    param([string]$Uri)
-    try { return Invoke-RestMethod -Uri $Uri -TimeoutSec 15 }
+    param([string]$Uri, $Headers = @{})
+    try { return Invoke-RestMethod -Uri $Uri -Headers $Headers -TimeoutSec 15 }
     catch {
-        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { return $null }
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+            # 尚无 tag ref 的 draft 可能不出现在按标签查询中；授权列表仍会返回它。
+            if ($Headers.Count -and $Uri -match '^(https://api\.github\.com/repos/[^/]+/[^/]+/releases)/tags/([^/?]+)$') {
+                $listUri = $Matches[1]
+                $tagName = [Uri]::UnescapeDataString($Matches[2])
+                for ($page = 1; $page -le 100; $page++) {
+                    $response = Invoke-RestMethod -Uri "${listUri}?per_page=100&page=$page" -Headers $Headers -TimeoutSec 15
+                    $releases = @($response)
+                    foreach ($item in $releases) {
+                        if (-not $item.id -or -not $item.tag_name) { throw 'Release 列表格式异常，发布中止' }
+                    }
+                    $matching = @($releases | Where-Object { $_.tag_name -eq $tagName })
+                    if ($matching.Count -gt 1) { throw '同一版本存在多个草稿，请先明确恢复对象' }
+                    if ($matching.Count -eq 1) { return $matching[0] }
+                    if ($releases.Count -lt 100) { return $null }
+                }
+                throw 'Release 列表未完整核验，发布中止'
+            }
+            return $null
+        }
         throw
     }
 }

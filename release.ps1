@@ -85,7 +85,12 @@ if (git status --porcelain) { throw "工作区不是干净状态；请先明确�
 Invoke-GitChecked fetch origin main --no-tags | Out-Null
 if (git rev-parse -q --verify "refs/tags/$tag") { throw "本地 Tag $tag 已存在，禁止覆盖" }
 if (git ls-remote --exit-code --tags origin "refs/tags/$tag" 2>$null) { throw "远端 Tag $tag 已存在，禁止覆盖" }
-$existingRelease = Get-ExistingRelease "https://api.github.com/repos/$repo/releases/tags/$tag"
+$credInput = "protocol=https`nhost=github.com`n`n"
+$cred = $credInput | git credential fill 2>$null
+$token = ($cred | Where-Object { $_ -match '^password=' }) -replace '^password=',''
+if (-not $token) { throw 'GitHub 凭据读取失败；尚未修改远端源码、Tag 或 Release' }
+$headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
+$existingRelease = Get-ExistingRelease "https://api.github.com/repos/$repo/releases/tags/$tag" $headers
 if ($existingRelease) { throw "GitHub Release $tag 已存在，禁止覆盖；未完成的草稿请核验后单独恢复" }
 & (Join-Path $scriptDir "tests\run.ps1") -Browser
 if ($LASTEXITCODE -ne 0) { throw "回归测试失败" }
@@ -137,13 +142,6 @@ Write-Host "  tag $tag 已推送" -ForegroundColor Green
 
 # ---- 6. 创建 GitHub Release ----
 Write-Host "[6/7] 创建 GitHub Release..." -ForegroundColor Yellow
-$credInput = "protocol=https`nhost=github.com`n`n"
-$cred = $credInput | git credential fill 2>$null
-$token = ($cred | Where-Object { $_ -match '^password=' }) -replace '^password=',''
-if (-not $token) { Write-Host "  无法获取 GitHub Token，请先 git push 一次以保存凭据" -ForegroundColor Red; exit 1 }
-
-$headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
-
 $releaseBody = if ($Message) { $Message } else { "$tag release" }
 $payload = New-DraftReleasePayload $tag $Version $releaseBody
 try {
