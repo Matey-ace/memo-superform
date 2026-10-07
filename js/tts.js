@@ -23,10 +23,20 @@ var TTS = (function() {
     let synthesisGeneration = 0;
     let synthesisController = null;
     let synthesisInFlight = false;
+    let activeSource = '';
     let queuedSynthesis = null;
     let preloadInFlight = null;
     let lastError = '';
     let refreshGeneration = 0;
+
+    async function readResponse(response) {
+        let value;
+        try { value = await response.json(); }
+        catch (error) { throw new Error('语音服务返回格式异常，请重试'); }
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+            throw new Error('语音服务返回的数据格式异常，请重试');
+        return value;
+    }
 
     async function refresh() {
         const generation = ++refreshGeneration;
@@ -38,12 +48,13 @@ var TTS = (function() {
         } catch (e) { /* AbortController 不可用时退化为无超时请求 */ }
         try {
             const resp = await fetch('/api/tts/status', { signal: controller ? controller.signal : undefined });
-            const next = resp.ok ? await resp.json() : null;
+            const next = resp.ok ? await readResponse(resp) : null;
+            if (next && typeof next.enabled !== 'boolean') throw new Error('语音状态格式异常，请重试');
             // Multiple settings actions may refresh status at once. A slower
             // pre-mount response must never overwrite a newer mounting/result
             // response and make the UI re-enable write controls mid-install.
             if (next && generation === refreshGeneration) status = next;
-        } catch (e) { /* 超时或代理未启动时保持上次状态 */ }
+        } catch (e) { if (generation === refreshGeneration) lastError = e.message || '语音状态读取失败，请重试'; }
         finally { if (timer) clearTimeout(timer); }
         return status;
     }
@@ -96,14 +107,21 @@ var TTS = (function() {
         });
     }
 
-    function stop() {
+    function stop(source) {
+        if (source && activeSource !== source) {
+            if (queuedSynthesis && queuedSynthesis.options && queuedSynthesis.options.source === source) {
+                settle(queuedSynthesis.waiters, false); queuedSynthesis = null;
+            }
+            return;
+        }
         playbackGeneration += 1;
         synthesisGeneration += 1;
         try { audio.pause(); audio.currentTime = 0; } catch (error) {}
-        if (queuedSynthesis) {
+        if (queuedSynthesis && (!source || (queuedSynthesis.options && queuedSynthesis.options.source === source))) {
             queuedSynthesis.waiters.forEach(function(resolve) { resolve(false); });
             queuedSynthesis = null;
         }
+        if (queuedSynthesis) queuedSynthesis.generation = synthesisGeneration;
         if (synthesisController) {
             try { synthesisController.abort(); } catch (error) {}
             synthesisController = null;
@@ -158,7 +176,7 @@ var TTS = (function() {
                 signal: controller ? controller.signal : undefined,
                 body: JSON.stringify(requestBody)
             });
-            const data = await resp.json().catch(function() { return {}; });
+            const data = await readResponse(resp);
             if (requestGeneration !== synthesisGeneration) return { cancelled: true };
             if (resp.ok && data.audio_url) return { audio_url: data.audio_url };
             const message = data.error || ('语音生成失败（HTTP ' + resp.status + '）。');
@@ -176,6 +194,7 @@ var TTS = (function() {
     }
 
     async function runSynthesis(text, waiters, options) {
+        activeSource = (options && options.source) || '';
         const requestGeneration = ++synthesisGeneration;
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         synthesisController = controller;
@@ -203,7 +222,7 @@ var TTS = (function() {
             }
         } catch (e) {
             if (requestGeneration === synthesisGeneration) {
-                lastError = e && e.name === 'AbortError' ? '语音生成请求已被新的互动替换。' : '语音请求失败，请检查语音引擎状态。';
+                lastError = e && e.name === 'AbortError' ? '语音生成请求已被新的互动替换。' : (e.message || '语音请求失败，请检查语音引擎状态。');
             }
             settle(waiters, false);
         } finally {
@@ -213,7 +232,7 @@ var TTS = (function() {
             // 请求活动期间只有明确停止才递增代次；新触摸有意入队，不中止当前请求。
             const next = queuedSynthesis;
             queuedSynthesis = null;
-            if (next && requestGeneration === synthesisGeneration && isReady()) {
+            if (next && next.generation === synthesisGeneration && isReady()) {
                 runSynthesis(next.text, next.waiters, next.options);
             } else if (next) {
                 settle(next.waiters, false);
@@ -229,7 +248,7 @@ var TTS = (function() {
                 // 只保留最新一次有效触摸。服务端不能取消已运行的推理，替换队列可
                 // 避免连点积压大量过期语音。
                 if (queuedSynthesis) settle(queuedSynthesis.waiters, false);
-                queuedSynthesis = { text: text, waiters: [resolve], options: options };
+                queuedSynthesis = { text: text, waiters: [resolve], options: options, generation: synthesisGeneration };
                 return;
             }
             runSynthesis(text, [resolve], options);
@@ -242,6 +261,8 @@ var TTS = (function() {
         if (status.loaded && !status.busy) return Promise.resolve(true);
         if (preloadInFlight) return preloadInFlight;
         if (synthesisInFlight) return Promise.resolve(false);
+        const generation = synthesisGeneration;
+        const statusGeneration = refreshGeneration;
         preloadInFlight = (async function() {
             try {
                 const resp = await fetch('/api/tts/preload', {
@@ -249,16 +270,17 @@ var TTS = (function() {
                     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                     body: JSON.stringify({})
                 });
-                const data = await resp.json().catch(function() { return {}; });
-                if (!resp.ok || data.error) {
+                const data = await readResponse(resp);
+                if (!resp.ok || data.error || data.ok !== true) {
                     lastError = data.error || ('语音预加载失败（HTTP ' + resp.status + '）。');
                     return false;
                 }
+                if (generation !== synthesisGeneration || statusGeneration !== refreshGeneration) return false;
                 status.loaded = true;
                 status.busy = false;
                 return true;
             } catch (error) {
-                lastError = '语音预加载请求失败。';
+                lastError = error.message || '语音预加载请求失败。';
                 return false;
             } finally {
                 preloadInFlight = null;

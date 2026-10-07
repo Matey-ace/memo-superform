@@ -26,5 +26,14 @@ const StudyLifecycle = (function() {
         }
         return { start: start, stop: stop, sync: sync };
     }
-    return { create: create };
+    function isVisible(node) {
+        if (!node || node.isConnected === false) return false;
+        for (var current = node; current && current.nodeType === 1; current = current.parentElement) {
+            if (current.hidden || current.inert || current.getAttribute('aria-hidden') === 'true') return false;
+            var style = window.getComputedStyle(current);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+        }
+        return !node.getClientRects || node.getClientRects().length > 0;
+    }
+    return { create: create, isVisible: isVisible };
 })();

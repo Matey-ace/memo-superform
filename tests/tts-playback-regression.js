@@ -86,10 +86,10 @@ async function prepare(harness) {
 }
 
 async function waitForAudio(harness) {
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
         const candidate = harness.audios[0];
         if (candidate && candidate._listeners.error && candidate._listeners.error.size) return candidate;
-        await Promise.resolve();
+        await new Promise(setImmediate);
     }
     assert.strictEqual(harness.audios.length, 1, 'speech response must start browser audio playback');
     throw new Error('speech response did not attach the browser audio failure listener');

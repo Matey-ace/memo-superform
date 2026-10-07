@@ -184,6 +184,7 @@ const Live2DModelManager = (function() {
     let activeJob = null;
     // 搜索请求可能乱序返回。只有最新一次查询可以更新模型列表或错误状态。
     let catalogRequestGeneration = 0;
+    let modelRequestGeneration = 0;
 
     function headers(json) {
         const result = { 'X-Requested-With': 'XMLHttpRequest' };
@@ -194,11 +195,11 @@ const Live2DModelManager = (function() {
     }
     async function request(path, options) {
         const response = await fetch(path, Object.assign({ headers: headers(false) }, options || {}));
-        const data = await response.json().catch(function() { return {}; });
+        const data = await response.json();
         if (!response.ok || data.error) throw new Error(data.error || ('请求失败: ' + response.status));
         return data;
     }
-    async function migrateLegacyPersonaForActiveRole() {
+    async function migrateLegacyPersonaForActiveRole(isCurrent) {
         // 旧版仅把人设放在浏览器 localStorage。新版始终以角色资料包中的
         // persona.json 为权威；此处只在当前角色尚无有效持久化人设、且浏览器
         // 实际存在旧覆盖值时作一次迁移，不会覆盖任何已保存的资料包。
@@ -223,10 +224,13 @@ const Live2DModelManager = (function() {
             name: roleBinding.active_role_name,
             live2d_character_id: characterId
         });
+        const activeRoleId = roleBinding.active_role_id;
+        if (!isCurrent()) return;
         const response = await fetch('/api/tts/roles/' + encodeURIComponent(roleBinding.active_role_id) + '/persona', {
             method: 'POST', headers: headers(true), body: JSON.stringify({ persona: persona })
         });
-        const data = await response.json().catch(function() { return {}; });
+        const data = await response.json();
+        if (!isCurrent() || roleBinding.active_role_id !== activeRoleId) return;
         if (!response.ok || data.error) throw new Error(data.error || '旧角色人设迁移失败');
         migrated[roleBinding.active_role_id] = true;
         try { localStorage.setItem(LEGACY_PERSONA_MIGRATION_STORAGE_KEY, JSON.stringify(migrated)); }
@@ -234,12 +238,18 @@ const Live2DModelManager = (function() {
         if (data.role && data.role.persona) roleBinding.persona = data.role.persona;
     }
     async function loadModels() {
-        const data = await request('/api/live2d/models');
+        const generation = ++modelRequestGeneration;
+        const isCurrent = () => generation === modelRequestGeneration;
+        let data;
+        try { data = await request('/api/live2d/models'); }
+        catch (error) { if (!isCurrent()) return { stale: true }; throw error; }
+        if (!isCurrent()) return { stale: true };
         currentModels = data.models || [];
         preference = data.preference || preference;
         roleBinding = data.role_binding || null;
-        try { await migrateLegacyPersonaForActiveRole(); }
+        try { await migrateLegacyPersonaForActiveRole(isCurrent); }
         catch (error) { console.warn(error.message || '旧角色人设迁移失败'); }
+        if (!isCurrent()) return { stale: true };
         renderSettings();
         return data;
     }
@@ -474,6 +484,35 @@ const CompanionSession = (function() {
 })();
 
 const Live2DCompanion = (function() {
+    let lifecycleGeneration = 0, replySequence = 0, replyController = null;
+    function invalidateReplies() {
+        replySequence += 1;
+        if (replyController) replyController.abort();
+        replyController = null;
+        companionVoiceRequest += 1;
+        companionVoicePreloadRequest += 1;
+        if (window.TTS && window.TTS.stop) window.TTS.stop('companion');
+    }
+    function beginReply() {
+        if (replyController) replyController.abort();
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        replyController = controller;
+        const sequence = ++replySequence, generation = lifecycleGeneration, currentSession = session;
+        const persona = JSON.stringify(getActivePersona());
+        const language = getCompanionLanguage();
+        const config = JSON.stringify(AIAPI.getConfig());
+        const account = typeof MaimemoAPI !== 'undefined' && MaimemoAPI.getSessionEpoch ? MaimemoAPI.getSessionEpoch() : 0;
+        let expired = false;
+        const timer = setTimeout(function() { expired = true; if (controller) controller.abort(); }, 45000);
+        return {
+            signal: controller ? controller.signal : undefined,
+            current: () => !expired && sequence === replySequence && generation === lifecycleGeneration
+                && currentSession === session && persona === JSON.stringify(getActivePersona())
+                && config === JSON.stringify(AIAPI.getConfig()) && language === getCompanionLanguage()
+                && account === (typeof MaimemoAPI !== 'undefined' && MaimemoAPI.getSessionEpoch ? MaimemoAPI.getSessionEpoch() : 0),
+            finish: () => { clearTimeout(timer); if (replyController === controller) replyController = null; }
+        };
+    }
     let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '', companionVoiceRequest = 0, companionVoicePreloadRequest = 0;
     let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
     let rendererCapabilityCache = null, lastRendererDiagnostic = '', currentMoodLabel = '待机', lastVoiceNoticeReason = '', voiceNoticeTimer = 0, modelListError = '';
@@ -733,7 +772,7 @@ const Live2DCompanion = (function() {
         try {
             // TTS 从当前角色清单读取模型和参考资料；此请求选项只告诉 GPT-SoVITS
             // 陪伴句子本身是中文还是日文。
-            Promise.resolve(tts.speak(normalized, { language: companionLanguageConfig(language || getCompanionLanguage()).ttsLanguage })).then(function(ok) {
+            Promise.resolve(tts.speak(normalized, { source: 'companion', language: companionLanguageConfig(language || getCompanionLanguage()).ttsLanguage })).then(function(ok) {
                 if (requestId !== companionVoiceRequest) return;
                 if (ok) {
                     lastSpokenCompanion = normalized;
@@ -780,21 +819,23 @@ const Live2DCompanion = (function() {
         if (typeof AIAPI === 'undefined' || !AIAPI.hasConfig()) { setMessage(randomLine(kind, language), kind === 'needs-help' ? '安慰' : '鼓励', language, speak); return; }
         const button = document.getElementById('companionAskBtn');
         if (button) button.disabled = true;
+        const ticket = beginReply();
         try {
         const config = AIAPI.getConfig();
         const persona = getActivePersona();
         const systemPrompt = personaSystemPrompt(persona) + companionOutputInstruction('study', language);
         const prompt = companionStudyContext(summary, language);
-            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.7, response_format: { type: 'json_object' } } }) });
-            const data = await response.json().catch(function() { return {}; });
+            const response = await fetch('/proxy/ai', { method: 'POST', signal: ticket.signal, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'MemoSuperform' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.7, response_format: { type: 'json_object' } } }) });
+            const data = await response.json();
+            if (!ticket.current()) return;
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
             const moods = ['idle', 'thinking', 'cheer', 'comfort', 'celebrate'];
             const replyText = String(parsed.text || '').trim();
             setMessage((isMeaningfulCompanionReply(replyText, language) ? replyText : randomLine(kind, language)).slice(0, 80), moods.indexOf(parsed.mood) >= 0 ? parsed.mood : 'cheer', language, speak);
-        } catch (error) { setMessage(randomLine(kind, language), kind === 'needs-help' ? 'comfort' : 'cheer', language, speak); }
-        finally { if (button) button.disabled = false; }
+        } catch (error) { if (ticket.current()) setMessage(randomLine(kind, language), kind === 'needs-help' ? 'comfort' : 'cheer', language, speak); }
+        finally { if (ticket.current() && button) button.disabled = false; ticket.finish(); }
     }
     function onSessionSignal(kind, summary) {
         updateSummary(summary);
@@ -870,7 +911,14 @@ const Live2DCompanion = (function() {
         if (tag) tag.textContent = model ? model.display_name : '尚未选择模型';
         if (!model) {
             const code = modelListError ? 'L2D_MODEL_LIST_FAILED' : 'L2D_NO_MODEL';
-            showRendererDiagnostic(code, null, modelListError || '尚未在角色包中绑定完整的 Live2D 模型', capability);
+            if (modelListError) showRendererDiagnostic(code, null, modelListError, capability);
+            else {
+                clearRendererDiagnostic(null);
+                if (tag) tag.textContent = '尚未配置 Live2D 模型';
+                const bubble = document.getElementById('companionBubble');
+                if (bubble) bubble.textContent = '正在使用陪伴图。可在设置中为当前角色选择完整的 Live2D 模型。';
+                setMoodLabel('等待配置');
+            }
             rendererLoading = false;
             return { ok: false, code: code };
         }
@@ -978,6 +1026,7 @@ const Live2DCompanion = (function() {
         }
         if (Date.now() - lastTouchAIAt < 1800) return;
         lastTouchAIAt = Date.now();
+        const ticket = beginReply();
         try {
             const config = AIAPI.getConfig();
             const persona = getActivePersona();
@@ -985,8 +1034,9 @@ const Live2DCompanion = (function() {
             const summary = session && session.summary ? session.summary() : null;
             const word = summary && summary.current_word ? summary.current_word : '';
             const prompt = companionTouchContext(reaction, word, language);
-            const response = await fetch('/proxy/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.8, response_format: { type: 'json_object' } } }) });
-            const data = await response.json().catch(function() { return {}; });
+            const response = await fetch('/proxy/ai', { method: 'POST', signal: ticket.signal, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'MemoSuperform' }, body: JSON.stringify({ provider: config.provider, endpoint: config.endpoint, apiKey: config.apiKey, body: { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], temperature: 0.8, response_format: { type: 'json_object' } } }) });
+            const data = await response.json();
+            if (!ticket.current()) return;
             if (!response.ok || data.error) throw new Error(data.error || 'AI 暂时不可用');
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
             const parsed = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
@@ -994,7 +1044,9 @@ const Live2DCompanion = (function() {
             setReply((isMeaningfulCompanionReply(replyText, language) ? replyText : randomTouchLine(region, language)).slice(0, 80), reaction.mood, language, speak);
         } catch (error) {
             // AI 调用失败时，只回退到一条本地反应文案。
-            setMessage(randomTouchLine(region, language), reaction.mood, language, speak);
+            if (ticket.current()) setMessage(randomTouchLine(region, language), reaction.mood, language, speak);
+        } finally {
+            ticket.finish();
         }
     }
     function showTouchFeedback(event, label) {
@@ -1053,6 +1105,7 @@ const Live2DCompanion = (function() {
     async function enter() {
         if (open) return;
         open = true;
+        const generation = ++lifecycleGeneration;
         rendererCapabilityCache = null;
         savedLayout = (typeof LayoutManager !== 'undefined' && LayoutManager) ? LayoutManager.getCurrentLayout() : 'single';
         if (typeof ChartManager !== 'undefined' && ChartManager) ChartManager.disposeAll();
@@ -1064,17 +1117,23 @@ const Live2DCompanion = (function() {
             await Live2DModelManager.loadModels();
             modelListError = '';
         } catch (error) {
+            if (generation !== lifecycleGeneration || !open) return;
             modelListError = '读取角色绑定的 Live2D 模型失败：' + safeDiagnosticError(error);
             if (Live2DModelManager.markUnavailable) Live2DModelManager.markUnavailable(modelListError);
         }
+        if (generation !== lifecycleGeneration || !open) return;
         updateCompanionRoleLabels();
         studyInstance = StudyWeb.render('companionStudyFrame', { onStudyEvent: function(event) { if (!session) return; if (event.type === 'screen') session.screen(event.active); if (event.type === 'answer') session.record(event); } });
         session = CompanionSession.create(onSessionSignal);
         await loadRenderer();
+        if (generation !== lifecycleGeneration || !open) return;
         if (isAnonBirthday()) showBirthday();
     }
     function exit() {
         if (!open) return;
+        open = false;
+        lifecycleGeneration += 1;
+        invalidateReplies();
         if (session) session.screen(false);
         session = null;
         if (studyInstance && studyInstance.dispose) studyInstance.dispose();
@@ -1151,6 +1210,7 @@ const Live2DCompanion = (function() {
         Live2DModelManager.attachSettings();
     }
     async function reloadModel() {
+        invalidateReplies();
         rendererCapabilityCache = null;
         modelListError = '';
         updateCompanionRoleLabels();

@@ -4,6 +4,22 @@
 // 通过本地代理服务器解决 CORS 问题
 // ==========================================
 
+// Invalid JSON is a protocol error, never a successful empty account/record list.
+const MemoResponse = {
+    async read(response) {
+        let data;
+        try { data = await response.json(); }
+        catch (cause) {
+            const error = new Error('服务返回格式异常，请稍后重试 (' + response.status + ')');
+            error.status = response.status;
+            error.cause = cause;
+            throw error;
+        }
+        if (!data || typeof data !== 'object') throw new Error('服务返回的数据格式异常');
+        return data;
+    }
+};
+
 const MaimemoAPI = (function() {
     const PROXY_BASE = '/proxy/memo';
     // 令牌只保存在 Windows DPAPI 本机凭据库；网页脚本从不保留或读取令牌明文。
@@ -11,12 +27,34 @@ const MaimemoAPI = (function() {
     // 状态查询可能比保存/断开凭据更晚返回。凭据变更会推进代次，避免旧状态
     // 把新账号重新显示为“未连接”。
     let connectionGeneration = 0;
+    let statusSequence = 0;
+    let sessionEpoch = 0;
     
     const CACHE_PREFIX = 'memo_cache_';
     const CACHE_TTL = 30 * 60 * 1000;
     
     function cacheScope() {
-        return String(connection.profile_id || 'disconnected').slice(-16);
+        return encodeURIComponent(String(connection.profile_id || 'disconnected'));
+    }
+
+    function getSessionEpoch() { return sessionEpoch; }
+    function assertSession(epoch) {
+        if (epoch !== sessionEpoch) {
+            const error = new Error('账号已切换，请重新操作');
+            error.code = 'STALE_SESSION';
+            throw error;
+        }
+    }
+    function commitConnection(next) {
+        if (!next || typeof next.connected !== 'boolean' || (next.connected && !next.profile_id))
+            throw new Error('账号服务返回的数据格式异常');
+        const changed = connection.connected !== next.connected || connection.profile_id !== next.profile_id;
+        connection = next;
+        if (changed) {
+            sessionEpoch += 1;
+            if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent !== 'undefined')
+                window.dispatchEvent(new CustomEvent('memo-account-changed', { detail: connectionStatus() }));
+        }
     }
 
     async function authRequest(path, options = {}) {
@@ -30,15 +68,16 @@ const MaimemoAPI = (function() {
             },
             ...(hasBody ? { body: JSON.stringify(options.body) } : {})
         });
-        const data = await response.json().catch(function() { return {}; });
+        const data = await MemoResponse.read(response);
         if (!response.ok) throw new Error(data.error || ('账号服务错误: ' + response.status));
         return data;
     }
 
     async function refreshConnection() {
         const generation = connectionGeneration;
+        const sequence = ++statusSequence;
         const next = await authRequest('/api/maimemo-auth/status');
-        if (generation === connectionGeneration) connection = next;
+        if (generation === connectionGeneration && sequence === statusSequence) commitConnection(next);
         return connection;
     }
 
@@ -51,7 +90,7 @@ const MaimemoAPI = (function() {
             const next = await authRequest('/api/maimemo-auth/manual-token', {
                 method: 'POST', body: { token: legacyToken.trim() }
             });
-            if (generation === connectionGeneration) connection = next;
+            if (generation === connectionGeneration) commitConnection(next);
             localStorage.removeItem('maimemo_token');
             return connection;
         }
@@ -59,22 +98,26 @@ const MaimemoAPI = (function() {
     }
 
     async function connect() {
+        connectionGeneration += 1;
+        statusSequence += 1;
         return authRequest('/api/maimemo-auth/start', { method: 'POST', body: {} });
     }
 
     async function saveManualToken(value) {
         const generation = ++connectionGeneration;
+        sessionEpoch += 1;
         const next = await authRequest('/api/maimemo-auth/manual-token', {
             method: 'POST', body: { token: String(value || '').trim() }
         });
-        if (generation === connectionGeneration) connection = next;
+        if (generation === connectionGeneration) commitConnection(next);
         return connection;
     }
 
     async function disconnect() {
         const generation = ++connectionGeneration;
+        sessionEpoch += 1;
         const result = await authRequest('/api/maimemo-auth/disconnect', { method: 'POST', body: {} });
-        if (generation === connectionGeneration) connection = { connected: false, mode: '', profile_id: '' };
+        if (generation === connectionGeneration) commitConnection({ connected: false, mode: '', profile_id: '' });
         return result;
     }
 
@@ -136,19 +179,22 @@ const MaimemoAPI = (function() {
     
     async function request(path, options = {}) {
         if (!connection.connected) throw new Error('请先连接墨墨账号');
+        const epoch = sessionEpoch;
         
         const url = PROXY_BASE + path;
         const config = {
             method: options.method || 'GET',
             headers: {
                 'Accept': 'application/json',
+                'X-Requested-With': 'MemoSuperform',
                 ...(options.body ? { 'Content-Type': 'application/json' } : {})
             },
             ...(options.body ? { body: JSON.stringify(options.body) } : {})
         };
         
         const response = await fetch(url, config);
-        const json = await response.json().catch(function() { return {}; });
+        const json = await MemoResponse.read(response);
+        assertSession(epoch);
         
         if (!response.ok || json.success === false) {
             let errMsg = 'API 错误: ' + response.status;
@@ -176,17 +222,21 @@ const MaimemoAPI = (function() {
     // ---- 学习数据接口 ----
     
     async function getStudyProgress(useCache = true) {
+        const epoch = sessionEpoch;
         const cacheKey = 'study_progress_' + cacheScope();
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/study/get_study_progress', { method: 'POST', body: {} });
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
     
     async function queryStudyRecords(params = {}, useCache = true) {
+        const epoch = sessionEpoch;
         const cacheKey = 'study_records_' + cacheScope() + '_' + JSON.stringify(params);
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/study/query_study_records', { method: 'POST', body: params });
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
@@ -204,13 +254,15 @@ const MaimemoAPI = (function() {
     }
 
     async function localRequest(path, options = {}) {
+        const epoch = sessionEpoch;
         const hasBody = options.body !== undefined;
         const response = await fetch(path, {
             method: options.method || 'GET',
             headers: localHeaders(hasBody),
             ...(hasBody ? { body: JSON.stringify(options.body) } : {})
         });
-        const payload = await response.json().catch(function() { return {}; });
+        const payload = await MemoResponse.read(response);
+        assertSession(epoch);
         // 同步状态在 HTTP 200 中会携带最近一次任务的 error 字段；它是状态数据，
         // 不是本次本地请求失败。真正接口错误始终使用非 2xx 或 success:false。
         if (!response.ok || payload.success === false) {
@@ -222,7 +274,7 @@ const MaimemoAPI = (function() {
     function normalizeStudyRecords(payload) {
         if (Array.isArray(payload)) return payload;
         if (payload && Array.isArray(payload.records)) return payload.records;
-        return [];
+        throw new Error('学习记录返回的数据格式异常，已保留当前数据');
     }
 
     // 旧版本可能保留过全量浏览器缓存。它只在 bootstrap 时作为一次性迁移种子，
@@ -233,6 +285,9 @@ const MaimemoAPI = (function() {
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
                 if (!key || !key.startsWith(CACHE_PREFIX + 'all_study_records_')) continue;
+                const suffix = key.slice((CACHE_PREFIX + 'all_study_records_').length);
+                const profile = String(connection.profile_id || '');
+                if (!profile || (suffix !== cacheScope() && suffix !== profile.slice(-16))) continue;
                 const parsed = JSON.parse(localStorage.getItem(key) || '{}');
                 const records = normalizeStudyRecords(parsed.value !== undefined ? parsed.value : parsed);
                 if (records.length) candidates.push({ timestamp: Number(parsed.timestamp) || 0, records: records });
@@ -290,9 +345,11 @@ const MaimemoAPI = (function() {
         
         // 将日期字符串转为时间戳用于比较
         const startTime = new Date(startDate + 'T00:00:00+08:00').getTime();
-        const endTime = new Date(endDate + 'T23:59:59+08:00').getTime();
+        const endTime = new Date(endDate + 'T00:00:00+08:00').getTime() + 24 * 60 * 60 * 1000;
+        if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime)
+            throw new Error('请选择有效的起止日期');
         
-        const wordMap = {};
+        const wordMap = new Set();
         const words = [];
         
         for (const record of allRecords) {
@@ -300,10 +357,10 @@ const MaimemoAPI = (function() {
             if (!dateStr) continue;
             
             const recordTime = new Date(dateStr).getTime();
-            if (recordTime >= startTime && recordTime <= endTime) {
+            if (recordTime >= startTime && recordTime < endTime) {
                 const word = (record.voc_spelling || '').toLowerCase().trim();
-                if (word && !wordMap[word]) {
-                    wordMap[word] = true;
+                if (word && !wordMap.has(word)) {
+                    wordMap.add(word);
                     words.push({
                         word: word,
                         study_count: record.study_count || 0,
@@ -321,38 +378,52 @@ const MaimemoAPI = (function() {
     
     // 获取今日学习单词（公测接口）
       async function listNotepads(limit = 10, offset = 0, useCache = true) {
+        const epoch = sessionEpoch;
         if (limit > 10) limit = 10;
         const cacheKey = 'notepads_' + cacheScope() + '_' + limit + '_' + offset;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/notepads?limit=' + limit + '&offset=' + offset);
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
     
     async function listAllNotepads(useCache = true) {
+        const epoch = sessionEpoch;
         const cacheKey = 'all_notepads_' + cacheScope();
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         
         const allNotepads = [];
+        const seen = new Set();
         let offset = 0;
         
         while (true) {
             const data = await listNotepads(10, offset, false);
-            const notepads = data.notepads || [];
-            allNotepads.push(...notepads);
+            assertSession(epoch);
+            const notepads = data.notepads;
+            if (!Array.isArray(notepads)) throw new Error('云词本列表格式异常');
+            const fresh = notepads.filter(function(item) { return item && item.id != null && !seen.has(String(item.id)); });
+            fresh.forEach(function(item) { seen.add(String(item.id)); allNotepads.push(item); });
             if (notepads.length < 10) break;
+            if (!fresh.length || offset >= 9990) {
+                allNotepads.partial = true;
+                allNotepads.warning = '云词本分页尚未完整读取，请重试';
+                break;
+            }
             offset += 10;
-            if (offset >= 100) break;
         }
         
-        if (useCache) setCache(cacheKey, allNotepads);
+        assertSession(epoch);
+        if (useCache && !allNotepads.partial) setCache(cacheKey, allNotepads);
         return allNotepads;
     }
     
     async function getNotepad(id, useCache = true) {
+        const epoch = sessionEpoch;
         const cacheKey = 'notepad_' + cacheScope() + '_' + id;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/notepads/' + id);
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
@@ -361,31 +432,37 @@ const MaimemoAPI = (function() {
     // 内容接口由墨墨云端维护。浏览器端只发送内容本身，访问令牌仍由本机
     // 代理从 DPAPI 凭据库注入，避免把 token 暴露给 iframe 或 localStorage。
     async function getVocabulary(spelling, useCache = true) {
+        const epoch = sessionEpoch;
         const normalized = String(spelling || '').trim();
         if (!normalized) throw new Error('请输入单词');
         const cacheKey = 'vocabulary_' + cacheScope() + '_' + normalized.toLowerCase();
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/vocabulary?spelling=' + encodeURIComponent(normalized));
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
 
     async function listInterpretations(vocId, useCache = true) {
+        const epoch = sessionEpoch;
         const id = String(vocId || '').trim();
         if (!id) throw new Error('缺少单词 ID');
         const cacheKey = 'interpretations_' + cacheScope() + '_' + id;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/interpretations?voc_id=' + encodeURIComponent(id));
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
 
     async function listNotes(vocId, useCache = true) {
+        const epoch = sessionEpoch;
         const id = String(vocId || '').trim();
         if (!id) throw new Error('缺少单词 ID');
         const cacheKey = 'notes_' + cacheScope() + '_' + id;
         if (useCache) { const c = getCache(cacheKey); if (c) return c; }
         const data = await request('/notes?voc_id=' + encodeURIComponent(id));
+        assertSession(epoch);
         if (useCache) setCache(cacheKey, data);
         return data;
     }
@@ -479,33 +556,49 @@ const MaimemoAPI = (function() {
     }
     
     async function getAllNotepadWords(useCache = true) {
-        const cacheKey = 'all_notepad_words_' + cacheScope();
-        if (useCache) { const c = getCache(cacheKey); if (c) return c; }
+        const epoch = sessionEpoch;
+        const cacheKey = 'notepad_memberships_v2_' + cacheScope();
+        if (useCache) {
+            const c = getCache(cacheKey);
+            if (c && Array.isArray(c.words)) {
+                c.words.notepads = c.notepads || [];
+                return c.words;
+            }
+        }
         
         const notepads = await listAllNotepads(false);
         const allWords = [];
-        const wordMap = {};
+        const memberships = new Set();
+        const failures = [];
         
         for (const np of notepads) {
             try {
                 const detail = await getNotepad(np.id, false);
-                if (detail.notepad && detail.notepad.list) {
+                if (detail.notepad && Array.isArray(detail.notepad.list)) {
                     for (const item of detail.notepad.list) {
                         if ((item.type === 'WORD' || item.type === 'DRAFT_WORD') && item.word) {
                             const word = item.word.toLowerCase().trim();
-                            if (word && !wordMap[word]) {
-                                wordMap[word] = true;
-                                allWords.push({ word: word, notepad: np.title });
+                            const membership = String(np.id) + '\u0000' + word;
+                            if (word && !memberships.has(membership)) {
+                                memberships.add(membership);
+                                allWords.push({ word: word, notepad: np.title, notepad_id: String(np.id) });
                             }
                         }
                     }
-                }
+                } else throw new Error('云词本内容格式异常');
             } catch (e) {
+                assertSession(epoch);
+                failures.push({ id: String(np.id), title: np.title, error: e.message });
                 console.warn('获取云词本失败:', np.title, e.message);
             }
         }
         
-        if (useCache) setCache(cacheKey, allWords);
+        assertSession(epoch);
+        allWords.notepads = notepads;
+        allWords.partial = !!notepads.partial || failures.length > 0;
+        allWords.failures = failures;
+        allWords.warning = allWords.partial ? ('云词本未完整读取：' + (failures.length ? failures.length + ' 本失败，请重试' : notepads.warning)) : '';
+        if (useCache && !allWords.partial) setCache(cacheKey, { words: allWords, notepads: notepads });
         return allWords;
     }
     
@@ -522,7 +615,7 @@ const MaimemoAPI = (function() {
     
     return {
         bootstrap, refreshConnection, connect, saveManualToken, disconnect, deleteLocalData,
-        getToken, hasToken, connectionStatus, clearCache,
+        getToken, hasToken, connectionStatus, getSessionEpoch, assertSession, clearCache,
         getStudyProgress, queryStudyRecords, getAllStudyRecords,
         startStudySync, getStudySyncStatus, cancelStudySync,
         getWordsFromStudyRecords,
@@ -539,6 +632,7 @@ const MaimemoAPI = (function() {
 // ==========================================
 
 const AIAPI = (function() {
+    let configEpoch = 0;
     function getConfig() {
         return {
             provider: localStorage.getItem('ai_provider') || 'openai-compatible',
@@ -549,10 +643,20 @@ const AIAPI = (function() {
     }
     
     function setConfig(config) {
+        const before = JSON.stringify(getConfig());
         if (config.provider !== undefined) localStorage.setItem('ai_provider', config.provider);
         if (config.endpoint !== undefined) localStorage.setItem('ai_endpoint', config.endpoint);
         if (config.apiKey !== undefined) localStorage.setItem('ai_key', config.apiKey);
         if (config.model !== undefined) localStorage.setItem('ai_model', config.model);
+        if (before !== JSON.stringify(getConfig())) {
+            configEpoch += 1;
+            localStorage.removeItem('ai_classification_cache');
+        }
+    }
+
+    function configSignature() {
+        const config = getConfig();
+        return JSON.stringify([config.provider, config.endpoint, config.model, configEpoch]);
     }
     
     function hasConfig() {
@@ -564,7 +668,9 @@ const AIAPI = (function() {
         const config = getConfig();
         if (config.provider !== 'codex' && !config.apiKey) throw new Error('请先在设置中配置 AI API Key');
         
-        const wordList = words.slice(0, 200).join(', ');
+        const unique = Array.from(new Set(words.map(function(word) { return String(word).trim().toLowerCase(); }).filter(Boolean)));
+        const submitted = unique.slice(0, 200);
+        const wordList = submitted.join(', ');
         const categories = [
             '科技与互联网', '商业与经济', '日常生活', '学术与教育',
             '情感与心理', '自然与环境', '政治与社会', '健康与医疗',
@@ -575,7 +681,7 @@ const AIAPI = (function() {
         
         const response = await fetch('/proxy/ai', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'MemoSuperform' },
             body: JSON.stringify({
                 provider: config.provider,
                 endpoint: config.endpoint,
@@ -597,21 +703,42 @@ const AIAPI = (function() {
             throw new Error('AI API 错误: ' + response.status + ' ' + (errData.error || ''));
         }
         
-        const data = await response.json();
+        const data = await MemoResponse.read(response);
         if (data.error) throw new Error(data.error);
         
-        const content = data.choices[0].message.content;
+        const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+        if (typeof content !== 'string') throw new Error('AI 返回的数据格式异常');
+        let parsed;
         try {
-            return JSON.parse(content);
+            parsed = JSON.parse(content);
         } catch (e) {
             const match = content.match(/\{[\s\S]*\}/);
-            if (match) return JSON.parse(match[0]);
-            throw new Error('AI 返回的内容无法解析为 JSON');
+            if (match) parsed = JSON.parse(match[0]);
+            else throw new Error('AI 返回的内容无法解析为 JSON');
         }
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('AI 分类格式异常');
+        const accepted = new Set(submitted);
+        const assigned = new Set();
+        const result = {};
+        Object.keys(parsed).forEach(function(category) {
+            if (!categories.includes(category) || !Array.isArray(parsed[category])) throw new Error('AI 分类类别或词汇列表格式异常');
+            result[category] = parsed[category].filter(function(word) {
+                if (typeof word !== 'string') throw new Error('AI 分类词汇格式异常');
+                const value = word.trim().toLowerCase();
+                if (!accepted.has(value) || assigned.has(value)) return false;
+                assigned.add(value);
+                return true;
+            }).map(function(word) { return word.trim().toLowerCase(); });
+        });
+        if (!assigned.size && submitted.length) throw new Error('AI 没有返回有效的目标词分类');
+        Object.defineProperty(result, 'statistics', { value: { requested: unique.length, submitted: submitted.length, classified: assigned.size, omitted: unique.length - assigned.size } });
+        return result;
     }
     
         // 批量获取单词中文释义（AI翻译，带本地缓存）
     async function getWordDefinitions(words) {
+        const epoch = MaimemoAPI.getSessionEpoch();
+        const signature = configSignature();
         const DEF_CACHE = 'memo_wdef_';
         const result = {};
         const uncached = [];
@@ -632,7 +759,7 @@ const AIAPI = (function() {
             try {
                 const response = await fetch('/proxy/ai', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'MemoSuperform' },
                     body: JSON.stringify({
                         provider: config.provider,
                         endpoint: config.endpoint, apiKey: config.apiKey,
@@ -648,7 +775,9 @@ const AIAPI = (function() {
                     })
                 });
                 if (!response.ok) continue;
-                const data = await response.json();
+                const data = await MemoResponse.read(response);
+                MaimemoAPI.assertSession(epoch);
+                if (signature !== configSignature()) throw new Error('AI 配置已变化，请重试');
                 if (data.error) continue;
                 const content = data.choices[0].message.content;
                 let parsed;
@@ -656,14 +785,14 @@ const AIAPI = (function() {
                 catch(e) { const m = content.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); else continue; }
                 for (const w of batch) {
                     const def = parsed[w] || parsed[w.toLowerCase()];
-                    if (def) { result[w] = def; localStorage.setItem(DEF_CACHE + w.toLowerCase(), JSON.stringify(def)); }
+                    if (def && typeof def.trans === 'string' && typeof def.phonetic === 'string' && typeof def.example === 'string') { result[w] = def; localStorage.setItem(DEF_CACHE + w.toLowerCase(), JSON.stringify(def)); }
                 }
             } catch(e) { console.warn('AI翻译失败:', e); }
         }
         return result;
     }
 
-return { getConfig, setConfig, hasConfig, classifyWords, getWordDefinitions };
+return { getConfig, setConfig, configSignature, hasConfig, classifyWords, getWordDefinitions };
 })();
 
 // ==========================================
@@ -679,13 +808,19 @@ const RecommendAPI = (function() {
     async function getToday() {
         const resp = await fetch('/api/recommendations/today', { headers: authHeaders() });
         if (!resp.ok) throw new Error('获取推荐失败: ' + resp.status);
-        return resp.json();
+        const data = await MemoResponse.read(resp);
+        if (!Array.isArray(data.recommendations) || !data.summary || typeof data.summary !== 'object') throw new Error('推荐数据格式异常');
+        return data;
     }
     async function markReviewed(id) {
         const resp = await fetch('/api/recommendations/' + id + '/review', {
             method: 'POST', headers: authHeaders({ 'X-Requested-With': 'XMLHttpRequest' })
         });
-        return resp.ok;
+        const data = await MemoResponse.read(resp);
+        if (!resp.ok || !data.ok) {
+            throw new Error(data.error || ('标记复习失败: ' + resp.status));
+        }
+        return true;
     }
     async function saveSnapshot(records, force) {
         const resp = await fetch('/api/snapshot', {
@@ -693,7 +828,7 @@ const RecommendAPI = (function() {
             headers: authHeaders({ 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }),
             body: JSON.stringify({ records: records, force: !!force })
         });
-        const data = await resp.json().catch(function() { return {}; });
+        const data = await MemoResponse.read(resp);
         if (!resp.ok || data.error) {
             throw new Error(data.error || ('保存快照失败: ' + resp.status));
         }

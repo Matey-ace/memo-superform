@@ -165,9 +165,29 @@ async function testCompanionEntryPreloadIsSilentAndFailuresAreCaught() {
     assert.deepStrictEqual(failure.calls, { refresh: 1, preload: 1, speak: 0 }, 'a failed preload must remain silent and never issue synthetic speech');
 }
 
+async function testInvalidAndLatePreloadNeverMarkTheCurrentWorkerLoaded() {
+    for (const read of [async()=>{throw new SyntaxError('html')},async()=>({})]) {
+        const harness=makeTtsHarness({ok:true,status:200,json:read});
+        await harness.TTS.refresh();
+        assert.strictEqual(await harness.TTS.preload(),false);
+        assert.strictEqual(harness.TTS.getStatus().loaded,false);
+        assert(harness.TTS.getLastError());
+    }
+    let release;
+    const harness=makeTtsHarness({ok:true,status:200,json:()=>new Promise(resolve=>{release=resolve})});
+    await harness.TTS.refresh();
+    const pending=harness.TTS.preload();
+    await flushPromises();
+    harness.TTS.stop();
+    release({ok:true});
+    assert.strictEqual(await pending,false);
+    assert.strictEqual(harness.TTS.getStatus().loaded,false);
+}
+
 Promise.resolve()
     .then(testPreloadUsesDedicatedEndpointAndMarksWorkerWarm)
     .then(testPreloadFailureResolvesWithoutStudyDisruption)
+    .then(testInvalidAndLatePreloadNeverMarkTheCurrentWorkerLoaded)
     .then(testCompanionEntryPreloadIsSilentAndFailuresAreCaught)
     .then(function() { console.log('COMPANION_TTS_PRELOAD_REGRESSION_PASS'); })
     .catch(function(error) { console.error(error); process.exitCode = 1; });

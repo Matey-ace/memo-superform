@@ -14,7 +14,7 @@ const StudyContentEditor = (function() {
                 ? MaimemoAPI.connectionStatus()
                 : null;
             const profile = status && status.profile_id;
-            if (profile) return String(profile).slice(-24);
+            if (profile) return encodeURIComponent(String(profile));
         } catch (e) {}
         return 'default';
     }
@@ -67,6 +67,12 @@ const StudyContentEditor = (function() {
         let observer = null;
         let poll = 0;
         let disposed = false;
+        let requestGeneration = 0;
+        function currentEpoch() { return MaimemoAPI.getSessionEpoch ? MaimemoAPI.getSessionEpoch() : profileKey(); }
+        function beginOperation() {
+            const generation = ++requestGeneration, epoch = currentEpoch();
+            return () => !disposed && generation === requestGeneration && epoch === currentEpoch();
+        }
 
         function currentWord() {
             try { return String((typeof options.getWord === 'function' ? options.getWord() : '') || '').trim(); }
@@ -80,6 +86,7 @@ const StudyContentEditor = (function() {
         }
 
         function setOpen(open) {
+            if (!open) requestGeneration += 1;
             state.open = !!open;
             panel.hidden = !state.open;
             panel.setAttribute('aria-hidden', state.open ? 'false' : 'true');
@@ -124,7 +131,7 @@ const StudyContentEditor = (function() {
                 return '<article class="study-content-card ' + (isKnownOwned ? 'is-owned' : 'is-public') + (isReadonly ? ' is-readonly' : '') + '" data-content-kind="' + kind + '" data-content-id="' + escapeHtml(id) + '">' +
                     '<div class="study-content-card-meta"><span>' + escapeHtml(meta) + '</span><em>' + (isKnownOwned ? '我的内容' : '墨墨内容') + '</em></div>' +
                     '<p class="study-content-card-text">' + escapeHtml(text || '暂无内容').replace(/\n/g, '<br>') + '</p>' +
-                    '<div class="study-content-card-actions">' + buttons + '</div>' +
+                    '<div class="study-content-card-actions">' + buttons + (!isReadonly ? '<button type="button" class="study-content-link" data-editor-action="copy" data-kind="' + kind + '" data-id="' + escapeHtml(id) + '">复制到我的内容</button>' : '') + '</div>' +
                     '</article>';
             }).join('');
         }
@@ -172,6 +179,7 @@ const StudyContentEditor = (function() {
         }
 
         async function load(word) {
+            const isCurrent = beginOperation();
             const targetWord = String(word || currentWord()).trim();
             if (!targetWord || !apiAvailable()) {
                 state.error = apiAvailable() ? '未检测到当前单词。' : '账号接口尚未加载，请刷新页面后重试。';
@@ -189,6 +197,7 @@ const StudyContentEditor = (function() {
             render();
             try {
                 const voc = await MaimemoAPI.getVocabulary(targetWord, false);
+                if (!isCurrent()) return;
                 const vocId = voc && (voc.voc || voc).id;
                 if (!vocId) throw new Error('墨墨没有返回该单词 ID');
                 state.vocId = String(vocId);
@@ -196,12 +205,16 @@ const StudyContentEditor = (function() {
                     MaimemoAPI.listInterpretations(state.vocId, false),
                     MaimemoAPI.listNotes(state.vocId, false)
                 ]);
+                if (!isCurrent()) return;
+                if (!result[0] || !Array.isArray(result[0].interpretations) || !result[1] || !Array.isArray(result[1].notes))
+                    throw new Error('墨墨内容格式异常，请重试读取');
                 state.interpretations = (result[0] && result[0].interpretations) || [];
                 state.notes = (result[1] && result[1].notes) || [];
                 state.loading = false;
                 setStatus('', '');
                 render();
             } catch (error) {
+                if (!isCurrent()) return;
                 state.loading = false;
                 state.error = error && error.message ? error.message : '读取墨墨内容失败';
                 setStatus(state.error, 'error');
@@ -231,6 +244,12 @@ const StudyContentEditor = (function() {
             if (state.saving) return;
             const kind = formElement.getAttribute('data-kind');
             const data = new FormData(formElement);
+            const isCurrent = beginOperation();
+            // 失败后重新渲染使用用户刚输入的草稿。
+            state.form.interpretation = String(data.get('interpretation') || '');
+            state.form.tags = String(data.get('tags') || '').split(/[,，]/).map(value => value.trim()).filter(Boolean);
+            state.form.note_type = String(data.get('note_type') || '');
+            state.form.note = String(data.get('note') || '');
             state.saving = true;
             setStatus('正在保存到墨墨…', 'loading');
             formElement.querySelectorAll('input, textarea, button').forEach(function(node) { node.disabled = true; });
@@ -243,6 +262,7 @@ const StudyContentEditor = (function() {
                         ? await MaimemoAPI.updateInterpretation(state.form.id, text, tags)
                         : await MaimemoAPI.createInterpretation(state.vocId, text, tags);
                     const id = result && ((result.interpretation && result.interpretation.id) || result.id);
+                    if (!isCurrent()) return;
                     if (id) rememberOwned('interpretation', id);
                 } else {
                     const type = String(data.get('note_type') || '').trim();
@@ -251,6 +271,7 @@ const StudyContentEditor = (function() {
                         ? await MaimemoAPI.updateNote(state.form.id, type, text)
                         : await MaimemoAPI.createNote(state.vocId, type, text);
                     const id = result && ((result.note && result.note.id) || result.id);
+                    if (!isCurrent()) return;
                     if (id) rememberOwned('note', id);
                 }
                 state.saving = false;
@@ -258,6 +279,7 @@ const StudyContentEditor = (function() {
                 setStatus('已保存，正在刷新内容…', 'success');
                 await load(state.word);
             } catch (error) {
+                if (!isCurrent()) return;
                 state.saving = false;
                 const message = error && error.message ? error.message : '保存失败';
                 const permissionDenied = state.form && state.form.id &&
@@ -265,7 +287,7 @@ const StudyContentEditor = (function() {
                 if (permissionDenied) {
                     state.readonly[kind][state.form.id] = true;
                 }
-                if (permissionDenied) state.form = null;
+                if (permissionDenied) { state.form.mode = 'create'; state.form.id = ''; }
                 setStatus(message + (permissionDenied ? '；该条目可以复制为你的内容。' : ''), 'error');
                 render();
             }
@@ -275,15 +297,18 @@ const StudyContentEditor = (function() {
             const item = findItem(kind, id);
             if (!item || state.saving) return;
             if (!window.confirm('确定删除这条' + (kind === 'note' ? '助记' : '释义') + '吗？此操作会同步到墨墨云端。')) return;
+            const isCurrent = beginOperation();
             state.saving = true;
             setStatus('正在删除…', 'loading');
             try {
                 if (kind === 'note') await MaimemoAPI.deleteNote(id);
                 else await MaimemoAPI.deleteInterpretation(id);
+                if (!isCurrent()) return;
                 forgetOwned(kind, id);
                 state.saving = false;
                 await load(state.word);
             } catch (error) {
+                if (!isCurrent()) return;
                 state.saving = false;
                 const message = error && error.message ? error.message : '删除失败';
                 if (error && error.status === 403 || /403|权限|禁止|无权/.test(message)) {
@@ -361,12 +386,20 @@ const StudyContentEditor = (function() {
             } catch (e) {}
         }
         iframe.addEventListener('load', startObserver);
+        function accountChanged() {
+            setOpen(false); state.saving = false; state.loading = false;
+            state.readonly = { interpretation: {}, note: {} };
+            state.word = ''; state.vocId = ''; state.interpretations = []; state.notes = [];
+            refreshTrigger();
+        }
+        window.addEventListener('memo-account-changed', accountChanged);
         startObserver();
 
         return {
             refresh: update,
             dispose: function() {
                 disposed = true;
+                window.removeEventListener('memo-account-changed', accountChanged);
                 clearInterval(poll);
                 if (observer) observer.disconnect();
                 iframe.removeEventListener('load', startObserver);

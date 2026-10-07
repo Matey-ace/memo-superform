@@ -183,16 +183,18 @@ const LayoutManager = (function() {
                 return;
             }
             if (typeof inst.getOption !== 'function') {
-                // 非 ECharts 实例（推荐/记忆日记）：把图表 DOM 克隆到全屏层。
+                // 移动原实例，保留按钮监听、输入和日记当前位置。
                 const fsEl = document.getElementById('fullscreenChart');
                 fsEl.innerHTML = '';
                 const tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
                 const src = tile ? tile.querySelector('.chart-container') : null;
-                if (src) {
-                    const clone = src.cloneNode(true);
-                    clone.id = '';
-                    clone.classList.remove('loading');
-                    fsEl.appendChild(clone);
+                if (src && src.parentNode) {
+                    const parent = src.parentNode;
+                    const placeholder = document.createComment('content-fullscreen-placeholder');
+                    parent.insertBefore(placeholder, src);
+                    fsEl.appendChild(src);
+                    fullscreenChartBackup = { tileIndex, instance: null, studyRoot: src, placeholder, parent };
+                    return;
                 }
                 fullscreenChartBackup = { tileIndex, instance: null };
                 return;

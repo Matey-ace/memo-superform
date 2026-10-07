@@ -5,7 +5,7 @@
 
     var STORAGE_KEY = 'memo_ui_style';
     // 此缓存标记仅用于本地静态资源失效，不参与应用版本或更新比较。
-    var VERSION = '20260921-frontend-audit';
+    var VERSION = '20261007-quality-hardening';
     var value = 'standard';
     try {
         var saved = localStorage.getItem(STORAGE_KEY);
