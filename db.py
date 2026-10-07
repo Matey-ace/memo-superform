@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
@@ -37,6 +38,35 @@ def _utc_now() -> str:
 
 def database_path() -> str:
     return _DB_PATH
+
+
+def create_database_backup() -> str:
+    """使用 SQLite 在线备份读取完整 WAL 快照，校验后原子提交。"""
+    root = os.path.realpath(_DATA_DIR)
+    directory = os.path.join(root, "backups")
+    if os.path.commonpath([root, os.path.realpath(directory)]) != root:
+        raise RuntimeError("数据库备份目录超出数据目录")
+    os.makedirs(directory, exist_ok=True)
+    target = os.path.join(directory, "memo-%s-%s.db" % (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"), uuid.uuid4().hex))
+    temporary = target + ".partial"
+    source = get_connection()
+    destination = None
+    try:
+        destination = sqlite3.connect(temporary)
+        source.backup(destination, pages=256)
+        result = destination.execute("PRAGMA integrity_check").fetchall()
+        if [str(row[0]) for row in result] != ["ok"]:
+            raise RuntimeError("数据库备份完整性校验失败")
+        destination.close()
+        destination = None
+        os.replace(temporary, target)
+        return target
+    finally:
+        if destination is not None:
+            destination.close()
+        source.close()
+        if os.path.exists(temporary):
+            os.remove(temporary)
 
 
 def _connect(*, autocommit: bool = True) -> sqlite3.Connection:
@@ -262,7 +292,7 @@ def get_study_record_hashes(profile_id: Any, voc_ids: Sequence[str]) -> dict[str
             if not part:
                 continue
             marks = ",".join("?" for _ in part)
-            rows = conn.execute("SELECT voc_id,record_hash FROM study_records WHERE profile_id=? AND voc_id IN (%s)" % marks,
+            rows = conn.execute("SELECT voc_id,record_hash FROM study_records WHERE profile_id=? AND is_active=1 AND voc_id IN (%s)" % marks,
                                 [pk] + part).fetchall()
             result.update({str(row[0]): str(row[1]) for row in rows})
         return result
@@ -280,9 +310,11 @@ def upsert_study_records(profile_id: Any, records: Sequence[Mapping[str, Any]]) 
             if not voc_id or not spelling:
                 continue
             digest = str(raw.get("content_hash") or _record_hash(raw))
-            existing = conn.execute("SELECT record_hash FROM study_records WHERE profile_id=? AND voc_id=?",
+            existing = conn.execute("SELECT record_hash,is_active FROM study_records WHERE profile_id=? AND voc_id=?",
                                     (pk, voc_id)).fetchone()
-            if existing and existing[0] == digest:
+            if existing and existing[0] == digest and existing[1]:
+                conn.execute("UPDATE study_records SET missing_reconcile_count=0,last_seen_at=? WHERE profile_id=? AND voc_id=? AND missing_reconcile_count>0",
+                             (now, pk, voc_id))
                 unchanged += 1
                 continue
             common = (spelling, raw.get("definition"), _date_text(raw.get("add_date")),
@@ -748,8 +780,13 @@ def _parse_date(value: Any) -> Optional[date]:
     if not text or text.lower() in {"none", "null"}:
         return None
     if text.isdigit():
+        if isinstance(value, str) and len(text) == 8:
+            try:
+                return datetime.strptime(text, "%Y%m%d").date()
+            except ValueError:
+                return None
         number = int(text)
-        if number > 10 ** 12:
+        if number >= 10 ** 11:
             number //= 1000
         try:
             return datetime.fromtimestamp(number, tz=timezone.utc).astimezone(BJ_TZ).date()

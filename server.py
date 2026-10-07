@@ -32,6 +32,7 @@ import maimemo_auth
 import tts
 from app_update import UpdateManager
 from build_info import BUILD_VERSION
+from diagnostics import append_log, redact_sensitive_text
 from live2d_service import Live2DService
 from app_api import LocalApiMixin, configure_local_api
 from static_security import is_forbidden_static_path
@@ -43,6 +44,9 @@ if sys.platform == "win32":
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+MAX_JSON_BODY = 64 * 1024 * 1024
+MAX_UPSTREAM_JSON = 8 * 1024 * 1024
 
 PORT = 8888
 # 打包为 exe 时静态资源在 PyInstaller 的解压目录 _MEIPASS 中
@@ -532,7 +536,14 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         return host in ('localhost', '127.0.0.1', '[::1]')
 
     def _is_forbidden_static_path(self, path):
-        return is_forbidden_static_path(path)
+        if is_forbidden_static_path(path):
+            return True
+        target = self.translate_path('/index.html' if path == '/' else path)
+        root = os.path.realpath(WEB_DIR)
+        try:
+            return os.path.commonpath([root, os.path.realpath(target)]) != root or os.path.isdir(target)
+        except (ValueError, OSError):
+            return True
 
     def _send_cors_headers(self):
         origin = (self.headers.get('Origin') or '').strip()
@@ -543,7 +554,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 if host in ('localhost', '127.0.0.1', '::1'):
                     self.send_header("Access-Control-Allow-Origin", origin)
                     self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-                    self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+                    self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, X-Requested-With")
             except Exception:
                 pass
 
@@ -631,6 +642,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
 
         self._disable_local_asset_cache = path.lower().endswith((".html", ".js", ".css"))
         try:
+            if path == "/":
+                self.path = "/index.html"
             super().do_GET()
         finally:
             self._disable_local_asset_cache = False
@@ -646,6 +659,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             return
         self._disable_local_asset_cache = path.lower().endswith((".html", ".js", ".css"))
         try:
+            if path == "/":
+                self.path = "/index.html"
             super().do_HEAD()
         finally:
             self._disable_local_asset_cache = False
@@ -656,6 +671,18 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         path = parsed.path
+
+        raw_length = str(self.headers.get('Content-Length', '0'))
+        if not raw_length.isdigit() or self.headers.get('Transfer-Encoding'):
+            self.close_connection = True
+            return self._send_json(400, {"error": "请求正文长度格式异常"})
+        upload = (path == "/api/tts/mount-pack" or
+                  (path.startswith("/api/tts/roles/") and path.endswith("/upload")))
+        if not upload and (path.startswith("/api/") or path.startswith("/proxy/")):
+            if self._safe_content_length() > MAX_JSON_BODY:
+                return self._send_json(413, {"error": "请求正文过大"})
+        if (path == "/proxy/ai" or path.startswith("/proxy/memo/")) and not self._local_mutation_allowed():
+            return self._send_json(403, {"error": "请求来源校验失败"})
 
         # ---- /api/* 业务接口 ----
         if path.startswith("/api/"):
@@ -669,15 +696,27 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
                 return
             target_url = MAIMEMO_BASE + "/api/v1/memo/" + api_path
-            body = self.rfile.read(self._safe_content_length())
+            try:
+                body = json.dumps(self._read_json_body()).encode("utf-8")
+            except (ValueError, UnicodeError):
+                return self._send_json(400, {"error": "Invalid JSON body"})
             self._proxy_request(target_url, method="POST", body=body)
             return
 
         # 代理 AI API: /proxy/ai
         if path == "/proxy/ai":
-            body = self.rfile.read(self._safe_content_length())
             try:
-                req_data = json.loads(body)
+                req_data = self._read_json_body()
+                if not isinstance(req_data.get("body", {}), dict):
+                    raise ValueError("AI body 必须是对象")
+                messages = req_data.get("body", {}).get("messages", [])
+                if not isinstance(messages, list) or len(messages) > 200 or any(
+                    not isinstance(item, dict) or item.get("role") not in ("system", "developer", "user", "assistant", "tool")
+                    or not isinstance(item.get("content", ""), (str, list)) for item in messages
+                ):
+                    raise ValueError("AI messages 格式异常")
+                if not isinstance(req_data.get("endpoint", ""), str) or not isinstance(req_data.get("apiKey", ""), str):
+                    raise ValueError("AI 配置格式错误")
                 ai_endpoint = req_data.get("endpoint", "").rstrip("/")
                 ai_key = req_data.get("apiKey", "")
                 ai_body = req_data.get("body", {})
@@ -707,26 +746,16 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 ai_req.add_header("Authorization", "Bearer " + ai_key)
 
                 try:
-                    ai_resp = urllib.request.urlopen(ai_req, timeout=60)
-                    _AI_MAX = 8 * 1024 * 1024
-                    _len = ai_resp.headers.get("Content-Length")
-                    if _len and _len.isdigit() and int(_len) > _AI_MAX:
-                        self._send_json(413, {"error": "AI response too large"})
-                        return
-                    ai_result = ai_resp.read(_AI_MAX + 1).decode("utf-8", errors="replace")
-                    if len(ai_result) > _AI_MAX:
-                        self._send_json(413, {"error": "AI response too large"})
-                        return
-                    self._send_json(200, json.loads(ai_result))
+                    with urllib.request.urlopen(ai_req, timeout=60) as ai_resp:
+                        self._send_upstream_json(ai_resp.status, ai_resp.read(MAX_UPSTREAM_JSON + 1))
                 except urllib.error.HTTPError as e:
-                    err_body = e.read().decode("utf-8") if e.fp else ""
-                    self._send_json(e.code, {"error": err_body})
+                    self._send_upstream_json(e.code, e.read(MAX_UPSTREAM_JSON + 1) if e.fp else b"")
                 except urllib.error.URLError as e:
                     # 上游不可达（DNS/连接/超时）应返回 502，而不是 500
                     self._send_json(502, {"error": "AI 上游不可达: %s" % getattr(e, "reason", e)})
                 except Exception as e:
                     self._send_json(500, {"error": str(e)})
-            except json.JSONDecodeError:
+            except (ValueError, UnicodeError):
                 self._send_json(400, {"error": "Invalid JSON body"})
             return
 
@@ -745,6 +774,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self._handle_api_delete(parsed.path, parsed)
             return
         if parsed.path.startswith("/proxy/memo/"):
+            if not self._local_mutation_allowed():
+                return self._send_json(403, {"error": "请求来源校验失败"})
             api_path = parsed.path[len("/proxy/memo/"):]
             if not self._official_api_allowed(api_path, "DELETE", parsed.query):
                 self._send_json(404, {"error": "该墨墨开放接口未被本应用使用"})
@@ -769,10 +800,50 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
 
     def _read_json_body(self):
         length = self._safe_content_length()
-        raw = self.rfile.read(length) if length > 0 else b""
+        if length > MAX_JSON_BODY:
+            raise ValueError("请求正文过大")
+        old_timeout = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(10)
+            raw = self.rfile.read(length) if length > 0 else b""
+        except (TimeoutError, OSError) as exc:
+            self.close_connection = True
+            raise ValueError("请求正文读取超时") from exc
+        finally:
+            self.connection.settimeout(old_timeout)
+        if len(raw) != length:
+            raise ValueError("请求正文不完整")
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        value = json.loads(raw.decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("JSON body 必须是对象")
+        return value
+
+    def _local_mutation_allowed(self):
+        if self.headers.get("X-Requested-With") not in ("XMLHttpRequest", "MemoSuperform"):
+            return False
+        origin = self.headers.get("Origin")
+        return not origin or origin == "http://" + self.headers.get("Host", "")
+
+    def _send_upstream_json(self, status, raw, retry_after=None):
+        try:
+            if len(raw) > MAX_UPSTREAM_JSON:
+                raise ValueError("response too large")
+            data = json.loads(raw.decode("utf-8"))
+            if not isinstance(data, (dict, list)):
+                raise ValueError("invalid JSON response")
+        except (ValueError, UnicodeError):
+            data = {"error": "上游返回非 JSON 或过大的响应，请稍后重试", "upstream_status": status}
+            if 200 <= status < 300:
+                status = 502
+        self.send_response(status)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        if retry_after:
+            self.send_header("Retry-After", str(retry_after))
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     @staticmethod
     def _official_api_allowed(api_path, method, query=""):
@@ -826,8 +897,11 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         rate_profile = ""
         if not auth:
             try:
-                auth = "Bearer " + MAIMEMO_OAUTH.access_token()
-                rate_profile = MAIMEMO_OAUTH.profile_key()
+                if callable(getattr(MAIMEMO_OAUTH, "authorization_context", None)):
+                    token, rate_profile = MAIMEMO_OAUTH.authorization_context()
+                else:
+                    token, rate_profile = MAIMEMO_OAUTH.access_token(), MAIMEMO_OAUTH.profile_key()
+                auth = "Bearer " + token
             except Exception as exc:
                 return self._send_json(401, {"error": str(exc) or "请先连接墨墨账号"})
         elif "study_sync" in globals():
@@ -848,14 +922,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                     # 与 StudySyncService 共用同一限流器。Web 请求没有用户取消
                     # 通道，故传入一次性 Event；此处仍由 429 Retry-After 兜底。
                     OFFICIAL_API_LIMITER.acquire(threading.Event(), rate_profile)
-                resp = urllib.request.urlopen(req, timeout=30)
-                result = resp.read().decode("utf-8")
-                self.send_response(resp.status)
-                self._send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(result.encode("utf-8"))
-                return
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return self._send_upstream_json(resp.status, resp.read(MAX_UPSTREAM_JSON + 1))
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt < 2:
                     retry_error = e
@@ -865,16 +933,9 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                     if threading.Event().wait(delay):
                         break
                     continue
-                err_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-                self.send_response(e.code)
-                self._send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
+                raw = e.read(MAX_UPSTREAM_JSON + 1) if e.fp else b""
                 retry_after = e.headers.get("Retry-After") if e.headers else None
-                if retry_after:
-                    self.send_header("Retry-After", str(retry_after))
-                self.end_headers()
-                self.wfile.write(err_body.encode("utf-8"))
-                return
+                return self._send_upstream_json(e.code, raw, retry_after)
             except Exception as e:
                 self.send_response(502)
                 self._send_cors_headers()
@@ -897,6 +958,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self.log_date_time_string(), args[0] if len(args) > 0 else '',
             args[1] if len(args) > 1 else '', args[2] if len(args) > 2 else '',
         )
+        line = redact_sensitive_text(line)
         try:
             if sys.stderr is not None:
                 sys.stderr.write(line)
@@ -906,8 +968,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         # 窗口版 EXE 没有控制台输出流；应用从托盘运行时，HTTP 日志绝不能因此
         # 中断响应。
         try:
-            with open(os.path.join(DATA_DIR, "server.log"), "a", encoding="utf-8") as handle:
-                handle.write(line)
+            append_log(os.path.join(DATA_DIR, "server.log"), line)
         except OSError:
             pass
 

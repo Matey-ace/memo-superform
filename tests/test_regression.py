@@ -126,7 +126,7 @@ class RepositoryContracts(unittest.TestCase):
             self.assertFalse(is_forbidden_static_path(path), path)
 
     def test_release_is_single_asset_and_non_destructive(self):
-        script = self.read("release.ps1")
+        script = self.read("release.ps1") + self.read("release-guards.ps1")
         self.assertNotRegex(script, r"(?m)^\\s*git add -A")
         self.assertNotIn("Method Delete", script)
         self.assertIn("MemoSuperform-$tag.exe", script)

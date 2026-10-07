@@ -2809,6 +2809,20 @@ def import_model_file(pack_dir, voice_name, kind, data):
     raise TTSException("旧模型上传入口已移除；请通过角色资料上传 GPT、SoVITS 或 index 文件")
 
 
+def _worker_admission(operation):
+    @wraps(operation)
+    def guarded(self, *args, **kwargs):
+        if not self._operation_lock.acquire(blocking=False):
+            raise TTSException("语音引擎正在处理请求，请稍后重试")
+        self._busy = True
+        try:
+            return operation(self, *args, **kwargs)
+        finally:
+            self._busy = False
+            self._operation_lock.release()
+    return guarded
+
+
 class TTSManager:
     """管理 GPT-SoVITS worker 子进程（JSON 行协议）。"""
 
@@ -2820,6 +2834,7 @@ class TTSManager:
         self._pending = {}
         self._pending_lock = threading.Lock()
         self._cmd_lock = threading.RLock()
+        self._operation_lock = threading.Lock()
         self._reader = None
         self._busy = False
         self._last_status = {}
@@ -2831,7 +2846,7 @@ class TTSManager:
 
     @property
     def is_busy(self):
-        return self._busy
+        return self._busy or self._operation_lock.locked()
 
     # ---------- 进程生命周期 ----------
 
@@ -3023,6 +3038,7 @@ class TTSManager:
 
     # ---------- 对外操作 ----------
 
+    @_worker_admission
     def synthesize(self, text, voice_name, language="中文", speed=1.0, *,
                    top_k=15, fragment_interval=0.5, text_split_method="cut0",
                    seed=-1, use_cuda_graph=False, parallel_infer=False):
@@ -3072,6 +3088,7 @@ class TTSManager:
         self._last_status["is_loaded"] = True
         return wav_path
 
+    @_worker_admission
     def preload(self, voice_name):
         try:
             voice = self._resolve_voice_config(voice_name)

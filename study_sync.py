@@ -788,14 +788,13 @@ class StudySyncService:
         seed_records: Optional[Sequence[Mapping[str, Any]]],
         source: str,
     ) -> None:
-        clean_seed: list[dict[str, Any]] = []
-        seed_is_trusted = False
         if seed_records:
             status.update(phase="importing_seed")
             try:
-                clean_seed = _validate_seed_records(seed_records)
-                seed_is_trusted = True
-                self._apply_if_changed(profile_id, clean_seed, status)
+                _validate_seed_records(seed_records)
+                # 缓存数量和结构都不能证明账号归属或内容一致。只以远端
+                # 完整查询建立持久基线，避免把另一账号的缓存导入本账号。
+                status.update(phase="seed_pending_verification")
             except DataIncompleteError:
                 # 只有所有记录都带唯一稳定 ID 时，旧浏览器缓存才有价值。畸形或重复
                 # 的缓存按不存在处理并建立经核验的基线，不让整个安装流程失败。
@@ -805,23 +804,6 @@ class StudySyncService:
         remote_total = self.client.count(
             token, cancel_event, on_retry=lambda text: status.update(phase=text), profile_id=profile_id
         )
-        if seed_is_trusted and len(clean_seed) == remote_total:
-            # 唯一快速初始化路径：结构有效的缓存状态与远程数量完全一致，因此无需
-            # 再请求包括 2020–2022 在内的历史区间。
-            self.repository.set_sync_state(
-                profile_id,
-                bootstrap_complete=True,
-                bootstrap_source="browser_seed",
-                last_remote_count=remote_total,
-                last_incremental_at=self.now().isoformat(),
-                last_incremental_date=beijing_today(self.now()).isoformat(),
-                last_reconcile_at=self.now().isoformat(),
-                needs_reconcile=False,
-                last_error=None,
-            )
-            status.update(records_count=len(clean_seed), progress_total=remote_total,
-                          progress_current=len(clean_seed), phase="seed_baseline_complete")
-            return
         status.update(phase="fetching_ranges", progress_total=remote_total, progress_current=0)
         seen: set[str] = set()
         self._fetch_range_tree(
@@ -1210,6 +1192,7 @@ class SyncManager:
         self.service = service
         self._tasks: dict[str, _ManagedTask] = {}
         self._last_status: dict[str, dict[str, Any]] = {}
+        self._deleting: set[str] = set()
         self._lock = threading.RLock()
 
     def start(
@@ -1226,6 +1209,8 @@ class SyncManager:
         # 调用保持原来的 hash 行为。
         profile_id = self._resolve_profile(profile_id or token)
         with self._lock:
+            if profile_id in self._deleting:
+                raise StudySyncError("正在删除本机学习数据，请稍后重试同步")
             current = self._tasks.get(profile_id)
             if current and current.thread.is_alive():
                 return current.status.snapshot()
@@ -1251,15 +1236,16 @@ class SyncManager:
         cancel_event: threading.Event,
         status: SyncStatus,
     ) -> None:
-        result = self.service.run(
-            token,
-            mode,
-            reason=reason,
-            cancel_event=cancel_event,
-            status=status,
-            seed_records=seed_records,
-            profile_id=profile_id,
-        )
+        try:
+            result = self.service.run(
+                token, mode, reason=reason, cancel_event=cancel_event, status=status,
+                seed_records=seed_records, profile_id=profile_id,
+            )
+        except Exception as exc:
+            # 建立/结束数据库运行记录也可能失败；后台线程退出必须留下终态。
+            status.update(status="failed", phase="failed", active=False, needs_reconcile=True,
+                          finished_at=datetime.now(timezone.utc).isoformat(), error=str(exc))
+            result = status.snapshot()
         with self._lock:
             self._last_status[profile_id] = result
 
@@ -1272,6 +1258,33 @@ class SyncManager:
             task.cancel_event.set()
             task.status.update(phase="cancelling")
             return task.status.snapshot()
+
+    def delete_profile_data(self, token_or_profile_id: str, delete: Callable[[str], Any],
+                            *, timeout: float = 5.0) -> Any:
+        """阻止新任务并等待旧任务全部退出，随后提交删除事务。"""
+        profile_id = self._resolve_profile(token_or_profile_id)
+        with self._lock:
+            if profile_id in self._deleting:
+                raise StudySyncError("本机学习数据删除正在进行，请稍后重试")
+            self._deleting.add(profile_id)
+            task = self._tasks.get(profile_id)
+            if task:
+                task.cancel_event.set()
+                task.status.update(phase="cancelling")
+        try:
+            # 不持有管理锁等待，否则任务最后写入状态会死锁。
+            if task:
+                task.thread.join(timeout=max(0.0, timeout))
+                if task.thread.is_alive():
+                    raise StudySyncError("同步请求仍在退出，数据已保留，请稍后重试删除")
+            result = delete(profile_id)
+            with self._lock:
+                self._tasks.pop(profile_id, None)
+                self._last_status.pop(profile_id, None)
+            return result
+        finally:
+            with self._lock:
+                self._deleting.discard(profile_id)
 
     def status(self, token_or_profile_id: str) -> dict[str, Any]:
         profile_id = self._resolve_profile(token_or_profile_id)

@@ -15,6 +15,7 @@ const App = (function() {
     let notepadDataLoaded = false;
     let notepadDataPromise = null;
     let studyDataGeneration = 0;
+    let wordDataGeneration = 0;
     let settingsPreviousFocus = null;
     const VALID_REFRESH_INTERVALS = [5, 10, 15, 30, 60];
     let autoRefreshEnabled = localStorage.getItem('auto_refresh_enabled') !== 'false';
@@ -34,6 +35,11 @@ const App = (function() {
         if (typeof Live2DCompanion !== 'undefined') Live2DCompanion.init();
         window.addEventListener('memo-study-sync-status', updateCountdown);
         StudySyncUI.init({ onRecordsChanged: handleStudyRecordsChanged });
+        window.addEventListener('memo-account-changed', function() {
+            resetStudyDataForProfileChange();
+            if (window.TTS) TTS.stop();
+            if (typeof Live2DCompanion !== 'undefined' && Live2DCompanion.isOpen()) Live2DCompanion.exit();
+        });
         setupAutoRefresh();
         
         try {
@@ -320,7 +326,7 @@ const App = (function() {
         }
         async function refreshMaimemoAccount() {
             try {
-                const wasConnected = MaimemoAPI.hasToken();
+                const previousProfile = MaimemoAPI.connectionStatus().profile_id;
                 const status = await MaimemoAPI.refreshConnection();
                 const connected = Boolean(status.connected);
                 // 新版桌面启动器会报告 Windows 自定义协议注册结果。旧服务没有
@@ -341,8 +347,7 @@ const App = (function() {
                     stopMaimemoPolling();
                     // OAuth 回调在外部浏览器完成后只会更新本机凭据。这里检测到
                     // 状态转换后主动刷新仪表盘，不要求用户再手动保存设置。
-                    if (!wasConnected) {
-                        resetStudyDataForProfileChange();
+                    if (previousProfile !== status.profile_id) {
                         hideWelcome();
                         loadAllData();
                     }
@@ -388,7 +393,6 @@ const App = (function() {
         maimemoDisconnectBtn.addEventListener('click', async function() {
             try {
                 await MaimemoAPI.disconnect();
-                resetStudyDataForProfileChange();
                 await refreshMaimemoAccount();
                 showWelcome();
             } catch (e) {
@@ -407,7 +411,6 @@ const App = (function() {
                 const p = progress.progress || progress;
                 maimemoStatus.textContent = '✓ Token 已保存并连接成功' + (p && p.total !== undefined ? (' · 今日 ' + (p.finished || 0) + '/' + p.total) : '');
                 maimemoStatus.className = 'status-text success';
-                resetStudyDataForProfileChange();
                 await refreshMaimemoAccount();
                 hideWelcome();
                 loadAllData();
@@ -533,9 +536,20 @@ const App = (function() {
     // ---- AI 分类按钮（事件委托）----
     
     function setupAIClassifyButton() {
+        let requestSequence = 0;
         document.addEventListener('click', async function(e) {
             const btn = e.target.closest('.ai-btn');
             if (!btn) return;
+            const sequence = ++requestSequence;
+            const epoch = MaimemoAPI.getSessionEpoch();
+            const generation = studyDataGeneration;
+            const wordGeneration = wordDataGeneration;
+            const configSignature = AIAPI.configSignature();
+            const selection = () => Array.from(btn.closest('.ai-toolbar').querySelectorAll('input, select')).map(el => el.value).join('\u0000');
+            const selected = selection();
+            const isCurrent = () => sequence === requestSequence && epoch === MaimemoAPI.getSessionEpoch()
+                && generation === studyDataGeneration && wordGeneration === wordDataGeneration
+                && configSignature === AIAPI.configSignature() && btn.isConnected && selection() === selected;
             
             const tile = btn.closest('.tile');
             const toolbar = btn.closest('.ai-toolbar');
@@ -574,29 +588,8 @@ const App = (function() {
                     ? 'study_' + startDate + '_' + endDate + '_' + dateField
                     : 'notepad';
 
-                // 命中缓存则直接使用，不重复调用 AI
-                const aiCacheRaw = localStorage.getItem('ai_classification_cache');
-                if (aiCacheRaw) {
-                    try {
-                        const cached = JSON.parse(aiCacheRaw);
-                        if (cached.key === cacheKey &&
-                            Date.now() - cached.timestamp < 7 * 24 * 60 * 60 * 1000) {
-                            ChartManager.setAIClassification(cached.data);
-                            document.querySelectorAll('.tile').forEach(t => {
-                                const index = parseInt(t.dataset.tile);
-                                if (ChartManager.getChartType(index) === 'aiclass') {
-                                    ChartManager.render(index, 'aiclass');
-                                }
-                            });
-                            if (statusEl) {
-                                statusEl.textContent = '✓ 使用缓存结果（' + cached.wordCount + ' 个单词）';
-                                setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
-                            }
-                            btn.disabled = false;
-                            return;
-                        }
-                    } catch (e) {}
-                }
+                let cached = null;
+                try { cached = JSON.parse(localStorage.getItem('ai_classification_cache') || 'null'); } catch (e) {}
                 
                 if (dataSource === 'study') {
                     // 从学习记录中按时间范围获取单词
@@ -636,13 +629,24 @@ const App = (function() {
                 
                 // 调用 AI 分类
                 const wordList = words.map(w => w.word || w);
-                const classification = await AIAPI.classifyWords(wordList);
+                const wordSignature = JSON.stringify(Array.from(new Set(wordList.map(word => String(word).trim().toLowerCase()))).sort());
+                const cacheMatches = cached && !words.partial && cached.words === wordSignature && cached.statistics
+                    && cached.key === cacheKey && cached.profile === MaimemoAPI.connectionStatus().profile_id
+                    && cached.config === configSignature && Date.now() - cached.timestamp < 7 * 24 * 60 * 60 * 1000;
+                const classification = cacheMatches ? cached.data : await AIAPI.classifyWords(wordList);
+                if (!isCurrent()) return;
+                const statistics = cacheMatches ? cached.statistics : classification.statistics;
                 
                 // 缓存结果
-                localStorage.setItem('ai_classification_cache', JSON.stringify({
+                if (!words.partial) localStorage.setItem('ai_classification_cache', JSON.stringify({
                     data: classification,
+                    profile: MaimemoAPI.connectionStatus().profile_id,
+                    config: configSignature,
+                    words: wordSignature,
+                    recordsGeneration: studyDataGeneration,
+                    statistics: statistics,
                     timestamp: Date.now(),
-                    wordCount: words.length,
+                    wordCount: statistics.classified,
                     source: dataSource,
                     startDate: startDate,
                     endDate: endDate,
@@ -663,13 +667,14 @@ const App = (function() {
                     const sourceLabel = dataSource === 'study' 
                         ? `（${startDate} ~ ${endDate}）` 
                         : '（云词本）';
-                    statusEl.textContent = `✓ 分类完成，${words.length} 个单词${sourceLabel}`;
-                    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 5000);
+                    statusEl.textContent = `✓ 输入 ${statistics.requested} 词，提交 ${statistics.submitted}，分类 ${statistics.classified}，未覆盖 ${statistics.omitted}${sourceLabel}`;
+                    if (words.partial) statusEl.textContent += '；' + words.warning;
+                    setTimeout(() => { if (isCurrent() && statusEl) statusEl.textContent = ''; }, 5000);
                 }
 
                 // 朗读 AI 分类结果
                 const speakBtn = document.getElementById('aiSpeakBtn');
-                const summaryText = `AI 单词分类完成，共 ${words.length} 个单词${dataSource === 'study' ? '' : '（云词本）'}`;
+                const summaryText = `AI 单词分类完成，已分类 ${statistics.classified} 个单词，未覆盖 ${statistics.omitted} 个`;
                 if (window.TTS && TTS.isReady()) {
                     if (speakBtn) {
                         speakBtn.style.display = '';
@@ -681,8 +686,12 @@ const App = (function() {
                 }
                 
             } catch (e) {
-                if (statusEl) statusEl.textContent = '✗ ' + e.message;
+                if (isCurrent() && statusEl) statusEl.textContent = '✗ ' + e.message;
                 console.error('AI 分类失败:', e);
+            } finally {
+                btn.disabled = false;
+                if (sequence === requestSequence && btn.isConnected && !isCurrent() && statusEl)
+                    statusEl.textContent = '条件已变更，请重新分类';
             }
             
             btn.disabled = false;
@@ -741,6 +750,7 @@ const App = (function() {
         });
         if (companionRead) companionRead.addEventListener('change', function() {
             localStorage.setItem('tts_companion_enabled', companionRead.checked ? 'true' : 'false');
+            if (!companionRead.checked && window.TTS) TTS.stop('companion');
         });
         const fragRange = document.getElementById('ttsFragRange');
         const fragValue = document.getElementById('ttsFragValue');
@@ -1034,7 +1044,7 @@ const App = (function() {
             if (!jobId) return;
             try {
                 const response = await fetch('/api/tts/mount-pack/jobs/' + encodeURIComponent(jobId));
-                const job = await response.json().catch(function() { return {}; });
+                const job = await MemoResponse.read(response);
                 if (response.status === 404) {
                     await reconcileMissingPackMountJob();
                     return;
@@ -1117,7 +1127,7 @@ const App = (function() {
                     headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/zip' }),
                     body: file
                 });
-                const data = await response.json().catch(function() { return {}; });
+                const data = await MemoResponse.read(response);
                 if (!response.ok || data.error) throw new Error(data.error || '语音包上传失败');
                 startPackMountPolling(data.job || { job_id: data.job_id, source_name: label, source_size: file.size });
             } catch (error) {
@@ -1575,12 +1585,12 @@ const App = (function() {
                 // before the server can begin writing it to disk.
                 method: 'POST', headers: Object.assign(roleHeaders(false), { 'Content-Type': 'application/octet-stream' }), body: file
             });
-            const data = await response.json().catch(function() { return {}; });
+            const data = await MemoResponse.read(response);
             if (!response.ok || data.error) throw new Error(data.error || ('上传失败：' + file.name));
         }
         async function postRoleJson(path, payload) {
             const response = await fetch(path, { method: 'POST', headers: roleHeaders(true), body: JSON.stringify(payload || {}) });
-            const data = await response.json().catch(function() { return {}; });
+            const data = await MemoResponse.read(response);
             if (!response.ok || data.error) throw new Error(data.error || '角色资料保存失败');
             return data;
         }
@@ -1790,6 +1800,7 @@ const App = (function() {
 
         if (enableBtn) enableBtn.addEventListener('click', async function() {
             const target = !TTS.getStatus().enabled;
+            if (!target) TTS.stop();
             if (actionEl) { actionEl.textContent = target ? '正在开启...' : '正在关闭...'; actionEl.className = 'status-text'; }
             const result = await TTS.setEnabled(target);
             if (actionEl) {
@@ -1838,7 +1849,7 @@ const App = (function() {
                 const resp = await fetch('/api/tts/repair', {
                     method: 'POST', headers: roleHeaders(true), body: JSON.stringify({})
                 });
-                const data = await resp.json().catch(function() { return {}; });
+                const data = await MemoResponse.read(resp);
                 if (!resp.ok || data.error) throw new Error(data.error || '修复失败');
                 if (actionEl) { actionEl.textContent = '✓ ' + (data.message || '语音环境已修复'); actionEl.className = 'status-text success'; }
             } catch (error) {
@@ -1872,17 +1883,6 @@ const App = (function() {
         ChartManager.renderVisibleFromSelectors(false);
     }
 
-    function restoreAICache() {
-        const aiCache = localStorage.getItem('ai_classification_cache');
-        if (!aiCache) return;
-        try {
-            const cached = JSON.parse(aiCache);
-            if (Date.now() - cached.timestamp < 7 * 24 * 60 * 60 * 1000) {
-                ChartManager.setAIClassification(cached.data);
-            }
-        } catch (e) {}
-    }
-
     function queueDailySnapshot(records, generation) {
         if (generation !== studyDataGeneration) return;
         if (!Array.isArray(records) || !records.length) return;
@@ -1902,7 +1902,8 @@ const App = (function() {
         notepadDataPromise = MaimemoAPI.getAllNotepadWords().then(function(notepadWords) {
             if (generation !== studyDataGeneration) return;
             ChartManager.setNotepadWords(notepadWords);
-            notepadDataLoaded = true;
+            wordDataGeneration += 1;
+            notepadDataLoaded = !notepadWords.partial;
             // 词书进度图依赖词本数据；只在它到达后补渲染一次。
             ChartManager.renderVisibleFromSelectors(false);
         }).catch(function(e) {
@@ -1917,8 +1918,9 @@ const App = (function() {
         const currentGeneration = generation === undefined ? studyDataGeneration : generation;
         if (currentGeneration !== studyDataGeneration) return;
         ChartManager.setRecords(records);
+        wordDataGeneration += 1;
         queueDailySnapshot(records, currentGeneration);
-        restoreAICache();
+        ChartManager.setAIClassification(null);
         if (records.length) loadSupplementalData();
         setTimeout(function() {
             if (currentGeneration === studyDataGeneration) ChartManager.renderVisibleFromSelectors(false);

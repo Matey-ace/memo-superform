@@ -277,7 +277,7 @@ const StudySyncUI = (function() {
         if (document.visibilityState && document.visibilityState !== 'visible') return false;
         if (typeof LayoutManager !== 'undefined' && LayoutManager.isDragging && LayoutManager.isDragging()) return false;
         if (document.querySelector('#settingsPanel.show, .fullscreen-modal.show, .app-update-modal.show')) return false;
-        return !document.querySelector('.study-web-container[data-study-screen-active="true"]');
+        return !Array.from(document.querySelectorAll('[data-study-screen-active="true"]')).some(StudyLifecycle.isVisible);
     }
 
     async function loadInitialData(reason) {

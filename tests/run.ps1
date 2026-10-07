@@ -1,7 +1,12 @@
-param()
+param([switch]$Browser)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+$previousMemoDataDir = $env:MEMO_DATA_DIR
+if (-not $previousMemoDataDir) {
+    $env:MEMO_DATA_DIR = Join-Path $root ('_verification\regression-' + [guid]::NewGuid().ToString('N'))
+}
+try {
 $jsFiles = Get-ChildItem js -Filter *.js -File
 foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 & node tests/study-keyboard-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -20,7 +25,20 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/companion-language-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/companion-reminder-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/app-update-ui-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot 'release-guards.ps1')
+if ($env:OS -eq 'Windows_NT') {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'release-guards.ps1')
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+if ($Browser) {
+    & node tests/browser/study-keyboard.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & node tests/browser/quality-hardening.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & node tests/browser/dashboard-smoke.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 & python -m compileall -q @((Get-ChildItem -File *.py).FullName); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & python -m unittest discover -s tests -p "test_*.py" -v; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & git diff --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Output 'REGRESSION_SUITE_PASS'
+} finally {
+    $env:MEMO_DATA_DIR = $previousMemoDataDir
+}

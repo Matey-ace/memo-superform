@@ -216,17 +216,20 @@ class StudySyncTests(unittest.TestCase):
         self.assertTrue(repo.states[result["profile_id"]]["bootstrap_complete"])
         self.assertEqual(1, len(repo.intervals))
 
-    def test_trusted_seed_with_matching_count_becomes_baseline_without_historical_range_requests(self):
+    def test_matching_seed_count_still_verifies_cloud_identity_and_content(self):
         repo = FakeRepository()
-        transport = FakeTransport(lambda payload, _number: HTTPResponse(200, body={"data": {"count": 2, "records": []}}))
+        def handler(payload, _number):
+            if payload.get("as_count"):
+                return HTTPResponse(200, body={"data": {"count": 2}})
+            return HTTPResponse(200, body={"data": {"records": [record("remote-a"), record("remote-b")]}})
+        transport = FakeTransport(handler)
         service = StudySyncService(repo, client=MaimemoStudyClient(transport, max_retries=0), now=lambda: NOW)
         result = service.run("token", "bootstrap", seed_records=[record("cached-a"), record("cached-b")])
         self.assertEqual("completed", result["status"])
-        self.assertEqual(1, len(transport.calls))
+        self.assertEqual(2, len(transport.calls))
         self.assertEqual({"as_count": True}, transport.calls[0])
-        self.assertEqual(0, len(repo.intervals))
-        self.assertEqual("browser_seed", repo.states[result["profile_id"]]["bootstrap_source"])
-        self.assertEqual(2, len(repo.records[result["profile_id"]]))
+        self.assertEqual(1, len(repo.intervals))
+        self.assertEqual({"remote-a", "remote-b"}, set(repo.records[result["profile_id"]]))
 
     def test_invalid_seed_is_not_a_baseline_and_falls_back_to_verified_range_bootstrap(self):
         repo = FakeRepository()

@@ -4,6 +4,7 @@
 // ==========================================
 
 const StudyWeb = (function() {
+    var preferredStudyContainer = null;
     var defaultShortcuts = StudyShortcuts.defaultShortcuts;
     var loadShortcuts = StudyShortcuts.loadShortcuts;
     var saveShortcuts = StudyShortcuts.saveShortcuts;
@@ -46,7 +47,7 @@ const StudyWeb = (function() {
 
         container.innerHTML =
             '<div class="study-web-container">' +
-                '<iframe class="study-web-iframe" src="' + iframeSrc + '" ' +
+                '<iframe class="study-web-iframe" title="墨墨背单词学习与账号登录" src="' + iframeSrc + '" ' +
                     'sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>' +
                 '<div class="study-web-loading">' +
                     '<div class="spinner"></div>' +
@@ -308,7 +309,13 @@ const StudyWeb = (function() {
                     if (e.key === 'Escape') { setShortcutPanelOpen(false); shortcutToggle.focus(); return; }
                     if (e.repeat || ['Shift','Control','Alt','Meta'].indexOf(e.key) >= 0) return;
                     var action = input.getAttribute('data-shortcut');
-                    shortcutMap[action] = { key: normaliseKey(e.key), modifiers: eventModifiers(e), enabled: true };
+                    var nextShortcut = { key: normaliseKey(e.key), modifiers: eventModifiers(e), enabled: true };
+                    var collision = Object.keys(shortcutMap).find(function(other) {
+                        return other !== action && shortcutMap[other].enabled !== false && formatShortcut(shortcutMap[other]) === formatShortcut(nextShortcut);
+                    });
+                    if (collision) { input.setCustomValidity('该组合键已用于' + shortcutNames()[collision]); input.reportValidity(); return; }
+                    input.setCustomValidity('');
+                    shortcutMap[action] = nextShortcut;
                     input.value = formatShortcut(shortcutMap[action]);
                     var name = input.parentNode.querySelector('.shortcut-action-name');
                     if (name) name.textContent = shortcutNames()[action];
@@ -327,9 +334,15 @@ const StudyWeb = (function() {
                 updateShortcutLabels(container, shortcutMap);
             });
         document.addEventListener('keydown', handleShortcutKeydown);
+        function selectStudyOwner() { preferredStudyContainer = container; }
+        container.addEventListener('pointerdown', selectStudyOwner);
+        container.addEventListener('focusin', selectStudyOwner);
 
         return createMockInstance(container, function() {
             document.removeEventListener('keydown', handleShortcutKeydown);
+            container.removeEventListener('pointerdown', selectStudyOwner);
+            container.removeEventListener('focusin', selectStudyOwner);
+            if (preferredStudyContainer === container) preferredStudyContainer = null;
             window.removeEventListener('message', handleStudyNavigationMessage);
             contentEditor.dispose();
             stopStudyScreenWatch();
@@ -337,6 +350,11 @@ const StudyWeb = (function() {
         });
 
         function handleShortcutKeydown(e) {
+            if (!StudyLifecycle.isVisible(container) || document.visibilityState === 'hidden') return;
+            if (document.querySelector('#settingsPanel.show, .app-update-modal.show')) return;
+            var owner = preferredStudyContainer && StudyLifecycle.isVisible(preferredStudyContainer) ? preferredStudyContainer
+                : Array.from(document.querySelectorAll('[data-study-screen-active="true"]')).find(StudyLifecycle.isVisible);
+            if (owner && owner !== container) return;
             if (!studyControlsActive || studyAddWordOverlayOpen || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
             var target = e.target;
             if (StudyShortcuts.isEditable(target) || (target && target.closest && target.closest('.study-shortcut-panel, button, a[href], [role="button"]'))) return;

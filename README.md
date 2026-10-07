@@ -17,6 +17,10 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 完整版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
+**0.88 整顿候选**的修复、验证及剩余运行边界见 [全项目整顿记录](docs/quality-hardening.md)。该候选已加入账号/请求生命周期保护、模型资源事务和更新启动确认；参赛冻结还需完成独立 Windows、真实云端写权限和模型渲染验收。
+
+开发验收：安装 `requirements-build.lock` 与 `npm ci` 所列依赖，在 Windows 执行 `./tests/run.ps1 -Browser`；构建后可执行 `dist/MemoSuperform.exe --verify-build <报告绝对路径>` 检查冻结资源与数据库，测试资料与日常数据隔离。GitHub Windows CI 使用相同入口。外部 GPT-SoVITS 使用资源包自己的环境，桌面构建依赖锁不覆盖它的 torch/CUDA 组合。
+
 - **Anon的笔记本前端（`index-anon.html`）**：笔记本视觉界面，功能与原版一致。
 - **Anon的笔记本磁贴**：以Anon的笔记本/日记风展示每日背词（数量分级：摸鱼 / 日常 / 努力 / 爆肝），爆肝日飘爱心，支持列表 / 详情双视图
 - **背单词磁贴（网页版）**：内嵌墨墨网页版 SPA，可实时背单词，暗色主题跟随仪表盘

@@ -15,6 +15,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -228,6 +229,9 @@ class MaimemoOAuth:
         # 创建本地服务前明确写入 True 或 False。只有已知注册失败时才阻止登录。
         self._callback_protocol_ready: Optional[bool] = None
         self._callback_protocol_error = ""
+        self._lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
+        self._generation = 0
 
     @property
     def configured(self) -> bool:
@@ -334,13 +338,15 @@ class MaimemoOAuth:
         challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
         state = _b64url(secrets.token_bytes(32))
         created_at = self.now()
-        self.pending.save({
-            "version": 1,
-            "state": state,
-            "verifier": verifier,
-            "created_at": created_at,
-            "error": "",
-        })
+        with self._lock:
+            self._generation += 1
+            self.pending.save({
+                "version": 1,
+                "state": state,
+                "verifier": verifier,
+                "created_at": created_at,
+                "error": "",
+            })
         query = urllib.parse.urlencode({
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
@@ -361,23 +367,28 @@ class MaimemoOAuth:
         if parsed.scheme.lower() != "memo-superform" or parsed.netloc.lower() != "maimemo-oauth":
             raise MaimemoAuthError("授权回调地址无效")
         values = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        pending = self.pending.load()
-        if not pending:
-            raise MaimemoAuthError("未找到待完成的墨墨授权")
-        if self.now() - float(pending.get("created_at") or 0) > PENDING_TTL_SECONDS:
-            self.pending.clear()
-            raise MaimemoAuthError("墨墨授权已过期，请重新连接")
-        state = str(values.get("state", [""])[0])
-        expected = str(pending.get("state") or "")
-        if not expected or not state or not hmac.compare_digest(expected, state):
-            raise MaimemoAuthError("墨墨授权状态校验失败")
-        if values.get("error"):
-            message = str(values.get("error_description", values["error"])[0] or values["error"][0])
-            self.pending.save(dict(pending, error=message))
-            raise MaimemoAuthError("墨墨授权未完成：%s" % message)
-        code = str(values.get("code", [""])[0]).strip()
-        if not code or len(code) > MAX_CALLBACK_VALUE:
-            raise MaimemoAuthError("墨墨授权码无效")
+        with self._lock:
+            generation = self._generation
+            pending = self.pending.load()
+            if not pending:
+                raise MaimemoAuthError("未找到待完成的墨墨授权")
+            if self.now() - float(pending.get("created_at") or 0) > PENDING_TTL_SECONDS:
+                self.pending.clear()
+                raise MaimemoAuthError("墨墨授权已过期，请重新连接")
+            state = str(values.get("state", [""])[0])
+            expected = str(pending.get("state") or "")
+            if not expected or not state or not hmac.compare_digest(expected, state):
+                raise MaimemoAuthError("墨墨授权状态校验失败")
+            if values.get("error"):
+                message = str(values.get("error_description", values["error"])[0] or values["error"][0])
+                self.pending.save(dict(pending, error=message))
+                raise MaimemoAuthError("墨墨授权未完成：%s" % message)
+            if pending.get("exchanging"):
+                raise MaimemoAuthError("授权回调正在处理")
+            code = str(values.get("code", [""])[0]).strip()
+            if not code or len(code) > MAX_CALLBACK_VALUE:
+                raise MaimemoAuthError("墨墨授权码无效")
+            self.pending.save(dict(pending, exchanging=True))
         try:
             tokens = dict(self.post_form(self.token_url, {
                 "grant_type": "authorization_code",
@@ -386,11 +397,16 @@ class MaimemoOAuth:
                 "client_id": self.client_id,
                 "code_verifier": str(pending.get("verifier") or ""),
             }))
-            self._save_oauth_tokens(tokens)
-            self.pending.clear()
-            return self.status()
+            with self._lock:
+                if generation != self._generation:
+                    raise MaimemoAuthError("账号已变更，请重新连接")
+                self._save_oauth_tokens(tokens)
+                self.pending.clear()
+                return self.status()
         except Exception as exc:
-            self.pending.save(dict(pending, error=str(exc)))
+            with self._lock:
+                if generation == self._generation:
+                    self.pending.save(dict(pending, error=str(exc), exchanging=False))
             if isinstance(exc, MaimemoAuthError):
                 raise
             raise MaimemoAuthError("墨墨令牌交换失败：%s" % exc) from exc
@@ -425,11 +441,13 @@ class MaimemoOAuth:
             raise MaimemoAuthError("请输入墨墨 API Token")
         if len(value) > 4096:
             raise MaimemoAuthError("墨墨 API Token 长度异常")
-        self.credentials.save({"version": 1, "mode": "manual", "manual_token": value, "updated_at": int(self.now())})
-        self.pending.clear()
+        with self._lock:
+            self._generation += 1
+            self.credentials.save({"version": 1, "mode": "manual", "manual_token": value, "updated_at": int(self.now())})
+            self.pending.clear()
         return self.status()
 
-    def _refresh(self, data: Mapping[str, Any]) -> dict[str, Any]:
+    def _refresh(self, data: Mapping[str, Any], generation: int) -> dict[str, Any]:
         tokens = data.get("tokens") if isinstance(data.get("tokens"), Mapping) else {}
         refresh_token = str(tokens.get("refresh_token") or "").strip()
         if not refresh_token:
@@ -443,31 +461,54 @@ class MaimemoOAuth:
             refreshed["refresh_token"] = refresh_token
         if not refreshed.get("id_token") and tokens.get("id_token"):
             refreshed["id_token"] = tokens["id_token"]
-        self._save_oauth_tokens(refreshed)
-        return self._credential_data()
+        next_subject = str(_jwt_claims(str(refreshed.get("id_token") or "")).get("sub") or "").strip()
+        if next_subject and next_subject != self._subject(data):
+            raise MaimemoAuthError("刷新凭据的账号身份不一致，请重新连接")
+        with self._lock:
+            if generation != self._generation:
+                raise MaimemoAuthError("账号已变更，请重新连接")
+            self._save_oauth_tokens(refreshed)
+            return self._credential_data()
 
     def access_token(self) -> str:
-        data = self._credential_data()
-        mode = str(data.get("mode") or "")
-        if mode == "manual":
-            token = str(data.get("manual_token") or "").strip()
-            if token:
-                return token
-        if mode != "oauth":
-            raise MaimemoAuthError("请先连接墨墨账号")
-        tokens = data.get("tokens") if isinstance(data.get("tokens"), Mapping) else {}
-        token = str(tokens.get("access_token") or "").strip()
-        if not token:
-            raise MaimemoAuthError("请重新连接墨墨账号")
-        expires_at = int(data.get("expires_at") or 0)
-        claims_exp = int(_jwt_claims(token).get("exp") or 0)
-        if claims_exp:
-            expires_at = claims_exp
-        if expires_at and self.now() >= expires_at - 300:
-            data = self._refresh(data)
+        with self._refresh_lock:
+            with self._lock:
+                generation = self._generation
+                data = self._credential_data()
+            mode = str(data.get("mode") or "")
+            if mode == "manual":
+                token = str(data.get("manual_token") or "").strip()
+                if token:
+                    return token
+            if mode != "oauth":
+                raise MaimemoAuthError("请先连接墨墨账号")
             tokens = data.get("tokens") if isinstance(data.get("tokens"), Mapping) else {}
             token = str(tokens.get("access_token") or "").strip()
-        return token
+            if not token:
+                raise MaimemoAuthError("请重新连接墨墨账号")
+            expires_at = int(data.get("expires_at") or 0)
+            claims_exp = int(_jwt_claims(token).get("exp") or 0)
+            if claims_exp:
+                expires_at = claims_exp
+            if expires_at and self.now() >= expires_at - 300:
+                data = self._refresh(data, generation)
+                tokens = data.get("tokens") if isinstance(data.get("tokens"), Mapping) else {}
+                token = str(tokens.get("access_token") or "").strip()
+            return token
+
+    def authorization_context(self) -> tuple[str, str]:
+        """同一账号快照提供 token 和归属，避免分别读取时账号恰好切换。"""
+        with self._lock:
+            generation = self._generation
+        token = self.access_token()
+        with self._lock:
+            data = self._credential_data()
+            if generation != self._generation:
+                raise MaimemoAuthError("账号已变更，请重新操作")
+            current = str(data.get("manual_token") or "").strip() if data.get("mode") == "manual" else str((data.get("tokens") or {}).get("access_token") or "").strip()
+            if not token or current != token:
+                raise MaimemoAuthError("凭据已变更，请重新操作")
+            return token, self._profile_key_from_data(data)
 
     def profile_key(self) -> str:
         data = self._credential_data()
@@ -486,7 +527,11 @@ class MaimemoOAuth:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def disconnect(self) -> None:
-        data = self._credential_data()
+        with self._lock:
+            self._generation += 1
+            data = self._credential_data()
+            self.credentials.clear()
+            self.pending.clear()
         tokens = data.get("tokens") if isinstance(data.get("tokens"), Mapping) else {}
         refresh_token = str(tokens.get("refresh_token") or "").strip()
         if refresh_token and self.configured:
@@ -495,8 +540,6 @@ class MaimemoOAuth:
             except Exception:
                 # 断开始终优先清理本机凭据；网络暂时失败不应留下可继续使用的 Token。
                 pass
-        self.credentials.clear()
-        self.pending.clear()
 
 
 __all__ = [

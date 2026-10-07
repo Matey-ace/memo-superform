@@ -93,7 +93,7 @@ var DiaryChart = (function () {
     const cards = state.dayData.map(function (d, i) {
       const s = level(d.total);
       const empty = s.key === 'empty';
-      return '<div class="md-day-card' + (empty ? ' empty' : '') + '" data-i="' + i + '">'
+      return '<button type="button" class="md-day-card' + (empty ? ' empty' : '') + '" data-i="' + i + '">'
         + '<div class="md-day-date"><div class="md-day-d">' + (+d.date.slice(8)) + '</div><div class="md-day-w">' + fmtCN(d.date).slice(-2) + '</div></div>'
         + '<div class="md-day-main">'
         +   '<div class="md-day-num">' + d.total + ' <small>词</small></div>'
@@ -102,7 +102,7 @@ var DiaryChart = (function () {
         + '</div>'
         + stampHtml(s)
         + '<span class="md-arrow">›</span>'
-        + '</div>';
+        + '</button>';
     }).join('');
     return '<div class="mydiary-head"><span class="md-title"><img class="md-title-gif" src="img/gifs/rana-sleep.gif" alt=""> Anon的笔记本 · MEMORY DIARY</span><span class="md-tape"></span></div>'
       + '<div class="mydiary-ticker"><div class="mydiary-ticker-scroll">'
@@ -119,7 +119,7 @@ var DiaryChart = (function () {
     const rate = d.total > 0 ? Math.round(d.correct / d.total * 100) : 0;
     const dots = state.dayData.map(function (x, i) {
       if (level(x.total).key === 'empty') return '';
-      return '<span class="md-dot' + (i === idx ? ' active' : '') + '" data-i="' + i + '"></span>';
+      return '<button type="button" aria-label="查看' + x.date + '的日记" class="md-dot' + (i === idx ? ' active' : '') + '" data-i="' + i + '"></button>';
     }).join('');
     const note = d.total > 0
       ? '这一天背了 <b>' + d.total + '</b> 个单词：新学 ' + d.fresh + '、复习 ' + d.review + '，回答正确 ' + d.correct + ' 个（正确率 ' + rate + '%）。'
@@ -173,9 +173,9 @@ var DiaryChart = (function () {
   function bind(state) {
     state.root.addEventListener('click', function (e) {
       const card = e.target.closest('.md-day-card');
-      if (card) { state.curIdx = +card.dataset.i; refresh(state); return; }
+      if (card) { state.returnIdx = +card.dataset.i; state.curIdx = +card.dataset.i; refresh(state); state.root.querySelector('[data-back]').focus(); return; }
       const back = e.target.closest('[data-back]');
-      if (back) { state.curIdx = -1; refresh(state); return; }
+      if (back) { state.curIdx = -1; refresh(state); const previous = state.root.querySelector('.md-day-card[data-i="' + state.returnIdx + '"]'); if (previous) previous.focus(); return; }
       const dot = e.target.closest('.md-dot');
       if (dot) { state.curIdx = +dot.dataset.i; refresh(state); }
     });

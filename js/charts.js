@@ -705,10 +705,10 @@ const ChartManager = (function() {
                 formatter: function(params) {
                     const words = classificationData[params.name] || [];
                     const sample = words.slice(0, 5).join(', ');
-                    return `<strong>${params.name}</strong><br/>
+                    return `<strong>${escapeHtml(params.name)}</strong><br/>
                             单词数: ${params.value}<br/>
                             占比: ${params.percent}%<br/>
-                            示例: ${sample}${words.length > 5 ? '...' : ''}`;
+                            示例: ${escapeHtml(sample)}${words.length > 5 ? '...' : ''}`;
                 }
             },
             legend: {
@@ -781,13 +781,14 @@ const ChartManager = (function() {
         }
 
         // 按词书分组统计
-        const notepadMap = {};
+        const notepadMap = Object.create(null);
         for (const item of notepadWords) {
             const name = item.notepad || '未分类';
-            if (!notepadMap[name]) {
-                notepadMap[name] = { total: 0, unlearned: 0, well: 0, familiar: 0, vague: 0, forget: 0 };
+            const id = String(item.notepad_id || name);
+            if (!notepadMap[id]) {
+                notepadMap[id] = { name: name, total: 0, unlearned: 0, well: 0, familiar: 0, vague: 0, forget: 0 };
             }
-            const stat = notepadMap[name];
+            const stat = notepadMap[id];
             stat.total++;
             const resp = statusMap[item.word] || '';
             switch (resp) {
@@ -799,8 +800,8 @@ const ChartManager = (function() {
             }
         }
 
-        const notepads = Object.keys(notepadMap);
-        const stats = notepads.map(name => notepadMap[name]);
+        const stats = Object.values(notepadMap);
+        const notepads = stats.map(stat => stat.name);
         const totalWords = stats.reduce((s, x) => s + x.total, 0);
 
         const seriesDefs = [
@@ -814,7 +815,7 @@ const ChartManager = (function() {
         const option = {
             title: {
                 text: '词书单词进度',
-                subtext: notepads.length + ' 本词书 · 共 ' + totalWords + ' 词',
+                subtext: notepads.length + ' 本词书 · 共 ' + totalWords + ' 词' + (notepadWords.partial ? ' · 部分读取失败，请刷新重试' : ''),
                 left: 'center',
                 top: 5,
                 textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
@@ -829,7 +830,7 @@ const ChartManager = (function() {
                 formatter: function(params) {
                     const idx = params[0].dataIndex;
                     const s = stats[idx];
-                    let html = '<strong>' + notepads[idx] + '</strong><br/>' +
+                    let html = '<strong>' + escapeHtml(notepads[idx]) + '</strong><br/>' +
                         '总词数：' + s.total + '<br/>' +
                         '未学习：' + s.unlearned + '<br/>' +
                         '已熟知：' + s.well + '<br/>' +
@@ -1114,15 +1115,16 @@ const ChartManager = (function() {
         (async function() {
             try {
                 var data = await RecommendAPI.getToday();
-                if (!disposed) renderRecCards(container, data);
+                if (!disposed) renderRecCards(container, data, () => !disposed);
             } catch (e) {
-                if (!disposed) container.innerHTML = '<div class="rec-error">推荐加载失败：' + escapeHtml(e.message || '') + '<br><span class="rec-hint">请确认 SQL Server 服务已启动</span></div>';
+                if (!disposed) container.innerHTML = '<div class="rec-error">推荐加载失败：' + escapeHtml(e.message || '') + '<br><span class="rec-hint">请检查本机学习数据服务，并重试刷新</span></div>';
             }
         })();
         return { dispose: function() { disposed = true; container.innerHTML = ''; } };
     }
 
-    function renderRecCards(container, data) {
+    function renderRecCards(container, data, isCurrent) {
+        isCurrent = isCurrent || (() => true);
         var recs = data.recommendations || [];
         var s = data.summary || {};
         var pending = recs.filter(function(r) { return r.status !== 'reviewed'; });
@@ -1142,7 +1144,7 @@ const ChartManager = (function() {
             html += '<div class="rec-empty">今日暂无推荐<br><span class="rec-hint">每日首次加载会自动生成</span></div>';
             html += '</div>';
             container.innerHTML = html;
-            bindRecEvents(container);
+            bindRecEvents(container, data, isCurrent);
             return;
         }
 
@@ -1160,22 +1162,25 @@ const ChartManager = (function() {
         }
         html += '</div>';
         container.innerHTML = html;
-        bindRecEvents(container);
+        bindRecEvents(container, data, isCurrent);
         if (window.TTS && TTS.isReady() && localStorage.getItem('tts_auto_read') === 'true' && pending.length) {
             TTS.speak(buildRecSummary(s, pending));
         }
     }
 
     function recCardHtml(r, isReviewed) {
-        var cls = 'rec-card level-' + (r.level || 'low') + (isReviewed ? ' reviewed' : '');
+        var level = ['low', 'mid', 'high'].includes(r.level) ? r.level : 'low';
+        var color = /^#[a-f0-9]{3}(?:[a-f0-9]{3})?$/i.test(r.level_color || '') ? r.level_color : '#999';
+        var score = Number.isFinite(Number(r.risk_score)) ? Number(r.risk_score) : 0;
+        var cls = 'rec-card level-' + level + (isReviewed ? ' reviewed' : '');
         var meta = [];
         if (r.overdue_days != null && r.overdue_days > 0) meta.push('逾期 ' + r.overdue_days + ' 天');
         if (r.gap_days != null) meta.push('间隔 ' + r.gap_days + ' 天');
         meta.push(r.last_response_label || '');
-        return '<div class="' + cls + '" data-id="' + r.id + '">' +
+        return '<div class="' + cls + '" data-id="' + escapeHtml(String(r.id)).replace(/"/g, '&quot;') + '">' +
             '<div class="rec-card-main"><div class="rec-word">' + escapeHtml(r.word) + '</div>' +
             '<div class="rec-meta">' + escapeHtml(meta.join(' \u00b7 ')) + '</div></div>' +
-            '<div class="rec-card-side"><div class="rec-score" style="background:' + (r.level_color || '#999') + '">' + (r.risk_score || 0) + '</div>' +
+            '<div class="rec-card-side"><div class="rec-score" style="background:' + color + '">' + score + '</div>' +
             '<div class="rec-level-lbl">' + escapeHtml(r.level_label || '') + '</div>' +
             '<button class="rec-speak-card" title="朗读该单词">\ud83d\udd0a</button></div>' +
             '<button class="rec-review-btn">' + (isReviewed ? '\u2713' : '已复习') + '</button>' +
@@ -1190,15 +1195,28 @@ const ChartManager = (function() {
         return text;
     }
 
-    function bindRecEvents(container) {
+    function bindRecEvents(container, data, isCurrent) {
+        var busy = false;
+        function feedback(message) {
+            var el = container.querySelector('.rec-action-status');
+            if (!el) { el = document.createElement('p'); el.className = 'rec-action-status'; el.setAttribute('role', 'status'); container.appendChild(el); }
+            el.textContent = message;
+        }
         container.querySelectorAll('.rec-review-btn').forEach(function(btn) {
             btn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 var card = btn.closest('.rec-card');
                 var id = card.getAttribute('data-id');
-                RecommendAPI.markReviewed(id).then(function(ok) {
-                    if (ok) { card.classList.add('reviewed'); btn.textContent = '\u2713'; }
-                });
+                if (busy || card.classList.contains('reviewed')) return;
+                busy = true; btn.disabled = true;
+                RecommendAPI.markReviewed(id).then(async function(ok) {
+                    if (!isCurrent()) return;
+                    if (!ok) throw new Error('复习标记失败，请重试');
+                    card.classList.add('reviewed'); btn.textContent = '\u2713';
+                    var refreshed = await RecommendAPI.getToday();
+                    if (isCurrent()) renderRecCards(container, refreshed, isCurrent);
+                }).catch(function(error) { if (isCurrent()) feedback(error.message || '更新失败，请重试'); })
+                    .finally(function() { busy = false; if (isCurrent()) btn.disabled = false; });
             });
         });
         container.querySelectorAll('.rec-speak').forEach(function(btn) {
@@ -1234,9 +1252,12 @@ const ChartManager = (function() {
         });
         var refresh = container.querySelector('.rec-refresh');
         if (refresh) refresh.addEventListener('click', function() {
-            container.innerHTML = '<div class="rec-loading">加载推荐中...</div>';
-            RecommendAPI.getToday().then(function(data) { renderRecCards(container, data); })
-                .catch(function() { container.innerHTML = '<div class="rec-error">加载失败</div>'; });
+            if (busy) return;
+            busy = true; refresh.disabled = true;
+            feedback('正在刷新推荐…');
+            RecommendAPI.getToday().then(function(data) { if (isCurrent()) renderRecCards(container, data, isCurrent); })
+                .catch(function(error) { if (isCurrent()) feedback(error.message || '刷新失败，请重试'); })
+                .finally(function() { busy = false; if (isCurrent()) refresh.disabled = false; });
         });
     }
 

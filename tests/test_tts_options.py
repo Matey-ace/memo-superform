@@ -1,6 +1,7 @@
 import unittest
 import os
 import tempfile
+import threading
 
 import tts
 
@@ -35,6 +36,7 @@ class TTSOptionsCoercionTests(unittest.TestCase):
         manager = tts.TTSManager.__new__(tts.TTSManager)
         manager.data_dir = "/tmp/tts-generated"
         manager._busy = False
+        manager._operation_lock = threading.Lock()
         manager._last_status = {}
         captured = {}
         out_dir = tempfile.mkdtemp()
@@ -76,6 +78,7 @@ class TTSOptionsCoercionTests(unittest.TestCase):
         manager = tts.TTSManager.__new__(tts.TTSManager)
         manager.data_dir = "/tmp/tts-generated"
         manager._busy = False
+        manager._operation_lock = threading.Lock()
         manager._last_status = {}
         # Keep the fixture compatible with implementations that additionally
         # inspect worker liveness when deciding whether this is a cold start.

@@ -8,6 +8,8 @@ OAuth 令牌刷新、ChatGPT 账户路由和 Codex Responses 传输；仅依赖�
 
 import base64
 import hashlib
+import hmac
+import html
 import http.server
 import json
 import os
@@ -19,6 +21,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from pathlib import Path
+from maimemo_auth import CredentialStore
 
 
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -29,6 +33,7 @@ CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 CALLBACK_PORTS = (1455, 1457)
 SCOPES = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+PENDING_TTL_SECONDS = 600
 
 
 def _b64url(data):
@@ -39,7 +44,8 @@ def _jwt_claims(token):
     try:
         part = token.split(".")[1]
         part += "=" * (-len(part) % 4)
-        return json.loads(base64.urlsafe_b64decode(part.encode("ascii")))
+        result = json.loads(base64.urlsafe_b64decode(part.encode("ascii")))
+        return result if isinstance(result, dict) else {}
     except (ValueError, IndexError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
@@ -120,7 +126,10 @@ def _chat_to_responses(body):
 def _decode_codex_response(raw, content_type):
     text = raw.decode("utf-8", errors="replace")
     if "text/event-stream" not in (content_type or "").lower() and text.lstrip().startswith("{"):
-        return json.loads(text)
+        payload = json.loads(text)
+        if not isinstance(payload, dict) or payload.get("status") != "completed":
+            raise RuntimeError("Codex 响应未正常完成")
+        return payload
     completed = None
     deltas = []
     for line in text.splitlines():
@@ -133,16 +142,20 @@ def _decode_codex_response(raw, content_type):
             event = json.loads(value)
         except json.JSONDecodeError:
             continue
+        if not isinstance(event, dict):
+            raise RuntimeError("Codex 流式响应格式错误")
+        if event.get("type") in ("error", "response.failed", "response.incomplete"):
+            raise RuntimeError("Codex 响应失败或未完成")
         if event.get("type") == "response.output_text.delta" and isinstance(event.get("delta"), str):
             deltas.append(event["delta"])
         if event.get("type") == "response.completed":
             completed = event.get("response") or event
     if completed is not None:
+        if not isinstance(completed, dict) or completed.get("status", "completed") != "completed":
+            raise RuntimeError("Codex 响应未正常完成")
         if deltas and not _response_text(completed):
             completed["output_text"] = "".join(deltas)
         return completed
-    if deltas:
-        return {"output_text": "".join(deltas)}
     raise RuntimeError("Codex 流式响应未正常完成")
 
 
@@ -152,48 +165,67 @@ class _CallbackServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class CodexOAuth:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, *, credential_store=None, protector=None):
         self.path = os.path.join(data_dir, "codex_auth.json")
+        self.credentials = credential_store or CredentialStore(Path(data_dir) / "codex_auth.bin", protector)
         self._lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
+        self._login_lock = threading.Lock()
+        self._generation = 0
         self._pending = None
         self._callback_server = None
 
     def _load(self):
+        # Only migrate when the protected store is absent. A corrupt protected
+        # store must not resurrect stale legacy credentials.
+        if self.credentials.path.exists():
+            return self.credentials.load()
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except (OSError, json.JSONDecodeError):
+            with open(self.path, "r", encoding="utf-8") as stream:
+                data = json.load(stream)
+            if not isinstance(data, dict) or not isinstance(data.get("tokens"), dict):
+                return {}
+            self.credentials.save(data)
+            if self.credentials.load() != data:
+                raise RuntimeError("Codex 凭据迁移验证失败，旧文件已保留")
+            os.remove(self.path)
+            return data
+        except (OSError, UnicodeError, json.JSONDecodeError):
             return {}
 
     def _save(self, data):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        temp = self.path + ".tmp"
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+        self.credentials.save(data)
+        # A previous successful migration may have left a removable legacy file.
         try:
-            os.chmod(temp, 0o600)
-        except OSError:
+            os.remove(self.path)
+        except FileNotFoundError:
             pass
-        os.replace(temp, self.path)
 
     def status(self):
-        data = self._load()
-        tokens = data.get("tokens") or {}
-        ident = _identity(tokens)
-        pending = self._pending
-        return {
-            "connected": bool(tokens.get("access_token") and tokens.get("refresh_token")),
-            "pending": bool(pending),
-            "error": pending.get("error") if pending else None,
-            "account_id": ident["account_id"],
-            "email": ident["email"],
-            "plan": ident["plan"],
-        }
+        with self._lock:
+            data = self._load()
+            tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+            ident = _identity(tokens)
+            pending = self._pending
+            if pending and time.time() - pending["created_at"] > PENDING_TTL_SECONDS:
+                pending["error"] = "登录已过期，请重新连接"
+            return {
+                "connected": bool(tokens.get("access_token") and tokens.get("refresh_token")),
+                "pending": bool(pending and time.time() - pending["created_at"] <= PENDING_TTL_SECONDS),
+                "error": pending.get("error") if pending else None,
+                "account_id": ident["account_id"], "email": ident["email"], "plan": ident["plan"],
+            }
 
     def start_login(self, open_browser=True):
-        with self._lock:
-            self._stop_callback_server()
+        with self._login_lock:
+            with self._lock:
+                self._generation += 1
+                generation = self._generation
+                old_server = self._callback_server
+                self._callback_server = None
+                self._pending = None
+            if old_server:
+                self._stop_callback_server(old_server)
             verifier = _b64url(secrets.token_bytes(64))
             challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
             state = _b64url(secrets.token_bytes(32))
@@ -206,20 +238,21 @@ class CodexOAuth:
                         self.send_error(404)
                         return
                     params = urllib.parse.parse_qs(parsed.query)
-                    ok, message = service._complete_login(params)
+                    ok, message = service._complete_login(params, generation)
                     body = ("<!doctype html><meta charset=utf-8><title>Memo Superform</title>"
                             "<style>body{font:16px system-ui;background:#171717;color:#eee;display:grid;"
                             "place-items:center;height:100vh;margin:0}.box{padding:32px;border-radius:16px;"
                             "background:#222;text-align:center}</style><div class=box><h2>" +
                             ("Codex 登录成功" if ok else "Codex 登录失败") + "</h2><p>" +
-                            message + "</p><p>现在可以关闭此窗口。</p></div>").encode("utf-8")
+                            html.escape(message) + "</p><p>现在可以关闭此窗口。</p></div>").encode("utf-8")
                     self.send_response(200 if ok else 400)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
                     self.send_header("Connection", "close")
                     self.end_headers()
                     self.wfile.write(body)
-                    threading.Thread(target=service._stop_callback_server, daemon=True).start()
+                    if ok:
+                        threading.Thread(target=service._stop_callback_server, args=(self.server,), daemon=True).start()
 
                 def log_message(self, _format, *_args):
                     pass
@@ -235,15 +268,16 @@ class CodexOAuth:
                 raise RuntimeError("Codex 登录回调端口 1455/1457 均被占用")
             port = server.server_address[1]
             redirect_uri = "http://localhost:%d/auth/callback" % port
-            self._pending = {
-                "state": state,
-                "verifier": verifier,
-                "redirect_uri": redirect_uri,
-                "created_at": time.time(),
-                "error": None,
-            }
-            self._callback_server = server
-            threading.Thread(target=server.serve_forever, name="codex-oauth-callback", daemon=True).start()
+            with self._lock:
+                if generation != self._generation:
+                    server.server_close()
+                    raise RuntimeError("登录状态已变更，请重试")
+                self._pending = {
+                    "state": state, "verifier": verifier, "redirect_uri": redirect_uri,
+                    "created_at": time.time(), "error": None,
+                }
+                self._callback_server = server
+                threading.Thread(target=server.serve_forever, name="codex-oauth-callback", daemon=True).start()
             query = urllib.parse.urlencode({
                 "response_type": "code",
                 "client_id": CLIENT_ID,
@@ -258,81 +292,121 @@ class CodexOAuth:
             })
             authorization_url = ISSUER + "/oauth/authorize?" + query
             opened = bool(webbrowser.open(authorization_url, new=2)) if open_browser else False
+            def expire_callback():
+                with self._lock:
+                    if generation != self._generation or self._callback_server is not server:
+                        return
+                    if self._pending:
+                        self._pending["error"] = "登录已过期，请重新连接"
+                self._stop_callback_server(server)
+            expiry_timer = threading.Timer(PENDING_TTL_SECONDS, expire_callback)
+            expiry_timer.daemon = True
+            expiry_timer.start()
             return {"authorization_url": authorization_url, "port": port, "opened": opened}
 
-    def _complete_login(self, params):
+    def _complete_login(self, params, expected_generation=None):
         with self._lock:
+            generation = self._generation
             pending = self._pending
-            if not pending or params.get("state", [None])[0] != pending.get("state"):
+            if expected_generation is not None and generation != expected_generation:
+                return False, "登录状态已变更"
+            state = str(params.get("state", [""])[0])
+            if not pending or not hmac.compare_digest(state, pending["state"]):
                 return False, "登录状态校验失败"
+            if time.time() - pending["created_at"] > PENDING_TTL_SECONDS:
+                pending["error"] = "登录已过期，请重新连接"
+                return False, pending["error"]
+            if pending.get("exchanging"):
+                return False, "授权回调正在处理"
             if params.get("error"):
-                message = params.get("error_description", params["error"])[0]
+                message = str(params.get("error_description", params["error"])[0])
                 pending["error"] = message
                 return False, message
             code = params.get("code", [None])[0]
-            if not code:
-                pending["error"] = "缺少授权码"
+            if not code or len(code) > 8192:
+                pending["error"] = "授权码无效"
                 return False, pending["error"]
-            try:
-                tokens = _form_post(TOKEN_URL, {
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": pending["redirect_uri"],
-                    "client_id": CLIENT_ID,
-                    "code_verifier": pending["verifier"],
-                })
+            pending["exchanging"] = True
+        try:
+            tokens = _form_post(TOKEN_URL, {
+                "grant_type": "authorization_code", "code": code,
+                "redirect_uri": pending["redirect_uri"], "client_id": CLIENT_ID,
+                "code_verifier": pending["verifier"],
+            })
+            if not isinstance(tokens, dict) or not tokens.get("access_token") or not tokens.get("refresh_token"):
+                raise RuntimeError("授权响应缺少令牌")
+            with self._lock:
+                if generation != self._generation or self._pending is not pending:
+                    return False, "登录状态已变更"
                 self._save({"tokens": tokens, "updated_at": int(time.time())})
                 self._pending = None
                 return True, "账号已连接"
-            except Exception as exc:
-                pending["error"] = str(exc)
-                return False, "令牌交换失败"
+        except Exception:
+            with self._lock:
+                if generation == self._generation and self._pending is pending:
+                    pending["error"] = "令牌交换失败，请重试"
+                    pending["exchanging"] = False
+            return False, "令牌交换失败"
 
-    def _stop_callback_server(self):
-        server = self._callback_server
-        self._callback_server = None
-        if server:
+    def _stop_callback_server(self, server=None):
+        with self._lock:
+            target = server or self._callback_server
+            if target is self._callback_server:
+                self._callback_server = None
+        if target:
             try:
-                server.shutdown()
-                server.server_close()
+                target.shutdown()
+                target.server_close()
             except OSError:
                 pass
 
     def logout(self):
         with self._lock:
+            self._generation += 1
             data = self._load()
-            token = (data.get("tokens") or {}).get("refresh_token")
-            if token:
-                try:
-                    _form_post(REVOKE_URL, {"client_id": CLIENT_ID, "token": token}, timeout=10)
-                except Exception:
-                    pass
+            tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+            token = tokens.get("refresh_token")
+            self.credentials.clear()
             try:
                 os.remove(self.path)
             except FileNotFoundError:
                 pass
             self._pending = None
-            self._stop_callback_server()
+            server = self._callback_server
+            self._callback_server = None
+        if server:
+            self._stop_callback_server(server)
+        if token:
+            try:
+                _form_post(REVOKE_URL, {"client_id": CLIENT_ID, "token": token}, timeout=10)
+            except Exception:
+                pass
 
     def _tokens(self, force_refresh=False):
-        with self._lock:
-            data = self._load()
-            tokens = data.get("tokens") or {}
+        with self._refresh_lock:
+            with self._lock:
+                generation = self._generation
+                data = self._load()
+                tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
             if not tokens.get("access_token") or not tokens.get("refresh_token"):
                 raise RuntimeError("请先在设置中登录 OpenAI Codex")
-            expiry = (_jwt_claims(tokens["access_token"]).get("exp") or 0) - 300
+            expiry = float(_jwt_claims(tokens["access_token"]).get("exp") or data.get("expires_at") or 0) - 300
             if force_refresh or time.time() >= expiry:
                 refreshed = _form_post(TOKEN_URL, {
-                    "client_id": CLIENT_ID,
-                    "grant_type": "refresh_token",
+                    "client_id": CLIENT_ID, "grant_type": "refresh_token",
                     "refresh_token": tokens["refresh_token"],
                 })
-                if not refreshed.get("refresh_token"):
-                    refreshed["refresh_token"] = tokens["refresh_token"]
+                if not isinstance(refreshed, dict) or not refreshed.get("access_token"):
+                    raise RuntimeError("授权刷新响应缺少令牌")
+                refreshed.setdefault("refresh_token", tokens["refresh_token"])
                 if not refreshed.get("id_token") and tokens.get("id_token"):
                     refreshed["id_token"] = tokens["id_token"]
-                tokens = refreshed
-                self._save({"tokens": tokens, "updated_at": int(time.time())})
+                with self._lock:
+                    if generation != self._generation:
+                        raise RuntimeError("登录状态已变更，请重试")
+                    tokens = refreshed
+                    self._save({"tokens": tokens, "updated_at": int(time.time()),
+                                "expires_at": time.time() + float(refreshed.get("expires_in") or 3600)})
             return tokens
 
     def _request(self, body, force_refresh=False):

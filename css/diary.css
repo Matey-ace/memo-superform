@@ -11,6 +11,13 @@
   border-radius: 12px;
   box-shadow: inset 0 0 60px rgba(245, 237, 224, .5);
 }
+.mydiary button.md-day-card, .mydiary button.md-dot {
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.mydiary button:focus-visible { outline: 3px solid #a54662; outline-offset: 3px; }
 .mydiary::before {  /* 左侧书脊 */
   content: '';
   position: absolute; left: 0; top: 0; bottom: 0; width: 14px;

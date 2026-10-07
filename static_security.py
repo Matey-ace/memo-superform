@@ -10,19 +10,29 @@ FORBIDDEN_STATIC_FILES = frozenset({
     '_backup_pre-rewrite.bundle',
 })
 
+PUBLIC_ROOT_FILES = frozenset({"index.html", "index-anon.html", "license", "readme.md", "changelog.md", "third_party_notices.md"})
+PUBLIC_ASSET_EXTENSIONS = {
+    "js": {".js"}, "css": {".css"}, "pages": {".html", ".css", ".js"},
+    "fonts": {".woff", ".woff2", ".ttf", ".otf"},
+    "img": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico"},
+    "vendor": {".js", ".css", ".wasm", ".txt"},
+}
+
 def is_forbidden_static_path(path):
     try:
-        decoded = unquote(path, errors='surrogatepass')
+        decoded = unquote(path, errors="surrogatepass")
     except (UnicodeDecodeError, ValueError):
         return True
-    if '\x00' in decoded:
+    if "\x00" in decoded or "\\" in decoded:
         return True
-    segments = [item for item in decoded.replace('\\', '/').split('/') if item]
+    segments = [item for item in decoded.split("/") if item]
     if not segments:
-        return False
+        return False  # Handler maps the root to index.html, never a directory listing.
     lowered = [item.lower() for item in segments]
-    if any(item.startswith('.') or item.startswith('_') for item in lowered):
+    if any(item.startswith(".") or item.startswith("_") for item in lowered):
         return True
-    if lowered[0] in {name.lower() for name in FORBIDDEN_STATIC_FILES}:
-        return True
-    return lowered[0] == 'data'
+    if len(lowered) == 1:
+        return lowered[0] not in PUBLIC_ROOT_FILES
+    from pathlib import PurePosixPath
+    extension = PurePosixPath(lowered[-1]).suffix
+    return extension not in PUBLIC_ASSET_EXTENSIONS.get(lowered[0], set())

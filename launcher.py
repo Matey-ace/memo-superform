@@ -27,10 +27,31 @@ import webbrowser
 from urllib.parse import urlparse
 
 from build_info import BUILD_VERSION
+from diagnostics import append_log
 
 
 _ACTIVE_GUARD = None
 _ACTIVE_TRAY = None
+
+
+_BROKER_MAX_PAYLOAD_BYTES = 16384
+
+
+def _recv_json_response(connection, limit=1024):
+    payload = bytearray()
+    while len(payload) < limit:
+        chunk = connection.recv(limit - len(payload))
+        if not chunk:
+            break
+        payload.extend(chunk)
+        try:
+            value = json.loads(payload.decode("utf-8", errors="strict").strip())
+            if not isinstance(value, dict):
+                raise ValueError("instance broker response is not an object")
+            return value
+        except (ValueError, UnicodeError):
+            continue
+    raise ValueError("instance broker response is incomplete")
 
 
 def _is_maimemo_oauth_callback_url(value):
@@ -386,8 +407,18 @@ class InstanceBroker:
                 with connection:
                     try:
                         connection.settimeout(0.75)
-                        payload = connection.recv(1024)
-                        message = json.loads(payload.decode("utf-8", errors="strict").strip())
+                        payload = bytearray()
+                        message = None
+                        while len(payload) < _BROKER_MAX_PAYLOAD_BYTES:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                break
+                            payload.extend(chunk)
+                            try:
+                                message = json.loads(payload.decode("utf-8", errors="strict").strip())
+                                break
+                            except (ValueError, UnicodeError):
+                                continue
                         valid = self._is_valid_message(message)
                     except (OSError, ValueError, UnicodeError):
                         valid = False
@@ -422,13 +453,17 @@ def _instance_port():
     """返回按构建版本划分的通信端口，并允许环境变量显式覆盖。"""
     try:
         configured = os.environ.get("MEMO_INSTANCE_PORT")
-        if configured:
+        if configured and 1 <= int(configured) <= 65535:
             return int(configured)
     except (TypeError, ValueError):
         pass
     try:
-        major, minor = (int(item) for item in BUILD_VERSION.split(".", 1))
-        return 15100 + ((major * 100 + minor) % 800)
+        parts = [int(item) for item in BUILD_VERSION.split(".")]
+        if len(parts) not in (2, 3) or any(item < 0 for item in parts):
+            raise ValueError("invalid build version")
+        major, minor = parts[:2]
+        patch = parts[2] if len(parts) == 3 else 0
+        return 15100 + ((major * 100 + minor + patch * 137) % 800)
     except (TypeError, ValueError):
         return 15177
 
@@ -437,8 +472,7 @@ def _log(msg):
     """记录 launcher 生命周期事件（exe 同级 data/launcher.log）。"""
     try:
         path = os.path.join(get_data_dir(), "launcher.log")
-        with open(path, "a", encoding="utf-8") as f:
-            f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+        append_log(path, "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
     except Exception:
         pass
 
@@ -615,7 +649,7 @@ def activate_existing_instance(port=None, timeout=0.9):
         with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
             connection.settimeout(timeout)
             connection.sendall(json.dumps(InstanceBroker._REQUEST).encode("utf-8"))
-            response = json.loads(connection.recv(256).decode("utf-8"))
+            response = _recv_json_response(connection)
         return bool(response.get("ok"))
     except (OSError, ValueError, UnicodeError):
         return False
@@ -635,7 +669,7 @@ def forward_maimemo_oauth_callback(callback_url, port=None, timeout=0.9):
         with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout) as connection:
             connection.settimeout(timeout)
             connection.sendall(json.dumps(message).encode("utf-8"))
-            response = json.loads(connection.recv(256).decode("utf-8"))
+            response = _recv_json_response(connection)
         return bool(response.get("ok"))
     except (OSError, ValueError, UnicodeError):
         return False
@@ -794,6 +828,7 @@ def run_web(guard=None, oauth_callback_url=None):
         tray = create_windows_tray("web", open_running_app, exit_application)
         tray_holder["tray"] = tray
         _set_tray(tray)
+        _confirm_update_startup()
         threading.Timer(0.8, open_running_app).start()
         # 服务端在独立线程运行；保持此生命周期循环存活，托盘图标才准确表示后台
         # 应用仍在运行。
@@ -925,6 +960,7 @@ def run_desktop(guard=None, oauth_callback_url=None):
     # 此监听只绑定本地 index 页面，远程代理页不会获得本机文件访问能力。
     window.events.before_load += desktop_tts_bridge.reset_native_drop_page
     window.events.loaded += desktop_tts_bridge.attach_native_drop_handler
+    window.events.loaded += _confirm_update_startup
     if guard is not None and hasattr(guard, "set_activation_callback"):
         guard.set_activation_callback(show_main_window)
 
@@ -999,6 +1035,7 @@ def request_relaunch(mode):
 _UPDATE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _UPDATE_HELPER_PREFIX = "memo-update-helper-"
 _UPDATE_REQUEST_PREFIX = "memo-update-request-"
+_UPDATE_READY_PREFIX = "memo-update-ready-"
 _UPDATE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
 
@@ -1218,6 +1255,44 @@ def _restart_old_target_after_update_failure(target_path, mode):
         _log("failed to restart old app after update error: %s" % exc)
 
 
+def _confirm_update_startup(*_args):
+    """服务初始化（桌面还需首屏加载）完成后向对应 helper 确认。"""
+    token = os.environ.pop("MEMO_UPDATE_READY_TOKEN", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        return
+    if not getattr(sys.modules.get("server"), "DB_READY", True):
+        raise RuntimeError("新版数据库服务初始化失败，等待更新器恢复旧版")
+    path = os.path.join(_update_directory(), _UPDATE_READY_PREFIX + token + ".json")
+    _atomic_write_json(path, {"token": token, "pid": os.getpid(), "version": BUILD_VERSION})
+
+
+def _wait_for_update_ready(process, token, *, timeout=60.0):
+    path = os.path.join(_update_directory(), _UPDATE_READY_PREFIX + token + ".json")
+    deadline = time.monotonic() + timeout
+    stable_since = None
+    try:
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError("新版在完成启动确认前退出")
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    ready = json.load(handle)
+                if ready.get("token") == token and ready.get("pid") == process.pid:
+                    # 确认后短暂观察，覆盖加载后立即崩溃。
+                    stable_since = stable_since or time.monotonic()
+                    if time.monotonic() - stable_since >= 2.0:
+                        return
+            except (OSError, ValueError, AttributeError):
+                pass
+            time.sleep(0.1)
+        raise RuntimeError("新版启动确认超时")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def apply_staged_update(request_path):
     """更新 helper 专用入口：等待父进程、核验、替换并启动新版。
 
@@ -1266,11 +1341,26 @@ def apply_staged_update(request_path):
         try:
             os.replace(temporary_target, target_path)
             temporary_target = ""
-            _hidden_detached_popen([
+            child_env = dict(os.environ)
+            child_env["MEMO_DATA_DIR"] = get_data_dir()
+            child_env["MEMO_UPDATE_READY_TOKEN"] = token
+            process = _hidden_detached_popen([
                 target_path,
                 "--mode", mode,
                 "--cleanup-update-helper", request["helper_path"],
-            ])
+            ], env=child_env)
+            try:
+                _wait_for_update_ready(process, token)
+            except Exception:
+                # 只结束此 helper 创建的候选进程，释放 EXE 后再恢复旧版。
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=10)
+                raise
         except Exception:
             # 新版未能启动时把旧文件恢复为原名称，保证下次双击仍是可用版本。新
             # 文件保留为 failed 副本，避免在失败处理中无提示地丢弃诊断样本。
@@ -1337,6 +1427,9 @@ def request_update_apply(staged, mode):
     if not os.path.isfile(target_path) or not os.access(os.path.dirname(target_path), os.W_OK):
         raise RuntimeError("当前安装目录不可写，无法自动安装更新")
 
+    import db
+    db.create_database_backup()
+
     token = uuid.uuid4().hex
     helper_path = os.path.join(update_dir, _UPDATE_HELPER_PREFIX + token + ".exe")
     request_path = os.path.join(update_dir, _UPDATE_REQUEST_PREFIX + token + ".json")
@@ -1376,6 +1469,52 @@ def request_update_apply(staged, mode):
     _log("update exit scheduled")
     return True
 
+def verify_build(report_path):
+    """内部构建验收：独立资料目录、随机端口，无窗口、协议注册或云端请求。"""
+    import importlib
+    import tempfile
+    report_path = os.path.abspath(report_path)
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
+    report = {"version": BUILD_VERSION, "frozen": bool(getattr(sys, "frozen", False)), "passed": False, "checks": []}
+    httpd = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="memo-build-", dir=os.path.dirname(report_path)) as data_dir:
+            os.environ["MEMO_DATA_DIR"] = data_dir
+            import server
+            if not server.DB_READY:
+                raise RuntimeError("打包数据库初始化失败")
+            report["checks"].append("sqlite-initialization")
+            for name in ("webview", "webview.dom", "webview.platforms.winforms", "webview.platforms.edgechromium", "windows_tray"):
+                importlib.import_module(name)
+                report["checks"].append("import:" + name)
+            httpd = server.MemoThreadingTCPServer(("127.0.0.1", 0), server.MemoProxyHandler)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            base = "http://127.0.0.1:%s" % httpd.server_address[1]
+            try:
+                for path in ("/", "/index-anon.html", "/js/api.js", "/js/study-content-editor.js", "/css/style.css", "/css/diary.css", "/vendor/echarts.min.js", "/img/icon.ico", "/api/maimemo-auth/status"):
+                    with urllib.request.urlopen(base + path, timeout=10) as response:
+                        if response.status != 200 or not response.read():
+                            raise RuntimeError("打包资源校验失败: " + path)
+                    report["checks"].append("http:" + path)
+                backup = server.db.create_database_backup()
+                if not os.path.isfile(backup):
+                    raise RuntimeError("打包备份校验失败")
+                report["checks"].append("sqlite-online-backup")
+                report["passed"] = True
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                httpd = None
+    except Exception as exc:
+        report["error"] = str(exc)
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+        _atomic_write_json(report_path, report)
+    return 0 if report["passed"] else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Memo Superform 统一启动入口")
     parser.add_argument("--mode", choices=["desktop", "web"], help="直接指定启动模式")
@@ -1383,7 +1522,11 @@ def main(argv=None):
     parser.add_argument("--apply-update", metavar="REQUEST", help=argparse.SUPPRESS)
     parser.add_argument("--cleanup-update-helper", metavar="PATH", help=argparse.SUPPRESS)
     parser.add_argument("--maimemo-oauth-callback", metavar="URL", help=argparse.SUPPRESS)
+    parser.add_argument("--verify-build", metavar="REPORT", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    if args.verify_build:
+        return verify_build(args.verify_build)
 
     # 该分支只由临时 helper 使用，必须在实例锁、服务器、网页窗口任何一个启动前
     # 运行；否则旧版尚在时可能出现两份服务器或抢占不同构建端口的问题。

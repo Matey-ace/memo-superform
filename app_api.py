@@ -60,6 +60,8 @@ class LocalApiMixin:
         service = globals().get("MAIMEMO_OAUTH")
         if service is not None:
             try:
+                if callable(getattr(service, "authorization_context", None)):
+                    return service.authorization_context()
                 token = service.access_token()
                 return token, service.profile_key()
             except Exception as exc:
@@ -841,10 +843,11 @@ class LocalApiMixin:
             if not profile_id:
                 return
             try:
-                deleted = db.delete_profile_learning_data(profile_id)
+                deleted = (STUDY_SYNC_MANAGER.delete_profile_data(profile_id, db.delete_profile_learning_data)
+                           if STUDY_SYNC_MANAGER else db.delete_profile_learning_data(profile_id))
                 return self._send_json(200, {"ok": True, "deleted": deleted})
             except Exception as exc:
-                return self._send_json(500, {"error": str(exc)})
+                return self._send_json(409 if isinstance(exc, study_sync.StudySyncError) else 500, {"error": str(exc)})
         if path != "/api/study-sync/current":
             return self._send_json(404, {"error": "未知接口"})
         if not STUDY_SYNC_MANAGER:
