@@ -2,6 +2,11 @@ param([switch]$Browser)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+$previousMemoDataDir = $env:MEMO_DATA_DIR
+if (-not $previousMemoDataDir) {
+    $env:MEMO_DATA_DIR = Join-Path $root ('_verification\regression-' + [guid]::NewGuid().ToString('N'))
+}
+try {
 $jsFiles = Get-ChildItem js -Filter *.js -File
 foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 & node tests/study-keyboard-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -29,3 +34,6 @@ if ($Browser) {
 & python -m unittest discover -s tests -p "test_*.py" -v; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & git diff --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Output 'REGRESSION_SUITE_PASS'
+} finally {
+    $env:MEMO_DATA_DIR = $previousMemoDataDir
+}
