@@ -21,6 +21,7 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
+. (Join-Path $scriptDir 'release-guards.ps1')
 
 function Invoke-GitChecked {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
@@ -84,24 +85,18 @@ if (git status --porcelain) { throw "工作区不是干净状态；请先明确�
 Invoke-GitChecked fetch origin main --no-tags | Out-Null
 if (git rev-parse -q --verify "refs/tags/$tag") { throw "本地 Tag $tag 已存在，禁止覆盖" }
 if (git ls-remote --exit-code --tags origin "refs/tags/$tag" 2>$null) { throw "远端 Tag $tag 已存在，禁止覆盖" }
-try {
-    Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -TimeoutSec 15 | Out-Null
-    throw "GitHub Release $tag 已存在，禁止覆盖"
-} catch {
-    if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -ne 404) { throw }
-}
-& (Join-Path $scriptDir "tests\run.ps1")
+$existingRelease = Get-ExistingRelease "https://api.github.com/repos/$repo/releases/tags/$tag"
+if ($existingRelease) { throw "GitHub Release $tag 已存在，禁止覆盖；未完成的草稿请核验后单独恢复" }
+& (Join-Path $scriptDir "tests\run.ps1") -Browser
 if ($LASTEXITCODE -ne 0) { throw "回归测试失败" }
 
-# ---- 2. 停止占用 8888 端口的旧进程 ----
+# ---- 2. 报告端口占用（构建无需关闭运行中的程序） ----
 Write-Host "[2/7] 检查端口占用..." -ForegroundColor Yellow
 $conn = Get-NetTCPConnection -LocalPort 8888 -State Listen -ErrorAction SilentlyContinue
 if ($conn) {
     $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
     if ($proc) {
-        Write-Host "  停止 $($proc.ProcessName) (PID $($proc.Id)) 占用 8888 端口"
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
+        Write-Host "  8888 由 $($proc.ProcessName) (PID $($proc.Id)) 使用；构建继续，运行实例保持原状"
     }
 }
 
@@ -116,6 +111,13 @@ $ErrorActionPreference = $previousEap
 $buildOutput | Select-Object -Last 5
 if ($buildExit -ne 0) { Write-Host "  打包失败!" -ForegroundColor Red; exit 1 }
 if (-not (Test-Path $exePath)) { Write-Host "  exe 未生成!" -ForegroundColor Red; exit 1 }
+$buildReport = Join-Path $scriptDir '_verification\release-build-report.json'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $buildReport) | Out-Null
+$buildProcess = Start-Process -FilePath $exePath -ArgumentList @('--verify-build', ('"' + $buildReport + '"')) -WindowStyle Hidden -PassThru
+if (-not $buildProcess.WaitForExit(120000)) { $buildProcess.Kill(); throw '冻结包验收超时，发布中止' }
+if ($buildProcess.ExitCode -ne 0) { throw '冻结包验收失败，发布中止；详见 _verification/release-build-report.json' }
+$verification = Get-Content -LiteralPath $buildReport -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $verification.passed -or -not $verification.frozen -or $verification.version -ne $Version) { throw '冻结包验收记录与发布版本不一致' }
 $sizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 2)
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -LiteralPath $exePath -Destination $releaseExe -Force
@@ -143,7 +145,7 @@ if (-not $token) { Write-Host "  无法获取 GitHub Token，请先 git push 一
 $headers = @{ "Authorization" = "token $token"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
 
 $releaseBody = if ($Message) { $Message } else { "$tag release" }
-$payload = @{ tag_name = $tag; target_commitish = "main"; name = $Version; body = $releaseBody; draft = $false; prerelease = $false; make_latest = "true" } | ConvertTo-Json -Depth 5
+$payload = New-DraftReleasePayload $tag $Version $releaseBody
 try {
     $resp = Invoke-WebRequest -Uri "https://api.github.com/repos/$repo/releases" -Method Post -Headers $headers -Body $payload -ContentType "application/json; charset=utf-8" -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop
     $rel = $resp.Content | ConvertFrom-Json
@@ -168,13 +170,10 @@ try {
     Write-Host "  上传失败: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
-$remote = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers $headers -TimeoutSec 30
+$remote = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/$relId" -Headers $headers -TimeoutSec 30
+Publish-VerifiedRelease $remote $exeName (Get-Item $releaseExe).Length $sha256 $repo $headers | Out-Null
 $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers $headers -TimeoutSec 30
-if ($remote.draft -or $remote.prerelease -or $latest.tag_name -ne $tag) { throw "Release 未成为 Latest" }
-if ($remote.assets.Count -ne 1 -or $remote.assets[0].name -ne $exeName) { throw "Release 必须且只能包含 $exeName" }
-if ([int64]$remote.assets[0].size -ne (Get-Item $releaseExe).Length) { throw "远端 EXE 大小不一致" }
-$digest = [string]$remote.assets[0].digest
-if ($digest -and $digest -ne "sha256:$sha256") { throw "远端 EXE SHA256 不一致" }
+if ($latest.tag_name -ne $tag) { throw "公开 Release 后 Latest 核验失败，请检查发布状态" }
 Write-Host "  远端验证通过: Latest / 1 EXE / sha256:$sha256" -ForegroundColor Green
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan

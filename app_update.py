@@ -87,6 +87,7 @@ class UpdateManager:
         self._last_release = None
         self._last_status = None
         self._staged = None
+        self._download_generation = 0
         self._download_state = {
             "state": "idle",
             "progress": 0,
@@ -332,9 +333,8 @@ class UpdateManager:
                 check_error = str(exc)
                 release = self._load_cached_release()
                 cached = release is not None
-            if self._staged and (
-                not release or self._staged.get("version") != release.get("version")
-            ):
+            if self._release_identity(self._last_release) != self._release_identity(release):
+                self._download_generation += 1
                 # 手动检查期间发布了更高版本时，旧候选不可继续被安装。
                 self._staged = None
                 self._download_state = {
@@ -353,6 +353,14 @@ class UpdateManager:
         with self._lock:
             self._download_state.update(values)
 
+    @staticmethod
+    def _release_identity(release):
+        if not release:
+            return None
+        asset = release.get("asset") or {}
+        return (release.get("version"), asset.get("name"), asset.get("sha256"),
+                asset.get("size"), asset.get("download_url"))
+
     def start_download(self):
         """异步下载当前最新资产；客户端只获得进度，不可指定 URL 或本地路径。"""
         with self._lock:
@@ -369,6 +377,8 @@ class UpdateManager:
             if not isinstance(asset, dict):
                 raise UpdateError("未找到可下载的更新文件")
             self._staged = None
+            self._download_generation += 1
+            generation = self._download_generation
             self._download_state = {
                 "state": "downloading",
                 "progress": 0,
@@ -379,14 +389,16 @@ class UpdateManager:
             }
             worker = threading.Thread(
                 target=self._download_worker,
-                args=(copy.deepcopy(release),),
+                args=(copy.deepcopy(release), generation),
                 name="memo-update-download",
                 daemon=True,
             )
             worker.start()
             return self._download_public()
 
-    def _download_worker(self, release):
+    def _download_worker(self, release, generation=None):
+        if generation is None:
+            generation = self._download_generation
         asset = release["asset"]
         expected_size = int(asset["size"])
         expected_sha256 = str(asset["sha256"]).lower()
@@ -401,7 +413,7 @@ class UpdateManager:
                 raise UpdateError("更新下载地址校验失败")
             self._ensure_update_dir()
             final_path = self.update_dir / asset_name
-            part_path = self.update_dir / (asset_name + ".part")
+            part_path = self.update_dir / (asset_name + ".%s.part" % generation)
             try:
                 part_path.unlink()
             except FileNotFoundError:
@@ -422,20 +434,23 @@ class UpdateManager:
                         raise UpdateError("更新文件大小超过发布清单")
                     handle.write(chunk)
                     digest.update(chunk)
-                    self._set_download_state(
-                        state="downloading",
-                        downloaded_bytes=received,
-                        total_bytes=expected_size,
-                        progress=min(99, int(received * 100 / expected_size)),
-                        message="正在下载更新…",
-                    )
+                    with self._lock:
+                        if generation != self._download_generation:
+                            raise UpdateError("更新候选已变更，请重新下载")
+                        self._download_state.update(
+                            state="downloading", downloaded_bytes=received,
+                            total_bytes=expected_size, progress=min(99, int(received * 100 / expected_size)),
+                            message="正在下载更新…")
             actual_sha256 = digest.hexdigest().lower()
             if received != expected_size:
                 raise UpdateError("更新文件大小与发布清单不一致")
             if not hmac.compare_digest(actual_sha256, expected_sha256):
                 raise UpdateError("更新文件 SHA-256 校验失败")
-            os.replace(str(part_path), str(final_path))
             with self._lock:
+                if (generation != self._download_generation or
+                        self._release_identity(release) != self._release_identity(self._last_release)):
+                    raise UpdateError("更新候选已变更，请重新下载")
+                os.replace(str(part_path), str(final_path))
                 self._staged = {
                     "path": str(final_path),
                     "sha256": expected_sha256,
@@ -458,15 +473,16 @@ class UpdateManager:
                 except OSError:
                     pass
             message = str(exc) if isinstance(exc, UpdateError) else "下载更新失败，请稍后重试"
-            self._set_download_state(
-                state="error",
-                progress=0,
-                message=message,
-            )
+            with self._lock:
+                if generation == self._download_generation:
+                    self._download_state.update(state="error", progress=0, message=message)
 
     def prepare_apply(self):
         """在交给 launcher 前再次核对已下载的 EXE，返回仅供本地回调用的路径信息。"""
         with self._lock:
+            status = self.get_status(force=True)
+            if status.get("check_error"):
+                raise UpdateError("安装前版本核验失败，请联网后重试")
             if not self._target_is_writable():
                 raise UpdateError("当前安装目录不可写，无法自动安装更新")
             if not self._staged or self._download_state.get("state") != "ready":

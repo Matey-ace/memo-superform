@@ -1,0 +1,46 @@
+name: Windows regression
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked build and browser dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements-build.lock
+          npm ci
+      - name: Run Python, JavaScript, publication guards and browser tests
+        shell: pwsh
+        env:
+          MEMO_DATA_DIR: ${{ runner.temp }}\memo-regression
+        run: ./tests/run.ps1 -Browser
+      - name: Validate frozen dependency collection
+        shell: pwsh
+        run: python -m PyInstaller --noconfirm --clean MemoSuperform.spec
+      - name: Verify frozen server, resources and database in isolation
+        shell: pwsh
+        run: |
+          $process = Start-Process ./dist/MemoSuperform.exe -ArgumentList '--verify-build', "$env:RUNNER_TEMP/memo-build-report.json" -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Frozen verification timed out' }
+          if ($process.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP/memo-build-report.json"; throw 'Frozen verification failed' }
+          $report = Get-Content "$env:RUNNER_TEMP/memo-build-report.json" -Raw | ConvertFrom-Json
+          if (-not $report.passed -or -not $report.frozen) { throw 'Incomplete frozen report' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-windows-build
+          path: dist/MemoSuperform.exe

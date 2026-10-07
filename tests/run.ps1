@@ -1,4 +1,4 @@
-param()
+param([switch]$Browser)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -20,6 +20,11 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/companion-language-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/companion-reminder-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/app-update-ui-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot 'release-guards.ps1')
+if ($Browser) {
+    & node tests/browser/study-keyboard.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & node tests/browser/quality-hardening.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 & python -m compileall -q @((Get-ChildItem -File *.py).FullName); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & python -m unittest discover -s tests -p "test_*.py" -v; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & git diff --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

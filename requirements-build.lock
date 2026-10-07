@@ -1,0 +1,16 @@
+# Verified on Windows x64 / Python 3.13.12. External GPT-SoVITS uses its own environment.
+altgraph==0.17.5
+bottle==0.13.4
+cffi==2.0.0
+clr-loader==0.3.1
+packaging==25.0
+pefile==2024.8.26
+proxy-tools==0.1.0
+pycparser==2.23
+pyinstaller==6.20.0
+pyinstaller-hooks-contrib==2026.5
+pythonnet==3.1.0
+pywebview==6.2.1
+pywin32-ctypes==0.2.3
+setuptools==80.10.2
+typing-extensions==4.15.0

@@ -46,5 +46,7 @@ output/
 ROLLBACK.sh
 VERIFICATION.txt
 icon-anon.diff.txt
+node_modules/
+quality-test-output.txt
 img/icon-anon.ico
 img/icon-anon.png

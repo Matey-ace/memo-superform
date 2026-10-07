@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -84,6 +85,53 @@ class AppUpdateTests(unittest.TestCase):
         self.assertTrue(app_update.is_important_update("0.78", "0.81"))
         self.assertFalse(app_update.is_important_update("0.78", "0.79"))
         self.assertIsNone(app_update.parse_version("release-latest"))
+
+    def test_new_release_invalidates_inflight_download_including_late_failure(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                entered, resume = threading.Event(), threading.Event()
+                current = [release_payload("0.86", b"old candidate")]
+                class DelayedResponse(FakeResponse):
+                    def read(self, size=-1):
+                        entered.set()
+                        if not resume.wait(2):
+                            raise AssertionError("download test timed out")
+                        if fail:
+                            raise OSError("old download failed")
+                        return super().read(size)
+                def opener(request, timeout):
+                    if request.full_url.endswith("/latest"):
+                        return FakeResponse(json.dumps(current[0]).encode())
+                    return DelayedResponse(b"old candidate")
+                manager = self.make_manager(opener)
+                manager.get_status()
+                generation = manager._download_generation
+                worker = threading.Thread(target=manager._download_worker, args=(manager._last_release, generation))
+                worker.start()
+                self.assertTrue(entered.wait(1))
+                current[0] = release_payload("0.87", b"new candidate")
+                manager.get_status(force=True)
+                resume.set()
+                worker.join(3)
+                self.assertFalse(worker.is_alive())
+                status = manager.get_status()
+                self.assertEqual("0.87", status["latest_version"])
+                self.assertEqual("idle", status["download"]["state"])
+                self.assertIsNone(manager._staged)
+                self.assertEqual([], list(manager.update_dir.glob("*.part")))
+
+    def test_install_rechecks_release_and_rejects_replaced_asset_digest(self):
+        current = [release_payload("0.87", b"first")]
+        def opener(request, timeout):
+            return FakeResponse(json.dumps(current[0]).encode() if request.full_url.endswith("/latest") else b"first")
+        manager = self.make_manager(opener)
+        manager.get_status()
+        manager._download_worker(manager._last_release)
+        self.assertIsNotNone(manager._staged)
+        current[0] = release_payload("0.87", b"replacement")
+        with self.assertRaises(app_update.UpdateError):
+            manager.prepare_apply()
+        self.assertIsNone(manager._staged)
 
     def test_status_uses_only_expected_release_asset(self):
         binary = b"v079"
@@ -202,10 +250,12 @@ class AppUpdateTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {"MEMO_DATA_DIR": str(data_dir)}, clear=False), \
              mock.patch.object(launcher, "_wait_for_process_exit", return_value=True) as wait, \
+             mock.patch.object(launcher, "_wait_for_update_ready") as ready, \
              mock.patch.object(launcher, "_hidden_detached_popen") as spawned:
             self.assertEqual(launcher.apply_staged_update(str(request)), 0)
 
         wait.assert_called_once_with(321)
+        ready.assert_called_once()
         self.assertEqual(target.read_bytes(), b"new")
         self.assertFalse(source.exists())
         self.assertFalse(request.exists())
