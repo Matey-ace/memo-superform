@@ -17,7 +17,7 @@ Memo Superform 是一个本地运行的**墨墨背单词数据可视化仪表盘
 
 完整版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-**0.88 整顿候选**的修复、验证及剩余运行边界见 [全项目整顿记录](docs/quality-hardening.md)。该候选已加入账号/请求生命周期保护、模型资源事务和更新启动确认；参赛冻结还需完成独立 Windows、真实云端写权限和模型渲染验收。
+**0.89** 重新打包交付 0.88 整顿成果，加入发布草稿识别、版本身份保留和 Windows PowerShell 兼容修复。修复、验证及剩余运行边界见 [全项目整顿记录](docs/quality-hardening.md)；参赛冻结仍需完成真实云端权限、桌面升级、完整模型渲染和长期运行验收。
 
 开发验收：安装 `requirements-build.lock` 与 `npm ci` 所列依赖，在 Windows 执行 `./tests/run.ps1 -Browser`；构建后可执行 `dist/MemoSuperform.exe --verify-build <报告绝对路径>` 检查冻结资源与数据库，测试资料与日常数据隔离。GitHub Windows CI 使用相同入口。外部 GPT-SoVITS 使用资源包自己的环境，桌面构建依赖锁不覆盖它的 torch/CUDA 组合。
 

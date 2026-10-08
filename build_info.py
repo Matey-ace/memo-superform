@@ -6,5 +6,5 @@
 """
 
 APP_NAME = "Memo Superform"
-BUILD_VERSION = "0.88"
+BUILD_VERSION = "0.89"
 GITHUB_REPOSITORY = "Matey-ace/memo-superform"
