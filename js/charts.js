@@ -1200,7 +1200,11 @@ const ChartManager = (function() {
                 chart = renderRecommendationChart(containerId);
                 break;
             case 'study-web':
-                chart = StudyWeb.render(containerId);
+                chart = StudyWeb.render(containerId, {
+                    // 磁贴内的“退出背单词”把磁贴还原成一个普通图表。这只影响
+                    // 当前视图，不动学习记录、账号或云端状态。
+                    onExit: function() { exitStudyTile(tileIndex, container); }
+                });
                 break;
             case 'diary':
                 chart = (window.DiaryChart ? DiaryChart.render(containerId, options) : null);
@@ -1218,6 +1222,27 @@ const ChartManager = (function() {
         return chart;
     }
     
+    // 退出学习磁贴：先把磁贴切回一个普通图表类型，再重新渲染。
+    // 走 selector + applyChartToTile 的既有路径，让标题、图标、工具栏一起复原。
+    function exitStudyTile(tileIndex, container) {
+        var tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
+        var selector = tile ? tile.querySelector('.chart-selector') : null;
+        var next = (typeof StudyWeb.fallbackChartFor === 'function' && StudyWeb.fallbackChartFor(container)) || 'heatmap';
+        if (selector) {
+            // 选择器里排除了 study-web 之外的第一个可选项，保证一定切到别的图表。
+            var option = Array.prototype.slice.call(selector.options).find(function(item) {
+                return item.value !== 'study-web';
+            });
+            next = option ? option.value : next;
+            selector.value = next;
+        }
+        if (tile && typeof LayoutManager !== 'undefined' && LayoutManager.applyChartToTile) {
+            LayoutManager.applyChartToTile(tile, next);
+        }
+        render(tileIndex, next, {});
+        return next;
+    }
+
     // 重新渲染所有可见图表
     function rerenderAll() {
         Object.keys(chartInstances).forEach(tileIndex => {

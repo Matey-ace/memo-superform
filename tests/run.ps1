@@ -13,6 +13,11 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/js-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/dashboard-date-cache-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/api-connection-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/auth-state-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/auth-button-visibility-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/notebook-shared-path-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/standard-settings-nav-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/study-exit-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/layout-fullscreen-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/study-sync-session-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/js-role-upload-ui-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -42,9 +47,15 @@ if ($Browser) {
     & node tests/browser/companion-ui.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/browser/article-vocab-ui.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-& python -m compileall -q @((Get-ChildItem -File *.py).FullName); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& python -m unittest discover -s tests -p "test_*.py" -v; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& git diff --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# 原生程序把进度写到 stderr，在 $ErrorActionPreference='Stop' 下会被 PowerShell 5.1
+# 当成终止错误。这里只对这几个原生调用放宽策略，失败仍由 $LASTEXITCODE 判定。
+$nativePreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& python -m compileall -q @((Get-ChildItem -File *.py).FullName); $code = $LASTEXITCODE
+if ($code -eq 0) { & python -m unittest discover -s tests -p "test_*.py" -v; $code = $LASTEXITCODE }
+if ($code -eq 0) { & git diff --check; $code = $LASTEXITCODE }
+$ErrorActionPreference = $nativePreference
+if ($code -ne 0) { exit $code }
 Write-Output 'REGRESSION_SUITE_PASS'
 } finally {
     $env:MEMO_DATA_DIR = $previousMemoDataDir

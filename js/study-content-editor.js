@@ -85,6 +85,30 @@ const StudyContentEditor = (function() {
             status.hidden = !message;
         }
 
+        // 草稿是否与已知内容不同：只有真正会丢东西时才打扰用户确认。
+        function hasUnsavedDraft() {
+            const form = state.form;
+            if (!form) return false;
+            if (form.mode === 'create') {
+                return Boolean(String(form.interpretation || '').trim() || String(form.note || '').trim());
+            }
+            return Boolean(String(form.interpretation || '').trim() || String(form.note || '').trim());
+        }
+
+        // 笔记本主题是冻结的：原来关闭编辑面板不会弹确认框，这里也不能多弹一个。
+        function standardTheme() {
+            return !(typeof window !== 'undefined' && window.MemoUIStyle && window.MemoUIStyle.isNotebook) &&
+                !(typeof document !== 'undefined' && document.body && document.body.classList.contains('notebook-mode'));
+        }
+
+        function confirmDiscard() {
+            if (!standardTheme()) return true;
+            if (!hasUnsavedDraft()) return true;
+            return typeof window.confirm === 'function'
+                ? window.confirm('还有未保存的内容，关闭后会丢失。确定关闭吗？')
+                : true;
+        }
+
         function setOpen(open) {
             if (!open) requestGeneration += 1;
             state.open = !!open;
@@ -95,7 +119,20 @@ const StudyContentEditor = (function() {
                 state.form = null;
                 state.error = '';
                 setStatus('', '');
+                // 关闭后停止 500ms 轮询：面板不可见时它没有意义（普通版新增的
+                // 清理，笔记本主题保持改动前的行为）。
+                if (standardTheme() && poll) { clearInterval(poll); poll = null; }
             }
+        }
+
+        // 关闭入口统一走这里，保证草稿保护和焦点归位不会在某个分支漏掉。
+        function requestClose() {
+            if (state.saving) return false;
+            if (!confirmDiscard()) return false;
+            setOpen(false);
+            // 焦点归位是普通版新增的处理；笔记本主题保持改动前的行为。
+            if (standardTheme() && trigger && typeof trigger.focus === 'function') trigger.focus();
+            return true;
         }
 
         function refreshTrigger() {
@@ -350,8 +387,14 @@ const StudyContentEditor = (function() {
             if (event.key === 'Escape' && !state.saving) {
                 event.preventDefault();
                 event.stopPropagation();
-                if (state.form) { state.form = null; render(); }
-                else setOpen(false);
+                // 先退出最内层（编辑表单），再退出面板本身。
+                if (state.form) {
+                    if (!confirmDiscard()) return;
+                    state.form = null;
+                    render();
+                } else {
+                    requestClose();
+                }
             }
         });
         body.addEventListener('compositionstart', function(event) { event.stopPropagation(); });
@@ -362,7 +405,7 @@ const StudyContentEditor = (function() {
             if (!state.open) { setOpen(true); load(currentWord()); }
         });
         const closeButton = panel.querySelector('[data-close-content-editor]');
-        if (closeButton) closeButton.addEventListener('click', function() { if (!state.saving) setOpen(false); });
+        if (closeButton) closeButton.addEventListener('click', requestClose);
 
         function update() {
             const previousWord = state.word;
@@ -397,6 +440,11 @@ const StudyContentEditor = (function() {
 
         return {
             refresh: update,
+            // 父级（退出背单词/关闭全屏）级联收起时用：直接收面板，不再二次确认，
+            // 因为用户已经明确表达了要离开。
+            setOpen: function(open) { setOpen(open); },
+            close: function() { setOpen(false); },
+            hasUnsavedDraft: hasUnsavedDraft,
             dispose: function() {
                 disposed = true;
                 window.removeEventListener('memo-account-changed', accountChanged);

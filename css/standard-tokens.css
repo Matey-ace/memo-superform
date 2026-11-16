@@ -1,0 +1,114 @@
+/* ==========================================
+   普通版设计令牌（standard only）
+   ==========================================
+   所有规则都以 html[data-ui-style="standard"] 限定。笔记本主题既不加载本文件，
+   也不会被任何选择器命中。令牌只描述"安静的个人自习桌面"这一套视觉，
+   不用纸张底色、黑描边、硬投影或全直角。
+*/
+
+html[data-ui-style="standard"] {
+    color-scheme: light;
+
+    /* 画布与表面 */
+    --sd-canvas: #f7f8fa;
+    --sd-surface: #ffffff;
+    --sd-surface-sunken: #f2f4f7;
+    --sd-surface-hover: #eef1f6;
+
+    /* 文字 */
+    --sd-text: #1b1f27;
+    --sd-text-secondary: #4a5261;
+    /* 需要在白底与 --sd-surface-sunken 上同时达到 4.5:1，取偏深的灰。 */
+    --sd-muted: #5d6673;
+
+    /* 线条 */
+    --sd-border: #e5e8ee;
+    --sd-border-strong: #d3d8e0;
+
+    /* 主色与语义色 */
+    /* 白字压在主色上需要 >= 4.5:1，因此主色比常见靛蓝略深。 */
+    --sd-accent: #3f5ce0;
+    --sd-accent-hover: #3550cb;
+    --sd-accent-soft: #eef2ff;
+    --sd-accent-text: #ffffff;
+    --sd-success: #1b6b48;
+    --sd-success-soft: #e9f6ef;
+    /* 深到能在白底上达到 4.5:1（原来的 #b8791a 只有 3.63:1）。 */
+    --sd-warning: #8a5a10;
+    --sd-warning-soft: #fdf4e3;
+    --sd-danger: #cf4f4f;
+    --sd-danger-soft: #fdeeee;
+
+    /* 形状 */
+    --sd-radius-panel: 14px;
+    --sd-radius-card: 12px;
+    --sd-radius-control: 10px;
+    --sd-radius-pill: 999px;
+
+    /* 投影：只有一层，不叠加 */
+    --sd-shadow-card: 0 1px 2px rgba(24, 30, 43, 0.04), 0 6px 16px rgba(24, 30, 43, 0.05);
+    --sd-shadow-pop: 0 12px 32px rgba(20, 26, 38, 0.14);
+    --sd-shadow-focus: 0 0 0 3px rgba(75, 107, 251, 0.28);
+
+    /* 间距节奏 */
+    --sd-gap-1: 4px;
+    --sd-gap-2: 8px;
+    --sd-gap-3: 12px;
+    --sd-gap-4: 16px;
+    --sd-gap-5: 24px;
+    --sd-gap-6: 32px;
+    --sd-gap-7: 48px;
+
+    /* 字体 */
+    --sd-font: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI",
+               "PingFang SC", "Noto Sans SC", sans-serif;
+    --sd-font-size-body: 14px;
+    --sd-font-size-small: 12.5px;
+    --sd-line: 1.65;
+
+    /* 动效 */
+    --sd-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+    --sd-duration: 160ms;
+}
+
+/* 暗色不是机械反色：画布比表面更暗，边框更弱，主色降饱和，阴影让位给边框。 */
+html[data-ui-style="standard"] body.dark {
+    color-scheme: dark;
+
+    --sd-canvas: #14161a;
+    --sd-surface: #1c1f25;
+    --sd-surface-sunken: #191c21;
+    --sd-surface-hover: #23272f;
+
+    --sd-text: #e9ecf2;
+    --sd-text-secondary: #b9c0cc;
+    --sd-muted: #a2aab8;
+
+    --sd-border: #272b33;
+    --sd-border-strong: #343a44;
+
+    --sd-accent: #7b92ff;
+    --sd-accent-hover: #8fa3ff;
+    --sd-accent-soft: #1e2438;
+    --sd-accent-text: #11151f;
+    --sd-success: #6fd3a2;
+    --sd-success-soft: #14261e;
+    --sd-warning: #d8a75a;
+    --sd-warning-soft: #2a2113;
+    --sd-danger: #e5797a;
+    --sd-danger-soft: #2b1719;
+
+    --sd-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.32);
+    --sd-shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.46);
+    --sd-shadow-focus: 0 0 0 3px rgba(123, 146, 255, 0.34);
+}
+
+/* 尊重系统“减少动态效果”：所有位移与过渡都取消，只保留状态变化本身。 */
+@media (prefers-reduced-motion: reduce) {
+    html[data-ui-style="standard"] * {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+    }
+}

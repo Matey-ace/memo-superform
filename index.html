@@ -242,7 +242,9 @@
                         <button id="maimemoConnectBtn" class="test-btn" type="button">连接墨墨账号</button>
                         <button id="maimemoReconnectBtn" class="test-btn" type="button" style="display:none">重新授权</button>
                         <button id="maimemoDisconnectBtn" class="danger-btn" type="button" style="display:none">断开连接</button>
+                        <button id="maimemoRetryBtn" class="test-btn" type="button" hidden data-standard-only>重新检测</button>
                     </div>
+                    <p id="maimemoConnectReason" class="settings-state-note" role="note" hidden data-standard-only></p>
                     <p class="hint">一键授权使用墨墨开放平台；访问令牌只保存在此 Windows 用户的加密凭据中。</p>
                     <details class="setting-item">
                         <summary>高级连接方式：手动 Token</summary>
@@ -592,6 +594,9 @@
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
+    <!-- 普通版专用适配层：都自带主题早退，笔记本主题不会执行其逻辑。 -->
+    <script src="js/standard-companion-guard.js?v=20261117-standard-guard"></script>
+    <script src="js/standard-settings-nav.js?v=20261117-standard-settings"></script>
     <script src="js/app-update.js?v=20260830-v078-app-update"></script>
     <script src="js/app.js?v=20260830-v078-app-update"></script>
 </body>

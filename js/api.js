@@ -23,12 +23,22 @@ const MemoResponse = {
 const MaimemoAPI = (function() {
     const PROXY_BASE = '/proxy/memo';
     // 令牌只保存在 Windows DPAPI 本机凭据库；网页脚本从不保留或读取令牌明文。
-    let connection = { connected: false, mode: '', profile_id: '' };
+    // 初始值必须带上服务端状态字段的“未知”占位：设置页在第一次查询返回前
+    // 就会读取本对象。缺少 configured 时，调用方无法区分“未配置”和“还没查到”，
+    // 早期版本因此把 undefined 当 false 并隐藏了一键授权按钮。
+    let connection = {
+        connected: false, mode: '', profile_id: '',
+        configured: null, callback_ready: null, callback_error: '',
+        pending: false, error: '', display_name: ''
+    };
     // 状态查询可能比保存/断开凭据更晚返回。凭据变更会推进代次，避免旧状态
     // 把新账号重新显示为“未连接”。
     let connectionGeneration = 0;
     let statusSequence = 0;
     let sessionEpoch = 0;
+    // 同一代次内复用同一个状态请求：设置页与启动引导会并发查询，
+    // 两次独立请求既浪费，也让两者读到不同的服务端快照。
+    let statusInFlight = null;
     
     const CACHE_PREFIX = 'memo_cache_';
     const CACHE_TTL = 30 * 60 * 1000;
@@ -45,11 +55,21 @@ const MaimemoAPI = (function() {
             throw error;
         }
     }
+    // 只描述凭据的部分快照（例如断开连接）不应擦掉服务端能力字段：configured /
+    // callback_ready 描述的是本机服务有没有配好一键授权，和当前是否已连接无关。
+    const SERVER_CAPABILITY_KEYS = [
+        'configured', 'callback_ready', 'callback_error', 'redirect_uri'
+    ];
+
     function commitConnection(next) {
         if (!next || typeof next.connected !== 'boolean' || (next.connected && !next.profile_id))
             throw new Error('账号服务返回的数据格式异常');
         const changed = connection.connected !== next.connected || connection.profile_id !== next.profile_id;
-        connection = next;
+        const merged = Object.assign({}, next);
+        SERVER_CAPABILITY_KEYS.forEach(function (key) {
+            if (merged[key] === undefined) merged[key] = connection[key];
+        });
+        connection = merged;
         if (changed) {
             sessionEpoch += 1;
             if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent !== 'undefined')
@@ -74,11 +94,24 @@ const MaimemoAPI = (function() {
     }
 
     async function refreshConnection() {
+        if (statusInFlight && statusInFlight.generation === connectionGeneration)
+            return statusInFlight.promise;
         const generation = connectionGeneration;
         const sequence = ++statusSequence;
-        const next = await authRequest('/api/maimemo-auth/status');
-        if (generation === connectionGeneration && sequence === statusSequence) commitConnection(next);
-        return connection;
+        const promise = authRequest('/api/maimemo-auth/status').then(function (next) {
+            // 只有仍然属于最新代次/最新序号时才提交到共享状态。
+            if (generation === connectionGeneration && sequence === statusSequence) commitConnection(next);
+            // 但**始终**把服务端本次返回的完整快照交给调用方。返回共享的
+            // connection 会让被取代的请求拿到一个缺少 configured/callback_ready
+            // 的旧对象，正是设置页隐藏授权按钮的原因。
+            return Object.assign({}, next);
+        });
+        statusInFlight = { generation: generation, promise: promise };
+        const clear = function () {
+            if (statusInFlight && statusInFlight.promise === promise) statusInFlight = null;
+        };
+        promise.then(clear, clear);
+        return promise;
     }
 
     async function bootstrap() {
@@ -87,12 +120,14 @@ const MaimemoAPI = (function() {
         const legacyToken = localStorage.getItem('maimemo_token') || '';
         if (legacyToken.trim()) {
             const generation = ++connectionGeneration;
+            statusSequence += 1;
+            statusInFlight = null;
             const next = await authRequest('/api/maimemo-auth/manual-token', {
                 method: 'POST', body: { token: legacyToken.trim() }
             });
             if (generation === connectionGeneration) commitConnection(next);
             localStorage.removeItem('maimemo_token');
-            return connection;
+            return connectionStatus();
         }
         return refreshConnection();
     }
@@ -100,12 +135,15 @@ const MaimemoAPI = (function() {
     async function connect() {
         connectionGeneration += 1;
         statusSequence += 1;
+        statusInFlight = null;
         return authRequest('/api/maimemo-auth/start', { method: 'POST', body: {} });
     }
 
     async function saveManualToken(value) {
         const generation = ++connectionGeneration;
         sessionEpoch += 1;
+        statusSequence += 1;
+        statusInFlight = null;
         const next = await authRequest('/api/maimemo-auth/manual-token', {
             method: 'POST', body: { token: String(value || '').trim() }
         });
@@ -116,8 +154,14 @@ const MaimemoAPI = (function() {
     async function disconnect() {
         const generation = ++connectionGeneration;
         sessionEpoch += 1;
+        statusSequence += 1;
+        statusInFlight = null;
         const result = await authRequest('/api/maimemo-auth/disconnect', { method: 'POST', body: {} });
-        if (generation === connectionGeneration) commitConnection({ connected: false, mode: '', profile_id: '' });
+        if (generation === connectionGeneration) {
+            commitConnection(Object.assign({}, connection, {
+                connected: false, mode: '', profile_id: '', display_name: '', subject: ''
+            }));
+        }
         return result;
     }
 
@@ -129,6 +173,7 @@ const MaimemoAPI = (function() {
     function getToken() { return ''; }
     function hasToken() { return Boolean(connection.connected); }
     function connectionStatus() { return Object.assign({}, connection); }
+    function isStatusLoaded() { return connection.configured !== null && connection.configured !== undefined; }
     
     function getCache(key) {
         try {
@@ -615,7 +660,7 @@ const MaimemoAPI = (function() {
     
     return {
         bootstrap, refreshConnection, connect, saveManualToken, disconnect, deleteLocalData,
-        getToken, hasToken, connectionStatus, getSessionEpoch, assertSession, clearCache,
+        getToken, hasToken, connectionStatus, isStatusLoaded, getSessionEpoch, assertSession, clearCache,
         getStudyProgress, queryStudyRecords, getAllStudyRecords,
         startStudySync, getStudySyncStatus, cancelStudySync,
         getWordsFromStudyRecords,

@@ -44,9 +44,11 @@
         css('css/companion-progress.css', 'memo-companion-progress');
         css('css/companion-settlement.css', 'memo-companion-settlement');
         css('css/article-vocab.css', 'memo-article-vocab');
-        css('css/theme-constructivist-tokens.css', 'memo-constructivist-tokens');
-        css('css/theme-constructivist-components.css', 'memo-constructivist-components');
-        css('css/theme-constructivist-layout.css', 'memo-constructivist-layout');
+        // 普通版视觉层：一套安静的个人自习桌面。全部选择器都以
+        // html[data-ui-style="standard"] 开头，笔记本主题不会命中。
+        css('css/standard-tokens.css', 'memo-standard-tokens');
+        css('css/standard-shell.css', 'memo-standard-shell');
+        css('css/standard-settings.css', 'memo-standard-settings');
     }
 
     function applyBody(body) {

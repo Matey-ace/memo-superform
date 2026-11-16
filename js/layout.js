@@ -86,14 +86,27 @@ const LayoutManager = (function() {
         }
     }
 
+    // 笔记本主题是冻结的：它只让顶栏 inert，并且不做 hidden 判断。普通版额外把
+    // 仪表盘与陪伴区也设为 inert（否则全屏时仍能 Tab 到后面），并跳过已隐藏的
+    // 元素，避免残留 inert。
+    function standardTheme() {
+        return !(typeof window !== 'undefined' && window.MemoUIStyle && window.MemoUIStyle.isNotebook) &&
+            !(typeof document !== 'undefined' && document.body && document.body.classList.contains('notebook-mode'));
+    }
+
     function setFullscreenBackgroundInert(isOpen) {
         const background = [
             document.querySelector('.topbar'),
             document.getElementById('dashboard'),
             document.getElementById('companionStudy')
         ];
+        const standard = standardTheme();
         background.forEach(function(element) {
-            if (element) element.inert = !!isOpen;
+            if (!element) return;
+            // 笔记本主题保持改动前的写法：无条件按开关设置。
+            if (!standard) { element.inert = !!isOpen; return; }
+            // 陪伴区已经隐藏时不要留下 inert，否则下次进入陪伴仍然不可交互。
+            element.inert = !!isOpen && !element.hidden;
         });
     }
 
@@ -146,6 +159,13 @@ const LayoutManager = (function() {
     function openFullscreen(tileIndex) {
         const chartType = ChartManager.getChartType(tileIndex);
         if (!chartType) return;
+        // 陪伴模式与全屏弹层互相破坏：陪伴进入会 disposeAll() 销毁已移入弹层的
+        // 学习节点，同时 #companionStudy 已被设为 inert。进入任一方前先关掉另一方。
+        // 陪伴模式会 disposeAll() 销毁移入弹层的学习节点，两者必须互斥。笔记本
+        // 主题不参与这套新逻辑，保持原来的进入方式。
+        if (standardTheme() && typeof window !== 'undefined' && window.Live2DCompanion &&
+            typeof window.Live2DCompanion.isOpen === 'function' && window.Live2DCompanion.isOpen())
+            window.Live2DCompanion.exit();
         const modal = document.getElementById('fullscreenModal');
         cancelPendingFullscreenOpen();
         clearFullscreenContent();
@@ -205,9 +225,23 @@ const LayoutManager = (function() {
         }, 50);
     }
 
+    // 退出父级（全屏）前先退出子级（磁贴内浮层）：编辑器与快捷键面板都挂在
+    // 被搬进弹层的 .study-web-container 里，跟着弹层一起消失会留下打开状态，
+    // 下次进入直接是打开态。
+    function closeStudyOverlays(backup) {
+        const root = backup && backup.studyRoot;
+        if (!root || typeof StudyWeb === 'undefined' || !StudyWeb.closeOverlays) return true;
+        const container = root.classList && root.classList.contains('study-web-container')
+            ? root : root.querySelector('.study-web-container');
+        return container ? StudyWeb.closeOverlays(container) !== false : true;
+    }
+
     function closeFullscreen() {
         const modal = document.getElementById('fullscreenModal');
         const wasOpen = modal.classList.contains('show');
+        // 用户可能因未保存草稿而选择留下：此时整个关闭动作都要中止，
+        // 否则弹层关掉、草稿照样丢。
+        if (wasOpen && standardTheme() && !closeStudyOverlays(fullscreenChartBackup)) return;
         cancelPendingFullscreenOpen();
         modal.classList.remove('show');
         modal.setAttribute('aria-hidden', 'true');
@@ -716,8 +750,13 @@ const LayoutManager = (function() {
     return {
         init,
         switchLayout,
+        applyChartToTile,
         openFullscreen,
         closeFullscreen,
+        isFullscreenOpen: () => {
+            const modal = document.getElementById('fullscreenModal');
+            return !!(modal && modal.classList.contains('show'));
+        },
         getCurrentLayout: () => currentLayout,
         isDragging,
         setDragEndCallback

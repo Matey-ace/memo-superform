@@ -159,6 +159,9 @@
         if (remind) rememberLater();
         modal.classList.remove('show');
         modal.setAttribute('aria-hidden', 'true');
+        // 关闭弹窗后不能继续每 700ms 轮询下载状态：没有界面能显示结果，
+        // 却持续打服务端。安装进行中也不该停，交给下次打开时重新取状态。
+        stopPolling();
         if (previousFocus && typeof previousFocus.focus === 'function') {
             previousFocus.focus();
         }

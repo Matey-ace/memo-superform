@@ -1,0 +1,340 @@
+/* ==========================================
+   普通版设置页：分类目录 → 分类详情（standard only）
+   ==========================================
+   宽窗口：左侧分类目录常驻，右侧显示选中分类。
+   窄窗口：目录与详情各占一页，详情页顶部有"全部设置"返回入口。
+*/
+
+html[data-ui-style="standard"] .settings-panel {
+    background: rgba(16, 18, 22, 0.28);
+}
+
+html[data-ui-style="standard"] .settings-content {
+    width: min(1040px, 94vw);
+    max-width: none;
+    max-height: 88vh;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-panel);
+    box-shadow: var(--sd-shadow-pop);
+    overflow: hidden;
+}
+
+html[data-ui-style="standard"] .settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sd-gap-3);
+    padding: var(--sd-gap-4) var(--sd-gap-5);
+    border-bottom: 1px solid var(--sd-border);
+    background: var(--sd-surface);
+}
+
+html[data-ui-style="standard"] .settings-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--sd-text);
+}
+
+/* 主体：目录 + 详情 */
+html[data-ui-style="standard"] .settings-body {
+    display: block;
+    padding: 0;
+    overflow: hidden;
+    min-height: 0;
+}
+
+html[data-ui-style="standard"] .settings-layout {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+}
+
+html[data-ui-style="standard"] .settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--sd-gap-4) var(--sd-gap-3);
+    background: var(--sd-surface-sunken);
+    border-right: 1px solid var(--sd-border);
+    overflow-y: auto;
+    min-height: 0;
+}
+
+html[data-ui-style="standard"] .settings-nav-heading {
+    margin: 0 0 var(--sd-gap-2);
+    padding: 0 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sd-muted);
+}
+
+html[data-ui-style="standard"] .settings-nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 9px 10px;
+    text-align: left;
+    font-family: inherit;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    box-shadow: none;
+    cursor: pointer;
+    transition: background var(--sd-duration) var(--sd-ease), border-color var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .settings-nav-item:hover { background: var(--sd-surface-hover); }
+
+html[data-ui-style="standard"] .settings-nav-item.is-active {
+    background: var(--sd-surface);
+    border-color: var(--sd-border);
+    box-shadow: 0 1px 2px rgba(24, 30, 43, 0.05);
+}
+
+html[data-ui-style="standard"] .settings-nav-item:focus-visible {
+    outline: none;
+    box-shadow: var(--sd-shadow-focus);
+}
+
+html[data-ui-style="standard"] .settings-nav-title {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+}
+
+html[data-ui-style="standard"] .settings-nav-item.is-active .settings-nav-title {
+    color: var(--sd-text);
+    font-weight: 600;
+}
+
+/* 目录里的一行状态摘要：例如"墨墨账号未连接" */
+html[data-ui-style="standard"] .settings-nav-summary {
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--sd-muted);
+}
+
+html[data-ui-style="standard"] .settings-nav-summary[data-state="ok"] { color: var(--sd-success); }
+html[data-ui-style="standard"] .settings-nav-summary[data-state="warn"] { color: var(--sd-warning); }
+html[data-ui-style="standard"] .settings-nav-summary[data-state="error"] { color: var(--sd-danger); }
+
+html[data-ui-style="standard"] .settings-pages {
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--sd-gap-5);
+    background: var(--sd-surface);
+    scroll-behavior: smooth;
+}
+
+html[data-ui-style="standard"] .settings-page { display: block; }
+html[data-ui-style="standard"] .settings-page[hidden] { display: none !important; }
+
+html[data-ui-style="standard"] .settings-page-header {
+    display: grid;
+    gap: 2px;
+    padding-bottom: var(--sd-gap-3);
+    margin-bottom: var(--sd-gap-4);
+    border-bottom: 1px solid var(--sd-border);
+}
+
+html[data-ui-style="standard"] .settings-page-title {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--sd-text);
+}
+
+html[data-ui-style="standard"] .settings-page-summary {
+    font-size: var(--sd-font-size-small);
+    color: var(--sd-muted);
+}
+
+/* 详情页摘要的状态色：与目录里的 .settings-nav-summary 保持一致。 */
+html[data-ui-style="standard"] .settings-page-summary[data-state="ok"] { color: var(--sd-success); }
+html[data-ui-style="standard"] .settings-page-summary[data-state="warn"] { color: var(--sd-warning); }
+html[data-ui-style="standard"] .settings-page-summary[data-state="error"] { color: var(--sd-danger); }
+
+/* 窄窗口才需要的返回入口 */
+html[data-ui-style="standard"] .settings-back {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    width: fit-content;
+    margin-bottom: var(--sd-gap-2);
+    padding: 4px 8px 4px 2px;
+    font-family: inherit;
+    font-size: 12.5px;
+    color: var(--sd-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+html[data-ui-style="standard"] .settings-back:hover { color: var(--sd-accent); background: var(--sd-accent-soft); }
+html[data-ui-style="standard"] .settings-back:focus-visible { outline: none; box-shadow: var(--sd-shadow-focus); }
+
+/* ---------- 设置分组：用间距与标题分组，不再给每块加框 ---------- */
+
+html[data-ui-style="standard"] .settings-page .setting-group {
+    padding: 0;
+    margin: 0 0 var(--sd-gap-5);
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+html[data-ui-style="standard"] .settings-page .setting-group:last-child { margin-bottom: var(--sd-gap-2); }
+
+html[data-ui-style="standard"] .settings-page .setting-group > h3 {
+    margin: 0 0 var(--sd-gap-3);
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--sd-text-secondary);
+}
+
+/* 注意：不能给 details.setting-item 用 display:grid —— 那会让收起状态的
+   <details> 内容继续显示（Chrome 靠 display 隐藏未展开内容）。 */
+html[data-ui-style="standard"] .setting-item:not(details) {
+    display: grid;
+    gap: 6px;
+}
+
+html[data-ui-style="standard"] .setting-item {
+    margin-bottom: var(--sd-gap-3);
+    padding: 0;
+    background: transparent;
+    border: 0;
+}
+
+html[data-ui-style="standard"] .setting-item > label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+}
+
+html[data-ui-style="standard"] .setting-item input[type="text"],
+html[data-ui-style="standard"] .setting-item input[type="password"],
+html[data-ui-style="standard"] .setting-item input[type="number"],
+html[data-ui-style="standard"] .setting-item input[type="search"],
+html[data-ui-style="standard"] .setting-item select,
+html[data-ui-style="standard"] .setting-item textarea {
+    width: 100%;
+    max-width: 520px;
+}
+
+html[data-ui-style="standard"] .settings-inline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sd-gap-2);
+    align-items: center;
+    margin: var(--sd-gap-2) 0;
+}
+
+/* 分组内按钮排布：允许换行，不再挤成一行 */
+html[data-ui-style="standard"] .settings-page .setting-group > .test-btn,
+html[data-ui-style="standard"] .settings-page .setting-group > .danger-btn {
+    margin: 0 var(--sd-gap-2) var(--sd-gap-2) 0;
+}
+
+html[data-ui-style="standard"] .settings-page details.setting-item {
+    margin-top: var(--sd-gap-3);
+    padding: var(--sd-gap-3) var(--sd-gap-4);
+    background: var(--sd-surface-sunken);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-card);
+}
+
+html[data-ui-style="standard"] .settings-page details.setting-item > summary {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+    cursor: pointer;
+    list-style: none;
+}
+
+html[data-ui-style="standard"] .settings-page details.setting-item > summary::-webkit-details-marker { display: none; }
+
+html[data-ui-style="standard"] .settings-page details.setting-item > summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 6px;
+    color: var(--sd-muted);
+    transition: transform var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .settings-page details.setting-item[open] > summary::before { transform: rotate(90deg); }
+
+/* 语音包 / 高级语音的两个折叠块保持外观一致 */
+html[data-ui-style="standard"] .tts-settings-disclosure {
+    margin: var(--sd-gap-3) 0;
+    background: var(--sd-surface-sunken);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-card);
+    overflow: hidden;
+}
+
+html[data-ui-style="standard"] .tts-settings-disclosure > summary {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sd-gap-2);
+    padding: 10px var(--sd-gap-4);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+    cursor: pointer;
+}
+
+html[data-ui-style="standard"] .tts-settings-disclosure > summary small {
+    font-size: 11.5px;
+    font-weight: 400;
+    color: var(--sd-muted);
+}
+
+html[data-ui-style="standard"] .tts-settings-disclosure-body { padding: var(--sd-gap-3) var(--sd-gap-4) var(--sd-gap-4); }
+
+/* ---------- 底部保存条 ---------- */
+
+html[data-ui-style="standard"] .settings-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--sd-gap-2);
+    padding: var(--sd-gap-3) var(--sd-gap-5);
+    background: var(--sd-surface);
+    border-top: 1px solid var(--sd-border);
+}
+
+/* ---------- 窄窗口：目录与详情分成两页 ---------- */
+
+@media (max-width: 900px) {
+    html[data-ui-style="standard"] .settings-content { width: 96vw; max-height: 92vh; }
+
+    html[data-ui-style="standard"] .settings-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* 目录页：只显示导航 */
+    html[data-ui-style="standard"] .settings-layout:not(.is-detail) .settings-pages { display: none; }
+
+    /* 详情页：只显示选中的分类，并给出返回目录入口 */
+    html[data-ui-style="standard"] .settings-layout.is-detail .settings-nav { display: none; }
+    html[data-ui-style="standard"] .settings-layout.is-detail .settings-pages { padding: var(--sd-gap-4); }
+    html[data-ui-style="standard"] .settings-back { display: inline-flex; }
+    html[data-ui-style="standard"] .settings-nav { border-right: 0; }
+    html[data-ui-style="standard"] .settings-nav-item { padding: 12px 10px; }
+}
+
+@media (max-width: 620px) {
+    html[data-ui-style="standard"] .settings-content { width: 100vw; max-height: 100vh; border-radius: 0; }
+    html[data-ui-style="standard"] .settings-pages { padding: var(--sd-gap-3); }
+}

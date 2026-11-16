@@ -25,6 +25,15 @@
 
     var instance = null;
     var overlay = null;
+    // 关掉面板时必须让在途请求真正结束，而不是只无视它的结果。每次 open 都换一个
+    // 新的 controller，close 时 abort 掉上一轮的全部请求。
+    var requestController = null;
+
+    function currentSignal() {
+        // 取消在途读取是普通版新增的行为；笔记本主题沿用改动前的无 signal 写法。
+        if (!standardTheme()) return undefined;
+        return requestController ? requestController.signal : undefined;
+    }
 
     function postJSON(url, payload) {
         return fetch(url, {
@@ -34,11 +43,13 @@
                 // 本地写接口要求这个头（server.py 的 _local_mutation_allowed）。
                 'X-Requested-With': 'XMLHttpRequest'
             },
+            signal: currentSignal(),
             body: JSON.stringify(payload || {})
         }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (data) {
                 if (!response.ok) {
                     var error = new Error(data.error || ('请求失败：' + response.status));
+                    error.notice = data.notice || data.message || '';
                     error.code = data.code;
                     error.status = response.status;
                     error.uncertain = !!data.uncertain;
@@ -146,9 +157,54 @@
         return overlay;
     }
 
+    // 关闭时若写入正在进行，结果无法再显示在面板里。这里先问一句，并在关闭后
+    // 留下一条可读提示，避免"词也许已经加到云端了"这件事悄悄消失。
+    function submittingState() {
+        if (!instance || typeof instance.getState !== 'function') return null;
+        var state = instance.getState();
+        return state && state.phase === 'SUBMITTING' ? state : null;
+    }
+
+    function announce(text) {
+        var note = document.getElementById('memoArticleVocabNote');
+        if (!note) {
+            note = document.createElement('p');
+            note.id = 'memoArticleVocabNote';
+            note.className = 'article-vocab-note';
+            note.setAttribute('role', 'status');
+            note.setAttribute('aria-live', 'polite');
+            document.body.appendChild(note);
+        }
+        note.textContent = text;
+        note.hidden = false;
+        return note;
+    }
+
+    // 笔记本主题是冻结的：保持原来的关闭行为，不加确认框也不加提示节点。
+    function standardTheme() {
+        return !(typeof globalScope !== 'undefined' && globalScope.MemoUIStyle && globalScope.MemoUIStyle.isNotebook) &&
+            !(typeof document !== 'undefined' && document.body && document.body.classList.contains('notebook-mode'));
+    }
+
     function close() {
         if (!overlay) return;
+        var pending = standardTheme() ? submittingState() : false;
+        if (pending) {
+            var confirmed = typeof window.confirm === 'function'
+                ? window.confirm('选词结果正在提交到墨墨。现在关闭将无法显示提交结果，但提交可能已经送达云端。确定关闭吗？')
+                : true;
+            if (!confirmed) return;
+            announce('选词提交在关闭时仍在进行，可能已经写入墨墨云端，请到墨墨 App 核对结果。');
+        }
         overlay.hidden = true;
+        // 读取类请求（选词/AI/查询）随关闭一起取消；上面已单独处理写入的不确定性。
+        // 笔记本主题保持改动前的行为：不取消在途请求。
+        if (standardTheme() && requestController) {
+            try { requestController.abort(); } catch (e) {}
+            requestController = null;
+        }
+        var note = document.getElementById('memoArticleVocabNote');
+        if (note && standardTheme() && !pending) note.hidden = true;
         if (instance && typeof instance.destroy === 'function') instance.destroy();
         instance = null;
     }
@@ -157,7 +213,10 @@
         if (typeof globalScope.ArticleVocab === 'undefined') return;
         ensureOverlay();
         overlay.hidden = false;
+        var staleNote = document.getElementById('memoArticleVocabNote');
+        if (staleNote) staleNote.hidden = true;
         if (instance) return;
+        requestController = typeof AbortController === 'function' ? new AbortController() : null;
         var host = overlay.querySelector('[data-article-vocab-host]');
         instance = globalScope.ArticleVocab.create({
             requestAi: requestAi,

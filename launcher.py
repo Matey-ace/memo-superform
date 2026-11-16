@@ -1516,7 +1516,11 @@ def verify_build(report_path):
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
             base = "http://127.0.0.1:%s" % httpd.server_address[1]
             try:
-                for path in ("/", "/index-anon.html", "/js/api.js", "/js/study-content-editor.js", "/css/style.css", "/css/diary.css", "/vendor/echarts.min.js", "/img/icon.ico", "/api/maimemo-auth/status"):
+                # 普通版的样式层与新增模块也必须随包发布：这些文件缺失时页面
+                # 仍会“能打开”，只是悄悄退回旧外观，冻结包检查要能抓住这种情况。
+                for path in ("/", "/index-anon.html", "/js/api.js", "/js/study-content-editor.js", "/css/style.css", "/css/diary.css", "/vendor/echarts.min.js", "/img/icon.ico", "/api/maimemo-auth/status",
+                             "/css/standard-tokens.css", "/css/standard-shell.css", "/css/standard-settings.css",
+                             "/js/standard-settings-nav.js", "/js/standard-companion-guard.js"):
                     with urllib.request.urlopen(base + path, timeout=10) as response:
                         if response.status != 200 or not response.read():
                             raise RuntimeError("打包资源校验失败: " + path)
