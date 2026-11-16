@@ -34,6 +34,9 @@ MAX_MODEL_BYTES = 500 * 1024 * 1024
 MAX_SINGLE_FILE_BYTES = 64 * 1024 * 1024
 MAX_MODEL_FILES = 10000
 MODEL_DISK_RESERVE_BYTES = 32 * 1024 * 1024
+# 目录批量下载上限。队列串行执行，因此这个数字只限制一次点击的排队规模，
+# 与单个模型的大小限制无关。
+MAX_BATCH_ITEMS = 32
 ASSETS_BASE = "https://bestdori.com/assets/jp"
 ASSETS_INDEX = "https://bestdori.com/api/explorer/jp/assets/_info.json"
 CHARACTERS_INDEX = "https://bestdori.com/api/characters/all.5.json"
@@ -76,6 +79,8 @@ class Live2DService:
         self._catalog_lock = threading.Lock()
         self._active_job: Optional[DownloadJob] = None
         self._jobs: dict[str, DownloadJob] = {}
+        self._batches: dict[str, dict[str, Any]] = {}
+        self._batch_lock = threading.RLock()
         self._recovery_errors = []
         self._recover_transactions()
 
@@ -557,6 +562,153 @@ class Live2DService:
                             break
             threading.Thread(target=self._download_job, args=(job, item), name="memo-live2d-download", daemon=True).start()
             return job.snapshot()
+
+    # ---------------- 批量目录下载队列 ----------------
+    # ``start_download`` 在忙碌时返回**当前** job，因此批量下载不能靠并发调用它：
+    # 那样会把同一份工作记成多项成功。批量队列自己串行调度，每项都在前一项进入
+    # 终态后才创建，并用独立 job_id 跟踪，绝不共享结果。
+
+    def _wait_download_idle(self, cancel: threading.Event, timeout: float = 3600.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if cancel.is_set():
+                return False
+            with self._lock:
+                active = self._active_job
+                if active is None or active.status not in {"queued", "fetching"}:
+                    return True
+            time.sleep(0.2)
+        return False
+
+    def start_catalog_batch(self, items: Sequence[Mapping[str, Any]], profile_id: str) -> dict[str, Any]:
+        """为多个目录项建立真实串行队列。每项有独立 job_id 与独立结果。"""
+        wanted: list[str] = []
+        for raw in items or []:
+            name = str((raw or {}).get("catalog_name") or "").strip()
+            if name and name not in wanted:
+                wanted.append(name)
+        if not wanted:
+            raise Live2DError("未选择任何模型")
+        if len(wanted) > MAX_BATCH_ITEMS:
+            raise Live2DError("单次最多选择 %d 个模型" % MAX_BATCH_ITEMS)
+        catalog = self.catalog().get("models", [])
+        known = {row["catalog_name"] for row in catalog}
+        batch_id = uuid.uuid4().hex
+        entries = []
+        for name in wanted:
+            entries.append({
+                "catalog_name": name,
+                "job_id": "",
+                "status": "queued" if name in known else "failed",
+                "error": "" if name in known else "模型目录中没有这一项",
+                "model_id": "",
+                "binds_complete_role": False,
+            })
+        batch = {
+            "batch_id": batch_id,
+            "profile_id": str(profile_id or ""),
+            "status": "running",
+            "created_at": time.time(),
+            "items": entries,
+            "cancel": threading.Event(),
+        }
+        with self._batch_lock:
+            self._batches[batch_id] = batch
+            if len(self._batches) > 8:
+                for key, prior in list(self._batches.items()):
+                    if prior["status"] != "running" and key != batch_id:
+                        self._batches.pop(key, None)
+                        if len(self._batches) <= 8:
+                            break
+        threading.Thread(target=self._run_batch, args=(batch,), name="memo-live2d-batch", daemon=True).start()
+        return self._batch_snapshot(batch)
+
+    def _batch_snapshot(self, batch: Mapping[str, Any]) -> dict[str, Any]:
+        items = [dict(entry) for entry in batch["items"]]
+        return {
+            "batch_id": batch["batch_id"],
+            "status": batch["status"],
+            "items": items,
+            "completed": sum(1 for entry in items if entry["status"] == "completed"),
+            "failed": sum(1 for entry in items if entry["status"] == "failed"),
+            "cancelled": sum(1 for entry in items if entry["status"] == "cancelled"),
+            "pending": sum(1 for entry in items if entry["status"] in {"queued", "downloading"}),
+        }
+
+    def catalog_batch_status(self, batch_id: str) -> dict[str, Any]:
+        with self._batch_lock:
+            batch = self._batches.get(str(batch_id))
+            if not batch:
+                return {"batch_id": str(batch_id), "status": "unknown", "items": []}
+            return self._batch_snapshot(batch)
+
+    def cancel_catalog_batch(self, batch_id: str) -> dict[str, Any]:
+        with self._batch_lock:
+            batch = self._batches.get(str(batch_id))
+            if not batch:
+                return {"ok": False, "status": "unknown"}
+            batch["cancel"].set()
+            active_job = ""
+            for entry in batch["items"]:
+                if entry["status"] == "queued":
+                    entry["status"] = "cancelled"
+                elif entry["status"] == "downloading":
+                    active_job = entry["job_id"]
+        if active_job:
+            # 正在下载的一项走既有取消路径；其终态由 _run_batch 记录为 cancelled。
+            self.cancel_download(active_job)
+        return {"ok": True, **self.catalog_batch_status(batch_id)}
+
+    def _run_batch(self, batch: dict[str, Any]) -> None:
+        cancel = batch["cancel"]
+        for entry in batch["items"]:
+            if entry["status"] != "queued":
+                continue
+            if cancel.is_set():
+                entry["status"] = "cancelled"
+                continue
+            if not self._wait_download_idle(cancel):
+                entry["status"] = "cancelled" if cancel.is_set() else "failed"
+                entry["error"] = "等待其他模型下载超时" if not cancel.is_set() else ""
+                continue
+            if cancel.is_set():
+                entry["status"] = "cancelled"
+                continue
+            try:
+                snapshot = self.start_download(entry["catalog_name"], batch["profile_id"])
+            except Exception as exc:
+                entry["status"], entry["error"] = "failed", str(exc)
+                continue
+            entry["job_id"] = snapshot["job_id"]
+            entry["status"] = "downloading"
+            # 只有本项自己的 job 才算本项结果；轮询时校验 job_id 一致。
+            while True:
+                if cancel.is_set():
+                    self.cancel_download(snapshot["job_id"])
+                status = self.download_status(snapshot["job_id"])
+                if status.get("job_id") != snapshot["job_id"]:
+                    entry["status"], entry["error"] = "failed", "下载任务标识不一致"
+                    break
+                if status.get("status") in {"completed", "failed", "cancelled"}:
+                    state = status.get("status")
+                    entry["status"] = {"completed": "completed", "failed": "failed",
+                                       "cancelled": "cancelled"}[state]
+                    entry["error"] = str(status.get("error") or "")
+                    entry["model_id"] = str(status.get("model_id") or "")
+                    break
+                time.sleep(0.25)
+        with self._batch_lock:
+            remaining = [entry for entry in batch["items"] if entry["status"] in {"queued", "downloading"}]
+            if not remaining:
+                finished = [entry["status"] for entry in batch["items"]]
+                if all(state == "cancelled" for state in finished if state in {"completed", "failed", "cancelled"}):
+                    batch["status"] = "cancelled"
+                elif any(state == "failed" for state in finished):
+                    batch["status"] = "partial_failed"
+                elif "cancelled" in finished:
+                    batch["status"] = "partial_failed"
+                else:
+                    batch["status"] = "completed"
 
     def download_status(self, job_id: str) -> dict[str, Any]:
         with self._lock:

@@ -1,0 +1,386 @@
+/* ========== 陪伴结算弹层 ==========
+ * 层级刻意低于现有设置面板（1000）/全屏弹窗（2000）：
+ * 结算只是陪伴时间线的一段插曲，不该盖住用户主动打开的面板。
+ * 颜色一律走变量 + 回退，两套主题各写一段覆盖。 */
+
+:root {
+    --memo-layer-settlement: 900; /* 低于 .settings-panel 的 1000 */
+    --companion-settlement-radius: 16px;
+    --companion-settlement-transition: 200ms ease;
+}
+
+/* 这层只是挂载容器：真正的遮罩由 .companion-settlement 自己 fixed 承担。
+ * 容器本身绝不能占满屏幕，否则弹层关闭后（host.hidden=true）一个空的 fixed 层
+ * 会继续以 z-index 900 吞掉整页点击。 */
+.companion-settlement-layer {
+    position: static;
+    display: block;
+}
+
+.companion-settlement-layer[hidden] {
+    display: none !important;
+}
+
+.companion-settlement {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: var(--memo-layer-settlement, 900);
+    background: rgba(15, 23, 42, .28);
+    box-sizing: border-box;
+    animation: companion-settlement-fade var(--companion-settlement-transition, 200ms ease) both;
+}
+
+.companion-settlement[hidden] {
+    display: none;
+}
+
+.companion-settlement__panel {
+    position: relative;
+    width: min(420px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    padding: 18px 20px 16px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: var(--companion-settlement-radius, 16px);
+    background: var(--card-bg, #ffffff);
+    color: var(--text-primary, #1a1a2e);
+    box-shadow: var(--shadow-lg, 0 12px 40px rgba(15, 23, 42, .18));
+    box-sizing: border-box;
+    animation: companion-settlement-rise var(--companion-settlement-transition, 200ms ease) both;
+}
+
+.companion-settlement__title {
+    margin: 0 0 2px;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text-primary, #1a1a2e);
+    overflow-wrap: anywhere;
+}
+
+.companion-settlement__title:focus {
+    outline: none; /* 标题仅作程序化焦点落点，避免出现突兀的焦点框 */
+}
+
+.companion-settlement__subtitle {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.companion-settlement__body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+.companion-settlement__message {
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-primary, #1a1a2e);
+    overflow-wrap: anywhere;
+}
+
+/* AI 补一句是次要信息，视觉上必须弱于本地祝贺文字 */
+.companion-settlement__ai {
+    margin: 0;
+    padding: 8px 10px;
+    border-left: 3px solid var(--accent-color, var(--accent-blue, #1677ff));
+    border-radius: 0 8px 8px 0;
+    background: var(--bg-color, #f0f2f5);
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-secondary, #6b7280);
+    overflow-wrap: anywhere;
+}
+
+.companion-settlement__notice {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px dashed var(--border-color, #e5e7eb);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.companion-settlement__stats {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.companion-settlement__card {
+    position: relative;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 12px;
+    background: linear-gradient(135deg,
+        var(--card-bg, #ffffff),
+        var(--bg-color, #f0f2f5));
+}
+
+.companion-settlement__card-image {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+    opacity: .9;
+    pointer-events: none;
+}
+
+.companion-settlement__card-head {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-color, var(--accent-blue, #1677ff));
+    letter-spacing: .04em;
+}
+
+.companion-settlement__card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+    font-size: 12px;
+}
+
+.companion-settlement__card-meta div {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+.companion-settlement__card-meta dt {
+    color: var(--text-secondary, #6b7280);
+    font-size: 11px;
+}
+
+.companion-settlement__card-meta dd {
+    margin: 0;
+    color: var(--text-primary, #1a1a2e);
+    font-variant-numeric: tabular-nums;
+}
+
+.companion-settlement__words {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.companion-settlement__word {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--bg-color, #f0f2f5);
+    color: var(--text-secondary, #6b7280);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+
+.companion-settlement__badge {
+    align-self: flex-start;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--accent-color, var(--accent-blue, #1677ff));
+    color: #ffffff; /* 强调色上的白字，两套主题都保证对比度 */
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+}
+
+.companion-settlement__close {
+    display: block;
+    width: 100%;
+    margin-top: 14px;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 10px;
+    background: var(--bg-color, #f0f2f5);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 13px;
+    line-height: 1.5;
+    cursor: pointer;
+}
+
+.companion-settlement__close:hover {
+    border-color: var(--accent-color, var(--accent-blue, #1677ff));
+}
+
+.companion-settlement__close:focus-visible,
+.companion-settlement__retry:focus-visible {
+    outline: 2px solid var(--accent-color, var(--accent-blue, #1677ff));
+    outline-offset: 2px;
+}
+
+@keyframes companion-settlement-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes companion-settlement-rise {
+    from { opacity: 0; transform: translateY(10px) scale(.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ---- notebook 主题：纸面、墨字、玫瑰色点缀 ---- */
+.notebook-theme .companion-settlement__panel,
+body[data-ui-style="notebook"] .companion-settlement__panel,
+.notebook-mode .companion-settlement__panel,
+[data-ui-style="notebook"] .companion-settlement__panel {
+    border-color: var(--memo-line-strong, #e8cfc6);
+    border-radius: 18px;
+    background: var(--memo-paper, #fffdf9);
+    color: var(--memo-ink, #4a3728);
+    box-shadow: var(--memo-shadow-strong, 0 .3rem .9rem rgba(139, 115, 85, .2));
+}
+
+.notebook-theme .companion-settlement,
+body[data-ui-style="notebook"] .companion-settlement,
+.notebook-mode .companion-settlement,
+[data-ui-style="notebook"] .companion-settlement {
+    background: color-mix(in srgb, var(--memo-canvas, #f6efe9) 55%, rgba(74, 55, 40, .35));
+}
+
+.notebook-theme .companion-settlement__title,
+body[data-ui-style="notebook"] .companion-settlement__title,
+.notebook-mode .companion-settlement__title,
+[data-ui-style="notebook"] .companion-settlement__title,
+.notebook-theme .companion-settlement__message,
+body[data-ui-style="notebook"] .companion-settlement__message,
+.notebook-mode .companion-settlement__message,
+[data-ui-style="notebook"] .companion-settlement__message,
+.notebook-theme .companion-settlement__card-meta dd,
+body[data-ui-style="notebook"] .companion-settlement__card-meta dd,
+.notebook-mode .companion-settlement__card-meta dd,
+[data-ui-style="notebook"] .companion-settlement__card-meta dd {
+    color: var(--memo-ink, #4a3728);
+}
+
+.notebook-theme .companion-settlement__subtitle,
+body[data-ui-style="notebook"] .companion-settlement__subtitle,
+.notebook-mode .companion-settlement__subtitle,
+[data-ui-style="notebook"] .companion-settlement__subtitle,
+.notebook-theme .companion-settlement__stats,
+body[data-ui-style="notebook"] .companion-settlement__stats,
+.notebook-mode .companion-settlement__stats,
+[data-ui-style="notebook"] .companion-settlement__stats,
+.notebook-theme .companion-settlement__ai,
+body[data-ui-style="notebook"] .companion-settlement__ai,
+.notebook-mode .companion-settlement__ai,
+[data-ui-style="notebook"] .companion-settlement__ai,
+.notebook-theme .companion-settlement__notice,
+body[data-ui-style="notebook"] .companion-settlement__notice,
+.notebook-mode .companion-settlement__notice,
+[data-ui-style="notebook"] .companion-settlement__notice,
+.notebook-theme .companion-settlement__word,
+body[data-ui-style="notebook"] .companion-settlement__word,
+.notebook-mode .companion-settlement__word,
+[data-ui-style="notebook"] .companion-settlement__word {
+    color: var(--memo-ink-mid, #7a6650);
+}
+
+.notebook-theme .companion-settlement__card,
+body[data-ui-style="notebook"] .companion-settlement__card,
+.notebook-mode .companion-settlement__card,
+[data-ui-style="notebook"] .companion-settlement__card {
+    border-color: var(--memo-line, #f0dfd9);
+    background: var(--memo-paper-strong, #fffafd);
+}
+
+.notebook-theme .companion-settlement__card-head,
+body[data-ui-style="notebook"] .companion-settlement__card-head,
+.notebook-mode .companion-settlement__card-head,
+[data-ui-style="notebook"] .companion-settlement__card-head {
+    color: var(--memo-rose-deep, #e8788a);
+}
+
+.notebook-theme .companion-settlement__badge,
+body[data-ui-style="notebook"] .companion-settlement__badge,
+.notebook-mode .companion-settlement__badge,
+[data-ui-style="notebook"] .companion-settlement__badge {
+    background: var(--memo-rose-deep, #e8788a);
+}
+
+.notebook-theme .companion-settlement__ai,
+body[data-ui-style="notebook"] .companion-settlement__ai,
+.notebook-mode .companion-settlement__ai,
+[data-ui-style="notebook"] .companion-settlement__ai {
+    border-left-color: var(--memo-rose-deep, #e8788a);
+    background: var(--memo-canvas, #f6efe9);
+}
+
+.notebook-theme .companion-settlement__word,
+body[data-ui-style="notebook"] .companion-settlement__word,
+.notebook-mode .companion-settlement__word,
+[data-ui-style="notebook"] .companion-settlement__word {
+    background: var(--memo-canvas, #f6efe9);
+}
+
+.notebook-theme .companion-settlement__close,
+body[data-ui-style="notebook"] .companion-settlement__close,
+.notebook-mode .companion-settlement__close,
+[data-ui-style="notebook"] .companion-settlement__close {
+    border-color: var(--memo-line-strong, #e8cfc6);
+    background: var(--memo-paper-strong, #fffafd);
+    color: var(--memo-ink, #4a3728);
+}
+
+.notebook-theme .companion-settlement__close:hover,
+body[data-ui-style="notebook"] .companion-settlement__close:hover,
+.notebook-mode .companion-settlement__close:hover,
+[data-ui-style="notebook"] .companion-settlement__close:hover {
+    border-color: var(--memo-rose, #ff8899);
+}
+
+html.memo-notebook.memo-dark .companion-settlement__panel {
+    border-color: rgba(255, 255, 255, .16);
+}
+
+/* ---- 窄窗：弹层贴边，卡片纵向排列，长词断行 ---- */
+@media (max-width: 480px) {
+    .companion-settlement {
+        padding: 8px;
+        align-items: flex-end; /* 底部弹出更贴近手机习惯，也避免被软键盘顶出屏幕 */
+    }
+
+    .companion-settlement__panel {
+        width: 100%;
+        max-height: calc(100vh - 24px);
+        padding: 14px 15px 12px;
+        border-radius: 14px;
+    }
+
+    .companion-settlement__title {
+        font-size: 15px;
+    }
+
+    .companion-settlement__card-meta {
+        flex-direction: column;
+        gap: 3px;
+    }
+
+    .companion-settlement__card-image {
+        width: 34px;
+        height: 34px;
+    }
+}
+
+/* ---- 减弱动效：直接出现，不做淡入位移 ---- */
+@media (prefers-reduced-motion: reduce) {
+    .companion-settlement,
+    .companion-settlement__panel {
+        animation: none;
+    }
+}

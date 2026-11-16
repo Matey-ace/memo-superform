@@ -1,0 +1,268 @@
+/* ========== 陪伴会话进度条 ==========
+ * 只写布局与状态外观，颜色全部走变量 + 回退值：
+ * 主工程有两套主题（standard / notebook），这里不假设哪一套在生效。
+ * 主题覆盖段同时写 .notebook-theme 与 body[data-ui-style="notebook"]，
+ * 因为注入页与主页面挂主题的位置历史上并不统一。 */
+
+:root {
+    --companion-progress-gap: 6px;
+    --companion-progress-radius: 999px;
+    --companion-progress-transition: 240ms ease;
+}
+
+.companion-progress {
+    display: flex;
+    flex-direction: column;
+    gap: var(--companion-progress-gap, 6px);
+    width: 100%;
+    min-width: 0; /* 允许在 flex/grid 容器里收缩，否则窄窗会把内容顶出去 */
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 12px;
+    background: var(--card-bg, #ffffff);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 12px;
+    line-height: 1.5;
+    box-sizing: border-box;
+}
+
+.companion-progress.is-pending {
+    border-color: var(--accent-color, var(--accent-blue, #1677ff));
+    border-style: dashed;
+}
+
+.companion-progress__head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    min-width: 0;
+}
+
+.companion-progress__title {
+    font-weight: 600;
+    color: var(--text-primary, #1a1a2e);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.companion-progress__state {
+    padding: 1px 7px;
+    border-radius: var(--companion-progress-radius, 999px);
+    background: var(--bg-color, #f0f2f5);
+    color: var(--text-secondary, #6b7280);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.companion-progress__track {
+    position: relative;
+    height: 8px;
+    border-radius: var(--companion-progress-radius, 999px);
+    background: var(--bg-color, #f0f2f5);
+    overflow: hidden;
+}
+
+.companion-progress__fill {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent-color, var(--accent-blue, #1677ff));
+    transition: width var(--companion-progress-transition, 240ms ease);
+}
+
+/* 目标数不可信时不做假进度：整条轨道走脉动，绝不显示百分比 */
+.companion-progress__track.is-indeterminate .companion-progress__fill {
+    width: 38%;
+    opacity: .65;
+    animation: companion-progress-indeterminate 1.6s ease-in-out infinite;
+}
+
+.companion-progress__track.is-indeterminate,
+.companion-progress__track.is-static .companion-progress__fill {
+    transition: none;
+}
+
+.companion-progress__track.is-static .companion-progress__fill {
+    animation: none;
+    width: 100%;
+    opacity: .35;
+}
+
+@keyframes companion-progress-indeterminate {
+    0%   { transform: translateX(-40%); }
+    50%  { transform: translateX(60%); }
+    100% { transform: translateX(190%); }
+}
+
+.companion-progress__lines {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    align-items: baseline;
+    min-width: 0;
+}
+
+.companion-progress__label {
+    color: var(--text-primary, #1a1a2e);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere; /* 长数字串在窄窗里也要能断行，不撑破卡片 */
+}
+
+.companion-progress__today {
+    color: var(--text-secondary, #6b7280);
+    overflow-wrap: anywhere;
+}
+
+.companion-progress__pending {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: var(--bg-color, #f0f2f5);
+    color: var(--text-secondary, #6b7280);
+    overflow-wrap: anywhere;
+}
+
+.companion-progress__retry {
+    padding: 2px 8px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: var(--companion-progress-radius, 999px);
+    background: var(--card-bg, #ffffff);
+    color: var(--accent-color, var(--accent-blue, #1677ff));
+    font-size: 11px;
+    line-height: 1.6;
+    cursor: pointer;
+}
+
+.companion-progress__retry:hover,
+.companion-progress__retry:focus-visible {
+    border-color: var(--accent-color, var(--accent-blue, #1677ff));
+    outline: none;
+}
+
+/* ---- notebook 主题：纸感、墨色文字、玫瑰色强调 ---- */
+.notebook-theme .companion-progress,
+body[data-ui-style="notebook"] .companion-progress,
+.notebook-mode .companion-progress,
+[data-ui-style="notebook"] .companion-progress {
+    border-color: var(--memo-line, #f0dfd9);
+    border-radius: 14px;
+    background: var(--memo-paper, #fffdf9);
+    color: var(--memo-ink, #4a3728);
+    font-family: inherit;
+}
+
+.notebook-theme .companion-progress.is-pending,
+body[data-ui-style="notebook"] .companion-progress.is-pending,
+.notebook-mode .companion-progress.is-pending,
+[data-ui-style="notebook"] .companion-progress.is-pending {
+    border-color: var(--memo-rose, #ff8899);
+}
+
+.notebook-theme .companion-progress__title,
+body[data-ui-style="notebook"] .companion-progress__title,
+.notebook-mode .companion-progress__title,
+[data-ui-style="notebook"] .companion-progress__title,
+.notebook-theme .companion-progress__label,
+body[data-ui-style="notebook"] .companion-progress__label,
+.notebook-mode .companion-progress__label,
+[data-ui-style="notebook"] .companion-progress__label {
+    color: var(--memo-ink, #4a3728);
+}
+
+.notebook-theme .companion-progress__today,
+body[data-ui-style="notebook"] .companion-progress__today,
+.notebook-mode .companion-progress__today,
+[data-ui-style="notebook"] .companion-progress__today,
+.notebook-theme .companion-progress__state,
+body[data-ui-style="notebook"] .companion-progress__state,
+.notebook-mode .companion-progress__state,
+[data-ui-style="notebook"] .companion-progress__state,
+.notebook-theme .companion-progress__pending,
+body[data-ui-style="notebook"] .companion-progress__pending,
+.notebook-mode .companion-progress__pending,
+[data-ui-style="notebook"] .companion-progress__pending {
+    color: var(--memo-ink-mid, #7a6650);
+}
+
+.notebook-theme .companion-progress__track,
+body[data-ui-style="notebook"] .companion-progress__track,
+.notebook-mode .companion-progress__track,
+[data-ui-style="notebook"] .companion-progress__track,
+.notebook-theme .companion-progress__state,
+body[data-ui-style="notebook"] .companion-progress__state,
+.notebook-mode .companion-progress__state,
+[data-ui-style="notebook"] .companion-progress__state,
+.notebook-theme .companion-progress__pending,
+body[data-ui-style="notebook"] .companion-progress__pending,
+.notebook-mode .companion-progress__pending,
+[data-ui-style="notebook"] .companion-progress__pending {
+    background: var(--memo-canvas, #f6efe9);
+}
+
+.notebook-theme .companion-progress__fill,
+body[data-ui-style="notebook"] .companion-progress__fill,
+.notebook-mode .companion-progress__fill,
+[data-ui-style="notebook"] .companion-progress__fill {
+    background: var(--memo-rose-deep, #e8788a);
+}
+
+.notebook-theme .companion-progress__retry,
+body[data-ui-style="notebook"] .companion-progress__retry,
+.notebook-mode .companion-progress__retry,
+[data-ui-style="notebook"] .companion-progress__retry {
+    border-color: var(--memo-line-strong, #e8cfc6);
+    background: var(--memo-paper-strong, #fffafd);
+    color: var(--memo-rose-deep, #e8788a);
+}
+
+/* 深色（notebook 暗色）下纸色变量会被替换，这里只补边框对比 */
+html.memo-notebook.memo-dark .companion-progress {
+    border-color: rgba(255, 255, 255, .16);
+}
+
+/* ---- 窄窗：标签换行而不是省略，进度信息不能被裁掉 ---- */
+@media (max-width: 480px) {
+    .companion-progress {
+        padding: 7px 9px;
+        font-size: 11.5px;
+    }
+
+    .companion-progress__head,
+    .companion-progress__lines {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+    }
+
+    .companion-progress__title {
+        white-space: normal;
+        overflow: visible;
+    }
+
+    .companion-progress__label,
+    .companion-progress__today {
+        width: 100%;
+    }
+}
+
+/* ---- 减弱动效：脉动条彻底静止，用静态半透明块表示「未知」 ---- */
+@media (prefers-reduced-motion: reduce) {
+    .companion-progress__fill,
+    .companion-progress__track.is-indeterminate .companion-progress__fill {
+        transition: none;
+        animation: none;
+    }
+
+    .companion-progress__track.is-indeterminate .companion-progress__fill {
+        width: 100%;
+        opacity: .3;
+    }
+}

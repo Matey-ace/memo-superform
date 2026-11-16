@@ -193,6 +193,31 @@ class _DesktopTtsPackBridge:
         except Exception as exc:
             return {"error": self._public_error(exc, selected_path)}
 
+    def choose_role_packages(self):
+        """原生多选角色包 ZIP，返回受控 ``source_refs`` 供检查接口使用。
+
+        与浏览器上传的区别：桌面端能拿到本机路径，因此这里把选中的文件复制进
+        ``role_packages/incoming``，只返回**受控目录内**的引用。网页端永远拿不到
+        任意本机路径，也无法诱导服务端读取目录外的文件。
+        """
+        if not self._is_local_index():
+            raise RuntimeError("角色包原生导入只能从本地设置页发起")
+        if self._window is None:
+            raise RuntimeError("桌面窗口尚未就绪")
+        selected = self._window.create_file_dialog(
+            self._webview.FileDialog.OPEN,
+            allow_multiple=True,
+            file_types=("角色包 ZIP (*.zip)",),
+        )
+        if not selected:
+            return {"cancelled": True, "source_refs": []}
+        try:
+            import role_package_service
+            return {"cancelled": False,
+                    "source_refs": role_package_service.stage_local_files(list(selected))}
+        except Exception as exc:
+            return {"error": self._public_error(exc)}
+
     def _queue_pending_drop(self, local_path):
         """暂存原生拖放路径，等待网页确认丢弃未保存的角色编辑。"""
         if not str(local_path).lower().endswith(".zip"):

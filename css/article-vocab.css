@@ -1,0 +1,427 @@
+/* ========== 文章选词面板 ==========
+ * 只写布局与状态外观，颜色全部走变量 + 回退值：
+ * 主工程有两套主题（standard / notebook），这里不假设哪一套在生效。
+ * 主题覆盖段同时写 .notebook-theme 与 body[data-ui-style="notebook"]，
+ * 因为注入页与主页面挂主题的位置历史上并不统一。 */
+
+:root {
+    --article-vocab-gap: 8px;
+    --article-vocab-radius: 10px;
+}
+
+.article-vocab {
+    display: flex;
+    flex-direction: column;
+    gap: var(--article-vocab-gap, 8px);
+    width: 100%;
+    min-width: 0; /* 允许在 flex/grid 容器里收缩，否则窄窗会把内容顶出去 */
+    padding: 12px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 12px;
+    background: var(--card-bg, #ffffff);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 13px;
+    line-height: 1.5;
+    box-sizing: border-box;
+}
+
+.article-vocab__head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    min-width: 0;
+}
+
+.article-vocab__title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.article-vocab__phase {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--bg-color, #f0f2f5);
+    color: var(--text-secondary, #6b7280);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+/* 处理中：只改边框节奏，不做无限旋转动画（减少动效偏好下同样安全） */
+.article-vocab[data-phase="extracting"] .article-vocab__phase,
+.article-vocab[data-phase="selecting"] .article-vocab__phase,
+.article-vocab[data-phase="submitting"] .article-vocab__phase {
+    background: var(--accent-color, #1677ff);
+    color: #ffffff;
+}
+
+.article-vocab__form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.article-vocab__field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.article-vocab__field > span {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+.article-vocab__field > span > b {
+    color: var(--text-primary, #1a1a2e);
+    font-variant-numeric: tabular-nums;
+}
+
+.article-vocab__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+}
+
+.article-vocab__field--half {
+    flex: 1 1 140px;
+    min-width: 0;
+}
+
+.article-vocab input[type="text"],
+.article-vocab textarea {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: var(--article-vocab-radius, 10px);
+    background: var(--input-bg, #ffffff);
+    color: var(--text-primary, #1a1a2e);
+    font: inherit;
+    font-size: 12px;
+    box-sizing: border-box;
+}
+
+.article-vocab textarea {
+    resize: vertical;
+    min-height: 96px;
+    line-height: 1.55;
+}
+
+.article-vocab input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent-color, #1677ff);
+}
+
+.article-vocab__hint {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary, #6b7280);
+}
+
+.article-vocab__actions,
+.article-vocab__submit-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+}
+
+.article-vocab__submit-row {
+    justify-content: space-between;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border-color, #e5e7eb);
+}
+
+.article-vocab__selected {
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+    font-variant-numeric: tabular-nums;
+}
+
+.article-vocab button {
+    padding: 5px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--article-vocab-radius, 10px);
+    background: var(--accent-color, #1677ff);
+    color: #ffffff;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.article-vocab button:hover:not(:disabled) {
+    filter: brightness(1.06);
+}
+
+/* 禁用态要明显：提交中/无选中时按钮不能看起来还能点 */
+.article-vocab button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.article-vocab .article-vocab__ghost {
+    background: transparent;
+    border-color: var(--border-color, #e5e7eb);
+    color: var(--text-primary, #1a1a2e);
+}
+
+.article-vocab .article-vocab__remove {
+    align-self: flex-start;
+    padding: 2px 8px;
+    background: transparent;
+    border-color: var(--border-color, #e5e7eb);
+    color: var(--text-secondary, #6b7280);
+    font-size: 11px;
+}
+
+.article-vocab__notice,
+.article-vocab__empty {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: var(--article-vocab-radius, 10px);
+    background: var(--bg-color, #f0f2f5);
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+/* 失败/待核实/部分结果：三种语义必须视觉可分，不能混成一句"出错了" */
+.article-vocab__notice.is-uncertain {
+    background: var(--warn-bg, #fff7e6);
+    border: 1px solid var(--warn-border, #ffd591);
+    color: var(--warn-text, #ad6800);
+}
+
+.article-vocab__notice.is-partial {
+    background: var(--info-bg, #e6f4ff);
+    border: 1px solid var(--info-border, #91caff);
+    color: var(--info-text, #0958d9);
+}
+
+.article-vocab[data-uncertain="true"] {
+    border-color: var(--warn-border, #ffd591);
+}
+
+.article-vocab__auto {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.article-vocab__auto input {
+    accent-color: var(--accent-color, #1677ff);
+}
+
+.article-vocab__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    min-width: 0;
+}
+
+.article-vocab__item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: var(--article-vocab-radius, 10px);
+    background: var(--bg-color, #fafafa);
+}
+
+/* 未勾选的行降权但不隐藏：用户要能反悔 */
+.article-vocab__item[data-selected="false"] {
+    opacity: 0.62;
+}
+
+.article-vocab__check {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.article-vocab__lemma {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary, #1a1a2e);
+    overflow-wrap: anywhere;
+}
+
+.article-vocab__pos {
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--tag-bg, #eef2f7);
+    color: var(--text-secondary, #6b7280);
+    font-size: 10px;
+}
+
+.article-vocab__gloss,
+.article-vocab__reason,
+.article-vocab__context,
+.article-vocab__meta {
+    margin: 0;
+    font-size: 12px;
+    min-width: 0;
+}
+
+.article-vocab__context {
+    padding-left: 8px;
+    border-left: 2px solid var(--border-color, #e5e7eb);
+    color: var(--text-secondary, #6b7280);
+    font-style: italic;
+    overflow-wrap: anywhere;
+}
+
+.article-vocab__reason {
+    color: var(--text-secondary, #6b7280);
+}
+
+.article-vocab__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-size: 11px;
+    color: var(--text-tertiary, #8c8c8c);
+}
+
+.article-vocab__meta span {
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--tag-bg, #eef2f7);
+}
+
+/* ---- 减少动效偏好 ---- */
+@media (prefers-reduced-motion: reduce) {
+    .article-vocab * {
+        transition: none !important;
+        animation: none !important;
+    }
+}
+
+/* ---- 笔记本主题覆盖 ---- */
+.notebook-theme .article-vocab,
+body[data-ui-style="notebook"] .article-vocab {
+    border-color: var(--notebook-line, #d9cfb8);
+    border-radius: 6px;
+    background: var(--notebook-paper, #fdfaf0);
+    color: var(--notebook-ink, #3b3226);
+    font-family: var(--notebook-font, inherit);
+}
+
+.notebook-theme .article-vocab__item,
+body[data-ui-style="notebook"] .article-vocab__item {
+    background: var(--notebook-paper-alt, #f7f2e2);
+    border-color: var(--notebook-line, #d9cfb8);
+    border-radius: 4px;
+}
+
+.notebook-theme .article-vocab__notice,
+.notebook-theme .article-vocab__empty,
+body[data-ui-style="notebook"] .article-vocab__notice,
+body[data-ui-style="notebook"] .article-vocab__empty {
+    background: var(--notebook-paper-alt, #f7f2e2);
+    color: var(--notebook-ink-soft, #6b5f4d);
+}
+
+.notebook-theme .article-vocab__phase,
+body[data-ui-style="notebook"] .article-vocab__phase {
+    background: var(--notebook-paper-alt, #f7f2e2);
+    color: var(--notebook-ink-soft, #6b5f4d);
+}
+
+/* ========== 入口按钮与浮层容器 ==========
+ * 这部分由 js/article-vocab-wire.js 创建：工具栏按钮 + 一个 role=dialog 的浮层。
+ * 颜色全部走变量 + 回退值，两套主题都不假设自己生效。
+ */
+
+.article-vocab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: var(--article-vocab-radius, 10px);
+    background: var(--card-bg, #ffffff);
+    color: var(--text-primary, #1a1a2e);
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.article-vocab-btn:hover {
+    border-color: var(--accent-color, #239a3b);
+    color: var(--accent-color, #239a3b);
+}
+
+.article-vocab-btn:focus-visible {
+    outline: 2px solid var(--accent-color, #239a3b);
+    outline-offset: 2px;
+}
+
+.article-vocab-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 4vh 16px 16px;
+    background: rgba(15, 23, 42, 0.45);
+    overflow: auto;
+}
+
+.article-vocab-overlay[hidden] {
+    display: none;
+}
+
+.article-vocab-overlay__panel {
+    position: relative;
+    width: min(720px, 100%);
+    max-height: 88vh;
+    overflow: auto;
+    border-radius: 14px;
+    background: var(--card-bg, #ffffff);
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28);
+}
+
+.article-vocab-overlay__body {
+    padding: 4px;
+}
+
+.article-vocab-overlay__close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-secondary, #6b7280);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.article-vocab-overlay__close:hover {
+    background: var(--hover-bg, rgba(148, 163, 184, 0.18));
+    color: var(--text-primary, #1a1a2e);
+}

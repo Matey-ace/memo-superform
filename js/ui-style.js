@@ -29,6 +29,9 @@
         css('css/style-anon.css', 'memo-dashboard-theme');
         css('css/study-web-notebook.css', 'memo-study-theme');
         css('css/live2d-companion.css', 'memo-live2d-companion');
+        css('css/companion-progress.css', 'memo-companion-progress');
+        css('css/companion-settlement.css', 'memo-companion-settlement');
+        css('css/article-vocab.css', 'memo-article-vocab');
     } else {
         css('css/style.css', 'memo-dashboard-theme');
         css('css/ai-toolbar.css', 'memo-ai-toolbar');
@@ -36,6 +39,14 @@
         css('css/study-web.css', 'memo-study-core');
         css('css/study-web-standard.css', 'memo-study-theme');
         css('css/live2d-companion.css', 'memo-live2d-companion');
+        // 陪伴进度与结算演出在两套主题下都要可用：样式表自身用 CSS 变量
+        // 覆盖主题差异，因此这里两套分支都加载同一组文件。
+        css('css/companion-progress.css', 'memo-companion-progress');
+        css('css/companion-settlement.css', 'memo-companion-settlement');
+        css('css/article-vocab.css', 'memo-article-vocab');
+        css('css/theme-constructivist-tokens.css', 'memo-constructivist-tokens');
+        css('css/theme-constructivist-components.css', 'memo-constructivist-components');
+        css('css/theme-constructivist-layout.css', 'memo-constructivist-layout');
     }
 
     function applyBody(body) {

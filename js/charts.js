@@ -15,6 +15,10 @@ const ChartManager = (function() {
     let cachedRecords = null;
     let cachedAIClassification = null;
     let cachedNotepadWords = null;
+    // 仪表盘被隐藏（陪伴模式）期间被跳过的重绘请求标记。
+    // 退出陪伴模式由 live2d-companion.js 统一触发一次可见重绘，因此这里只记标记，
+    // 不自己排重试定时器——避免和退出路径各画一次。
+    let pendingVisibleRender = false;
 
     // 热力图配色预设（6 套，每套含亮色/暗色）
     const heatmapPalettes = [
@@ -234,6 +238,19 @@ const ChartManager = (function() {
     // 根据当前主题返回图表文字颜色
     function getThemeColors() {
         const dark = document.body.classList.contains('dark');
+        if (isMainChartTheme()) {
+            return {
+                type: dark ? 'dark' : 'light',
+                title: dark ? '#ECE3CF' : '#1A1714',
+                subtext: dark ? '#C9BFAA' : '#3D3731',
+                axis: dark ? '#968C7A' : '#6B6258',
+                axisLine: dark ? '#ECE3CF' : '#1A1714',
+                splitLine: dark ? 'rgba(236,227,207,0.20)' : 'rgba(26,23,20,0.22)',
+                tooltipBg: dark ? '#211D18' : '#EFE7D6',
+                tooltipBorder: dark ? '#ECE3CF' : '#1A1714',
+                tooltipText: dark ? '#ECE3CF' : '#1A1714'
+            };
+        }
         return {
             type: dark ? 'dark' : 'light',
             title: dark ? '#e5e7eb' : '#1a1a2e',
@@ -245,6 +262,115 @@ const ChartManager = (function() {
             tooltipBorder: dark ? '#374151' : '#e5e7eb',
             tooltipText: dark ? '#e5e7eb' : '#1a1a2e'
         };
+    }
+
+    function isMainChartTheme() {
+        return document.documentElement.getAttribute('data-ui-style') === 'standard' &&
+            !document.body.classList.contains('companion-mode');
+    }
+
+    function mainChartPalette() {
+        return ['#B8321F', '#1A1714', '#6B6258', '#9C6B30', '#1F3A4D', '#D8CCB2'];
+    }
+
+    function mainHeatmapPalettes() {
+        const colors = mainChartPalette();
+        const mix = (paper, ink, amount) => '#' + [1, 3, 5].map(offset => {
+            const a = parseInt(paper.slice(offset, offset + 2), 16);
+            const b = parseInt(ink.slice(offset, offset + 2), 16);
+            return Math.round(a + (b - a) * amount).toString(16).padStart(2, '0');
+        }).join('').toUpperCase();
+        return heatmapPalettes.map((palette, index) => ({
+            name: palette.name,
+            colors: [0.22, 0.45, 0.72, 1].map(amount => mix('#EFE7D6', colors[index], amount)),
+            darkColors: [0.22, 0.45, 0.72, 1].map(amount => mix('#16130F',
+                index === 1 ? '#ECE3CF' : colors[index], amount))
+        }));
+    }
+
+    // Only paint is changed here; options outside the explicit main scope are untouched.
+    function paintMainChart(option, C) {
+        if (!isMainChartTheme()) return option;
+        const palette = mainChartPalette();
+        const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif';
+        const paper = C.type === 'dark' ? '#16130F' : '#EFE7D6';
+        const walk = node => {
+            if (!node || typeof node !== 'object') return;
+            Object.keys(node).forEach(key => {
+                const value = node[key];
+                if (key === 'color' || key === 'backgroundColor' || key === 'borderColor' ||
+                    key === 'textBorderColor' || key === 'shadowColor') {
+                    node[key] = key === 'backgroundColor' ? paper :
+                        key === 'shadowColor' ? 'transparent' : C.title;
+                } else if (key === 'borderRadius' || key === 'shadowBlur' ||
+                    key === 'shadowOffsetX' || key === 'shadowOffsetY' || key === 'textBorderWidth') {
+                    node[key] = 0;
+                } else {
+                    if (key === 'textStyle' || key === 'subtextStyle' || key === 'axisLabel' ||
+                        key === 'nameTextStyle' || key === 'label' || key === 'dayLabel') {
+                        value.fontFamily = font;
+                    }
+                    walk(value);
+                }
+            });
+        };
+        const heatColors = option.series && option.series[0].type === 'heatmap' ?
+            option.series[0].data.map(item => item.itemStyle.color) : [];
+        walk(option);
+        option.color = palette.slice();
+        option.textStyle = { ...(option.textStyle || {}), fontFamily: font, color: C.title };
+        if (option.tooltip) {
+            Object.assign(option.tooltip, {
+                backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, borderWidth: 1,
+                textStyle: { ...option.tooltip.textStyle, color: C.tooltipText, fontFamily: font },
+                extraCssText: 'border-radius:0;box-shadow:none;backdrop-filter:none;'
+            });
+            if (option.series && option.series[0].name === '保持率') {
+                const formatter = option.tooltip.formatter;
+                option.tooltip.formatter = function(params) {
+                    return formatter(params).replace(/color:#(?:52c41a|1890ff|fa8c16|f5222d)/g,
+                        'color:' + C.tooltipText);
+                };
+            }
+        }
+        (option.series || []).forEach((series, index) => {
+            const color = palette[index % palette.length];
+            if (series.type === 'heatmap') {
+                const oldPalette = heatmapPalettes[currentPaletteIndex] || heatmapPalettes[0];
+                const mapped = mainHeatmapPalettes()[currentPaletteIndex] || mainHeatmapPalettes()[0];
+                const oldColors = C.type === 'dark' ? oldPalette.darkColors : oldPalette.colors;
+                const newColors = C.type === 'dark' ? mapped.darkColors : mapped.colors;
+                series.data.forEach((item, dataIndex) => {
+                    // Match the original paint, not the data or threshold calculation.
+                    const level = oldColors.indexOf(heatColors[dataIndex]);
+                    item.itemStyle.color = level < 0 ? (C.type === 'dark' ? '#2E2922' : '#E5DBC6') : newColors[level];
+                    item.label.color = C.title;
+                    item.label.textBorderColor = paper;
+                    item.label.textBorderWidth = 2;
+                });
+            } else {
+                series.itemStyle = { ...(series.itemStyle || {}),
+                    ...(series.type === 'pie' ? {} : { color }),
+                    borderColor: C.type === 'dark' ? '#ECE3CF' : '#1A1714', borderWidth: 1 };
+                if (series.lineStyle) Object.assign(series.lineStyle, { color,
+                    ...(C.type === 'dark' ? { shadowColor: '#ECE3CF', shadowBlur: 0, shadowOffsetY: 1 } : {}) });
+                if (series.areaStyle) series.areaStyle = { ...series.areaStyle, color, opacity: 0.08 };
+                if (series.markLine) series.markLine.lineStyle.color = C.title;
+                if (series.label) {
+                    const luminance = hex => {
+                        const rgb = [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+                            .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+                        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                    };
+                    const bg = luminance(color);
+                    const lightContrast = (luminance('#EFE7D6') + 0.05) / (bg + 0.05);
+                    const darkContrast = (bg + 0.05) / (luminance('#1A1714') + 0.05);
+                    series.label.color = series.label.position === 'inside' ?
+                        (lightContrast > darkContrast ? '#EFE7D6' : '#1A1714') : C.title;
+                }
+            }
+        });
+        return option;
     }
 
     // ---- 图表渲染函数 ----
@@ -381,7 +507,7 @@ const ChartManager = (function() {
             }]
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -494,7 +620,7 @@ const ChartManager = (function() {
             ]
         };
         
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -656,7 +782,7 @@ const ChartManager = (function() {
             ]
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -667,7 +793,7 @@ const ChartManager = (function() {
         
         if (!classificationData) {
             // 占位提示
-            chart.setOption({
+            chart.setOption(paintMainChart({
                 title: {
                     text: 'AI 单词分类',
                     subtext: '点击上方按钮，使用 AI 分析你的单词分类',
@@ -676,7 +802,7 @@ const ChartManager = (function() {
                     textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
                     subtextStyle: { fontSize: 11, color: C.subtext }
                 }
-            });
+            }, C));
             return chart;
         }
         
@@ -749,7 +875,7 @@ const ChartManager = (function() {
             ]
         };
         
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -760,7 +886,7 @@ const ChartManager = (function() {
         const chart = echarts.init(document.getElementById(containerId));
 
         if (!notepadWords || notepadWords.length === 0) {
-            chart.setOption({
+            chart.setOption(paintMainChart({
                 title: {
                     text: '词书单词进度',
                     subtext: '云词本里还没有单词，先添加一些单词到词书吧',
@@ -769,7 +895,7 @@ const ChartManager = (function() {
                     textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
                     subtextStyle: { fontSize: 11, color: C.subtext }
                 }
-            });
+            }, C));
             return chart;
         }
 
@@ -885,7 +1011,7 @@ const ChartManager = (function() {
             }))
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
 
@@ -994,7 +1120,7 @@ const ChartManager = (function() {
             ]
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
 
@@ -1031,6 +1157,13 @@ const ChartManager = (function() {
         const containerId = 'chart-' + tileIndex;
         const container = document.getElementById(containerId);
         if (!container) return null;
+        // 隐藏容器（display:none、祖先 hidden、零尺寸）下不建图：ECharts 会拿到 0x0 画布。
+        // 这条覆盖 renderVisibleFromSelectors 之外的旁路入口（AI 分类完成、趋势/热力图
+        // 选择器、磁贴类型切换），它们不经过可见性筛选。
+        if (!container.offsetParent && !container.getClientRects().length) {
+            pendingVisibleRender = true;
+            return null;
+        }
         
         // 背单词磁贴：已加载时不重复渲染（避免自动刷新重载iframe）
         if (chartType === 'study-web' && container.querySelector('.study-web-iframe')) {
@@ -1171,6 +1304,7 @@ const ChartManager = (function() {
     function recCardHtml(r, isReviewed) {
         var level = ['low', 'mid', 'high'].includes(r.level) ? r.level : 'low';
         var color = /^#[a-f0-9]{3}(?:[a-f0-9]{3})?$/i.test(r.level_color || '') ? r.level_color : '#999';
+        if (isMainChartTheme()) color = getThemeColors().type === 'dark' ? '#E8634B' : '#B8321F';
         var score = Number.isFinite(Number(r.risk_score)) ? Number(r.risk_score) : 0;
         var cls = 'rec-card level-' + level + (isReviewed ? ' reviewed' : '');
         var meta = [];
@@ -1262,6 +1396,15 @@ const ChartManager = (function() {
     }
 
 function renderVisibleFromSelectors(skipAI) {
+        // 仪表盘被 hidden（陪伴模式）时没有布局盒：echarts.init 会拿到 0x0 画布，
+        // 既画不出东西，也会在退出后留下尺寸错误的实例。磁贴自身 display 仍是 flex，
+        // 所以必须查 #dashboard.hidden，不能只看 tile.style.display。
+        var dashboardEl = document.getElementById('dashboard');
+        if (dashboardEl && dashboardEl.hidden) {
+            pendingVisibleRender = true;
+            return;
+        }
+        pendingVisibleRender = false;
         document.querySelectorAll('.tile').forEach(function(tile) {
             if (tile.style.display === 'none') return;
             var tileIndex = parseInt(tile.dataset.tile);
@@ -1302,7 +1445,7 @@ function renderVisibleFromSelectors(skipAI) {
         Object.keys(chartInstances).forEach(k => delete chartInstances[k]);
     }
     
-    function getHeatmapPalettes() { return heatmapPalettes; }
+    function getHeatmapPalettes() { return isMainChartTheme() ? mainHeatmapPalettes() : heatmapPalettes; }
     function getPaletteIndex() { return currentPaletteIndex; }
     function setPaletteIndex(idx) {
         currentPaletteIndex = idx;

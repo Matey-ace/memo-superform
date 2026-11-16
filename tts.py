@@ -1338,11 +1338,14 @@ def _restore_staged_assets(stage_dir, applied, backups):
             pass
 
 
-def _apply_staged_assets(folder, stage_dir, fields):
+def _apply_staged_assets(folder, stage_dir, fields, *, consume=True):
     """把暂存的规范文件原子交换到角色目录。
 
     Replacing each file is an OS-level atomic rename; old files are retained in
     the stage directory until the manifest and paired Live2D update succeed.
+
+    ``consume=False`` 用于角色包安装：暂存区属于安装事务本身，重试同一角色时
+    还要再用一次，因此复制到目标旁的临时文件后再原子替换，而不是移走暂存件。
     """
     backup_dir = os.path.join(stage_dir, ".rollback")
     os.makedirs(backup_dir, exist_ok=True)
@@ -1360,7 +1363,19 @@ def _apply_staged_assets(folder, stage_dir, fields):
             if os.path.isfile(target):
                 os.replace(target, backup)
                 backups[target] = backup
-            os.replace(staged, target)
+            if consume:
+                os.replace(staged, target)
+            else:
+                temporary = target + "." + uuid.uuid4().hex + ".install"
+                try:
+                    shutil.copy2(staged, temporary)
+                    os.replace(temporary, target)
+                finally:
+                    if os.path.exists(temporary):
+                        try:
+                            os.unlink(temporary)
+                        except OSError:
+                            pass
             applied.append(target)
         return applied, backups
     except Exception:
@@ -1427,6 +1442,150 @@ def commit_role_update(pack_dir, role_id, batch_id, data, *, after_commit=None):
             shutil.rmtree(stage_dir, ignore_errors=True)
         except OSError:
             pass
+        return public
+
+
+def install_role_resources(pack_dir, spec, *, after_commit=None):
+    """新角色完整安装原语：私有暂存 → 校验 → 落盘 → 清单提交 → 失败补偿。
+
+    为什么不能复用 ``commit_role_update``：那条路径要求角色**已经注册**在
+    roles.json 中（``_find_role`` 会拒绝未知 role_id），而完整角色包安装的第一
+    步恰恰是「角色还不存在」。这里补齐同一个事务语义，供角色包服务（B）通过
+    注入适配器调用：
+
+    * ``mode="create"``：``spec["role_id"]`` 缺失时由本函数生成不透明 ID；
+      已存在则拒绝，避免把升级误当新建。
+    * ``mode="upgrade"``：``spec["role_id"]`` 必须已存在且 ``expect_role_id``
+      一致；沿用同一 role_id，从而保留长期记忆。``replace_persona=False``
+      时保留用户手改后的人设文档。
+
+    失败时 roles.json、persona.json 与角色目录内的规范文件全部回到调用前状态，
+    并且只撤销本次事务创建的目录（不删除其他角色的资源）。当前已启用角色不被
+    自动切换，也不因安装而重置 worker——除非它正是本次升级目标。
+    """
+    if not isinstance(spec, dict):
+        raise TTSException("角色安装参数无效")
+    mode = str(spec.get("mode") or "create").strip().lower()
+    if mode not in {"create", "upgrade"}:
+        raise TTSException("角色安装模式无效")
+    staged_dir = str(spec.get("staged_dir") or "").strip()
+    if not staged_dir or not os.path.isdir(staged_dir):
+        raise TTSException("角色安装暂存目录不存在")
+    manifest_in = spec.get("manifest") or {}
+    if not isinstance(manifest_in, dict):
+        raise TTSException("角色清单字段无效")
+    persona_document = spec.get("persona_document")
+    replace_persona = bool(spec.get("replace_persona", mode == "create"))
+
+    with _ROLE_LIBRARY_LOCK:
+        state = ensure_role_library(pack_dir)
+        before = copy.deepcopy(state)
+        requested = str(spec.get("role_id") or "").strip()
+        created_folder = False
+        if mode == "create":
+            if requested:
+                role_id = _safe_role_id(requested)
+                if any(item.get("role_id") == role_id for item in state.get("roles") or []):
+                    raise TTSException("角色标识已存在，不能作为新角色安装")
+            else:
+                role_id = _new_role_id(state)
+            candidate = {
+                "role_id": role_id, "gpt_file": "", "sovits_file": "", "audio_file": "",
+                "index_file": "", "reference_text": "", "reference_language": "",
+                "live2d_model_id": "",
+            }
+        else:
+            role_id = _safe_role_id(requested)
+            expect = str(spec.get("expect_role_id") or "").strip()
+            if expect and _safe_role_id(expect) != role_id:
+                raise TTSException("角色升级目标不一致")
+            existing = next((item for item in state.get("roles") or []
+                             if item.get("role_id") == role_id), None)
+            if existing is None:
+                raise TTSException("角色升级目标不存在")
+            candidate = dict(existing)
+            if not replace_persona:
+                persona_document = _load_role_persona_document(pack_dir, existing) or persona_document
+
+        # 只接受规范文件名：上传/安装路径永远写这些名字，不跟随清单里的任意值。
+        allowed = {
+            "gpt_file": {"gpt.ckpt"},
+            "sovits_file": {"sovits.pth"},
+            "index_file": {"ref.index"},
+            "audio_file": {"reference" + suffix for suffix in _ROLE_FILE_KINDS["audio"][1]},
+        }
+        staged_fields = {}
+        for field, names in allowed.items():
+            name = str(manifest_in.get(field) or "").strip()
+            if not name:
+                continue
+            if name not in names:
+                raise TTSException("角色资源文件名不规范：%s" % name)
+            if not os.path.isfile(os.path.join(staged_dir, name)):
+                raise TTSException("角色资源缺少暂存文件：%s" % name)
+            staged_fields[field] = name
+        candidate.update({
+            "reference_text": str(manifest_in.get("reference_text") or "").strip(),
+            "reference_language": str(manifest_in.get("reference_language") or "").strip(),
+            "live2d_model_id": str(manifest_in.get("live2d_model_id") or "").strip(),
+        })
+        candidate.update(staged_fields)
+        candidate = _role_manifest_entry(candidate)
+
+        name_hint = ""
+        if isinstance(persona_document, dict):
+            name_hint = str(persona_document.get("角色") or persona_document.get("name") or "")
+        if isinstance(persona_document, dict) and "版本" not in persona_document and set(persona_document) == set(_PERSONA_JSON_FIELDS) - {"版本"}:
+            # 角色包里的 persona.json 允许省略版本号；补上当前版本而不是要求
+            # 包作者记住内部常量。其余字段仍走严格校验。
+            persona_document = dict(persona_document, **{"版本": _PERSONA_JSON_VERSION})
+        document = _normalize_persona_document(
+            persona_document, name_hint or role_id, allow_blank=True,
+        ) if persona_document is not None else None
+        if document is None:
+            # 缺少人设允许安装为草稿，与现有完整性规则一致。
+            document = _persona_document_from_legacy({}, name_hint or role_id,
+                                                     strict=False, fill_defaults=False)
+
+        folder = os.path.join(pack_dir, _canonical_role_folder(role_id))
+        if mode == "create":
+            if os.path.isdir(folder):
+                # 目录残留但没有清单条目：直接沿用会让旧文件混进新角色。
+                raise TTSException("角色目录已存在残留文件，请先清理")
+            created_folder = True
+        os.makedirs(folder, exist_ok=True)
+        persona_before = _persona_snapshot(pack_dir, candidate)
+        applied, backups = _apply_staged_assets(folder, staged_dir, staged_fields, consume=False)
+        try:
+            if mode == "create":
+                state["roles"].append(candidate)
+                committed = candidate
+            else:
+                existing = next(item for item in state["roles"]
+                                if item.get("role_id") == role_id)
+                existing.clear()
+                existing.update(candidate)
+                committed = existing
+            _write_role_persona_document(pack_dir, committed, document)
+            _write_roles(pack_dir, state)
+            public = _public_role(committed, pack_dir, persona_document=document)
+            if after_commit:
+                after_commit(public)
+        except Exception:
+            try:
+                _write_roles(pack_dir, before)
+            finally:
+                try:
+                    _restore_persona_snapshot(pack_dir, candidate, persona_before)
+                    _restore_staged_assets(staged_dir, applied, backups)
+                finally:
+                    if created_folder:
+                        # 只回收本次创建的角色目录，绝不动其他角色。
+                        shutil.rmtree(folder, ignore_errors=True)
+            raise
+        if state.get("active_role_id") == role_id:
+            # 升级了当前启用角色：旧 worker 仍持有旧权重，必须下次重建。
+            _reset_manager()
         return public
 
 
@@ -2926,6 +3085,12 @@ class TTSManager:
                 except ValueError:
                     continue
                 request_id = str(message.get("request_id", ""))
+                # worker 除了结果帧，还会无条件推 ``type: "progress"`` 的进度帧，
+                # 且与结果帧共用同一个 request_id。若把进度帧当成结果，调用方会
+                # 拿到没有 output_wav_path 的字典而误报"没有输出音频"。因此只投递
+                # 非进度帧；没有 type 字段的旧格式帧按结果处理，保持向后兼容。
+                if str(message.get("type") or "").lower() == "progress":
+                    continue
                 with self._pending_lock:
                     holder = self._pending.pop(request_id, None)
                 if holder is not None:

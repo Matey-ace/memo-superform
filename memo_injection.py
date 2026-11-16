@@ -56,6 +56,7 @@ MEMO_STUDY_THEME = (
     'function addCss(id,href){var link=document.getElementById(id);if(link&&link.getAttribute("href")===href)return;'
     'if(link)link.remove();link=document.createElement("link");link.id=id;link.rel="stylesheet";link.href=href;document.head.appendChild(link)}'
     'function syncMemoStudyTheme(){var mode=parentStyle(),root=document.documentElement;'
+    'var mainRedesign=false;try{mainRedesign=!!(window.frameElement&&window.parent.document.documentElement.getAttribute("data-ui-style")==="standard"&&!window.parent.document.body.classList.contains("companion-mode")&&!window.frameElement.closest("#companionStudy"))}catch(e){}root.classList.toggle("memo-main-redesign",mainRedesign);'
     'root.classList.toggle("memo-notebook",mode==="notebook");root.classList.toggle("memo-standard",mode==="standard");'
     'var skin=mode==="notebook"?"/css/maimemo-notebook.css?v="+VERSION:"/css/maimemo-standard.css?v="+VERSION;'
     'addCss("memo-study-skin",skin);var fonts=document.getElementById("memo-notebook-fonts");'

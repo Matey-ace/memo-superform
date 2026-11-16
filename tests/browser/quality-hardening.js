@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '../..');
 const scripts = ['ui-style', 'api', 'dashboard-core', 'charts', 'layout', 'study-shortcuts', 'study-lifecycle', 'study-content-editor', 'study-web', 'diary', 'live2d-companion'];
 const study = '<!doctype html><body><div class="taro_page taro_page_show"><div class="rev-root"><div class="rev-top"><div class="wordspell" data-word="apple">apple</div></div></div></div><script>window.answers=0;document.addEventListener("keydown",e=>{if(e.key==="1")answers++})</script>';
 const fixture = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/css/diary.css"></head><body>
-<div id="dashboard"><div id="study"></div><div id="second"></div><div class="tile" data-tile="0" style="height:500px;min-height:500px;width:800px"><div id="chart-0" class="chart-container" style="height:500px"></div></div></div>
+<div id="dashboard" tabindex="-1"><div id="study"></div><div id="second"></div><div class="tile" data-tile="0" style="height:500px;min-height:500px;width:800px"><div id="chart-0" class="chart-container" style="height:500px"></div></div></div>
 <div id="fullscreenModal" class="fullscreen-modal" style="height:600px"><button id="closeFullscreen" class="fullscreen-close">close</button><div id="fullscreenChart" class="fullscreen-chart" style="height:550px"></div></div>
 <button id="companionModeBtn">companion</button><div id="companionStudy" hidden><button id="exitCompanionModeBtn">exit</button><button id="companionAskBtn">ask</button><div id="companionStudyFrame"></div><div id="companionLive2DHost" style="height:400px"><canvas id="companionLive2DCanvas"></canvas><img id="companionGifFallback"></div><span id="companionModelName"></span><p id="companionBubble"></p><p id="companionCurrentWord"></p><div id="companionSummary"></div><div id="companionBirthdayCard" hidden><button id="closeCompanionBirthdayCard">close</button></div></div>
 <script>localStorage.clear();localStorage.setItem('token','fixture');window.chartOptions={};window.echarts={init(el){return {setOption(o){chartOptions[el.id]=o},getOption(){return chartOptions[el.id]},dispose(){el.innerHTML=''},resize(){}}}};</script>
@@ -74,7 +74,7 @@ const server = http.createServer((req, res) => {
   await page.waitForFunction(()=>MaimemoAPI.connectionStatus().profile_id==='B');assert.equal(await page.locator('#study .study-content-editor').isVisible(),false);
   // A hidden earlier tile must not steal the visible tile's answer key.
   await page.evaluate(()=>{instance.dispose();document.querySelector('#study').style.display='none';window.secondInstance=StudyWeb.render('second',{onStudyEvent:e=>reports.push(e)})});
-  await page.waitForSelector('#second[data-study-screen-active="true"]');await page.locator('body').click({position:{x:1,y:1}});await page.keyboard.press('1');
+  await page.waitForSelector('#second[data-study-screen-active="true"]');await page.locator('#dashboard').focus();await page.keyboard.press('1');
   assert.equal(await page.evaluate(()=>reports.filter(e=>e.type==='answer').length),1);
   // Recommendation refresh arriving after disposal must not replace another chart.
   await page.evaluate(()=>{RecommendAPI.getToday=async()=>({recommendations:[{id:'1" onclick="window.injected=true',word:'<img src=x onerror="window.injected=true">',level:'high" onclick="window.injected=true',level_color:'red;" onclick="window.injected=true',risk_score:'<img src=x>'}],summary:{}});ChartManager.render(0,'recommend')});

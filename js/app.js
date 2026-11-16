@@ -33,12 +33,20 @@ const App = (function() {
         setupTheme();
         LayoutManager.init();
         if (typeof Live2DCompanion !== 'undefined') Live2DCompanion.init();
+        // 文章选词入口：只绑按钮，不预加载、不轮询；真正打开时才创建实例。
+        if (typeof ArticleVocabUI !== 'undefined') ArticleVocabUI.init();
         window.addEventListener('memo-study-sync-status', updateCountdown);
         StudySyncUI.init({ onRecordsChanged: handleStudyRecordsChanged });
         window.addEventListener('memo-account-changed', function() {
             resetStudyDataForProfileChange();
             if (window.TTS) TTS.stop();
             if (typeof Live2DCompanion !== 'undefined' && Live2DCompanion.isOpen()) Live2DCompanion.exit();
+            // 切换账号必须撤销文章选词的"自动添加"授权并关掉面板：
+            // 授权是上一个账号给的，不能延续到另一个账号。
+            if (typeof ArticleVocabUI !== 'undefined') ArticleVocabUI.close();
+            if (typeof ArticleVocab !== 'undefined' && ArticleVocab.resetAutoAddPref) {
+                ArticleVocab.resetAutoAddPref();
+            }
         });
         setupAutoRefresh();
         

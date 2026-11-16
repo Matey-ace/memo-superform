@@ -248,7 +248,9 @@ const StudyWeb = (function() {
 
         window.addEventListener('message', handleStudyNavigationMessage);
 
-        iframe.addEventListener('load', function() {
+        // 具名处理函数：销毁路径要显式摘掉它，否则退出陪伴模式后 iframe 每次
+        // 导航仍会触发一套已经无主的界面同步。
+        function handleIframeLoad() {
             var url = '';
             try { url = iframe.contentWindow.location.href; } catch(e) {}
             studyHomeFallbackPending = false;
@@ -263,7 +265,8 @@ const StudyWeb = (function() {
                 // 登录页已经可交互：必须撤掉全屏 loading，不能用提示层盖住表单。
                 setStudyControlsActive(false);
             }
-        });
+        }
+        iframe.addEventListener('load', handleIframeLoad);
 
         // 绑定按钮事件。
         updateShortcutLabels(container, shortcutMap);
@@ -340,6 +343,7 @@ const StudyWeb = (function() {
 
         return createMockInstance(container, function() {
             document.removeEventListener('keydown', handleShortcutKeydown);
+            iframe.removeEventListener('load', handleIframeLoad);
             container.removeEventListener('pointerdown', selectStudyOwner);
             container.removeEventListener('focusin', selectStudyOwner);
             if (preferredStudyContainer === container) preferredStudyContainer = null;

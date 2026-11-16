@@ -11,6 +11,7 @@ $jsFiles = Get-ChildItem js -Filter *.js -File
 foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 & node tests/study-keyboard-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/js-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/dashboard-date-cache-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/api-connection-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/layout-fullscreen-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/study-sync-session-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -25,6 +26,10 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/companion-language-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/companion-reminder-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/app-update-ui-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/study-event-bridge-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/companion-progress-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/companion-settlement-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/article-vocab-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot 'release-guards.ps1')
 if ($env:OS -eq 'Windows_NT') {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'release-guards.ps1')
@@ -34,6 +39,8 @@ if ($Browser) {
     & node tests/browser/study-keyboard.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & node tests/browser/quality-hardening.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & node tests/browser/dashboard-smoke.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & node tests/browser/companion-ui.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/browser/article-vocab-ui.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 & python -m compileall -q @((Get-ChildItem -File *.py).FullName); if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & python -m unittest discover -s tests -p "test_*.py" -v; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

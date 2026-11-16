@@ -700,7 +700,10 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 body = json.dumps(self._read_json_body()).encode("utf-8")
             except (ValueError, UnicodeError):
                 return self._send_json(400, {"error": "Invalid JSON body"})
-            self._proxy_request(target_url, method="POST", body=body)
+            # add_words 不是幂等操作：429 后自动重试可能在首次已成功时重复写入。
+            self._proxy_request(
+                target_url, method="POST", body=body,
+                retryable=(api_path != "study/add_words"))
             return
 
         # 代理 AI API: /proxy/ai
@@ -720,6 +723,21 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 ai_endpoint = req_data.get("endpoint", "").rstrip("/")
                 ai_key = req_data.get("apiKey", "")
                 ai_body = req_data.get("body", {})
+
+                # 长期记忆注入：只追加到 system 消息，失败时退回原请求。
+                # 记忆是增强而不是依赖，因此这里绝不因注入问题让 AI 失败。
+                # ``noMemory`` 用于结构化任务（如文章选词）：角色人设会改变模型语气，
+                # 进而污染选词依据与 JSON 形状，因此这些请求必须显式跳过注入。
+                if (isinstance(ai_body, dict) and isinstance(ai_body.get("messages"), list)
+                        and req_data.get("noMemory") is not True):
+                    try:
+                        import ai_memory_injection
+                        prepared = ai_memory_injection.prepare_request(
+                            ai_body["messages"], ai_memory_injection.current_profile_pk())
+                        if prepared.get("injected"):
+                            ai_body = dict(ai_body, messages=prepared["messages"])
+                    except Exception:
+                        pass
 
                 if req_data.get("provider") == "codex":
                     try:
@@ -869,7 +887,13 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 "study/get_study_progress",
                 "study/get_today_items",
                 "study/query_study_records",
+                # 文章选词：批量查真实词 ID（只读）。
+                "vocabulary/query",
             } and not params:
+                return True
+            # 文章选词：加入学习列表（唯一的云端写入）。
+            # 只放行这一个确切路径；advance 由 app_api 强制为 false。
+            if clean == "study/add_words" and not params:
                 return True
             return bool(re.fullmatch(r"(?:interpretations|notes)(?:/[A-Za-z0-9_-]{1,160})?", clean)) and not params
         if method == "DELETE":
@@ -891,8 +915,31 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                 return only({"voc_id"}) and has_one("voc_id", 160)
         return False
 
-    def _proxy_request(self, target_url, method="GET", body=None):
-        """转发白名单开放 API，并从本机凭据库注入授权与共享限流。"""
+    def _proxy_request(self, target_url, method="GET", body=None, retryable=True):
+        """转发白名单开放 API，并把结果直接写给客户端。
+
+        ``retryable=False`` 用于**非幂等写请求**（如 study/add_words）：
+        429 之后自动重试可能在第一次已成功时重复写入，而官方只返回一个
+        ``added_count``、没有逐词结果可供对账。读请求保持原有的有限重试。
+        """
+        status, payload, retry_after = self._proxy_call(
+            target_url, method=method, body=body, retryable=retryable)
+        if status is None:
+            self._send_json(502, payload)
+            return
+        self._send_upstream_json(status, payload, retry_after)
+
+    def _proxy_call(self, target_url, method="GET", body=None, retryable=True):
+        """执行白名单开放 API 调用，**返回结果而不写响应**。
+
+        ``_proxy_request`` 与文章选词共用这一层，避免把授权注入、共享限流、
+        429 退避、超时这四件事各写一遍。
+
+        返回 ``(status, payload, retry_after)``：
+
+        - ``status`` 为上游状态码，``payload`` 是原始字节；
+        - 失败且无上游响应时 ``status=None``，``payload`` 是错误 dict。
+        """
         auth = (self.headers.get("Authorization") or "").strip()
         rate_profile = ""
         if not auth:
@@ -903,7 +950,7 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
                     token, rate_profile = MAIMEMO_OAUTH.access_token(), MAIMEMO_OAUTH.profile_key()
                 auth = "Bearer " + token
             except Exception as exc:
-                return self._send_json(401, {"error": str(exc) or "请先连接墨墨账号"})
+                return None, {"error": str(exc) or "请先连接墨墨账号"}, None
         elif "study_sync" in globals():
             # 仅为旧客户端携带的手动 Bearer 兼容路径；新页面不再读取 Token。
             rate_profile = study_sync.token_profile_id(auth[7:].strip()) if auth.lower().startswith("bearer ") else auth
@@ -915,36 +962,28 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         if method == "POST" and body:
             req.add_header("Content-Type", "application/json")
 
-        retry_error = None
-        for attempt in range(3):
+        tries = 3 if retryable else 1
+        for attempt in range(tries):
             try:
                 if OFFICIAL_API_LIMITER is not None:
                     # 与 StudySyncService 共用同一限流器。Web 请求没有用户取消
                     # 通道，故传入一次性 Event；此处仍由 429 Retry-After 兜底。
                     OFFICIAL_API_LIMITER.acquire(threading.Event(), rate_profile)
                 with urllib.request.urlopen(req, timeout=30) as resp:
-                    return self._send_upstream_json(resp.status, resp.read(MAX_UPSTREAM_JSON + 1))
+                    return resp.status, resp.read(MAX_UPSTREAM_JSON + 1), None
             except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < 2:
-                    retry_error = e
+                if e.code == 429 and retryable and attempt < tries - 1:
                     retry_after = study_sync._retry_after_seconds(dict(e.headers.items())) if "study_sync" in globals() else None
                     # 平台通常返回短窗口配额；限制单次等待，避免 Web 请求长时间占用。
                     delay = min(30.0, max(0.0, retry_after if retry_after is not None else 1.0 + attempt))
-                    if threading.Event().wait(delay):
-                        break
+                    threading.Event().wait(delay)
                     continue
                 raw = e.read(MAX_UPSTREAM_JSON + 1) if e.fp else b""
                 retry_after = e.headers.get("Retry-After") if e.headers else None
-                return self._send_upstream_json(e.code, raw, retry_after)
+                return e.code, raw, retry_after
             except Exception as e:
-                self.send_response(502)
-                self._send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode("utf-8"))
-                return
-        if retry_error is not None:
-            self._send_json(429, {"error": "墨墨开放平台限流，请稍后重试"})
+                return None, {"error": str(e)}, None
+        return None, {"error": "上游调用未完成"}, None
 
     def _send_json(self, code, data):
         self.send_response(code)
@@ -1061,6 +1100,13 @@ configure_local_api(
 
 def start_server(open_browser=True, block=True):
     """启动服务器。block=False 时在后台守护线程运行，返回 (httpd, url)。"""
+    # 长驻服务保持一条 SQLite 连接，避免 WAL 的 -wal/-shm 在每次请求之间被
+    # 反复删除重建（本机实测每次新建连接约 60 ms 固定开销）。见 db.keep_warm。
+    if DB_READY:
+        try:
+            db.keep_warm(True)
+        except Exception as exc:
+            print("  [db] WAL 保活连接未启用：%s" % exc)
     for port in [PORT, 8889, 8890, 3000, 5000]:
         try:
             httpd = MemoThreadingTCPServer(("127.0.0.1", port), MemoProxyHandler)

@@ -516,6 +516,7 @@ const Live2DCompanion = (function() {
     let studyInstance = null, liveModel = null, pixiApp = null, session = null, savedLayout = 'single', open = false, birthdayShown = false, lastSpokenCompanion = '', companionVoiceRequest = 0, companionVoicePreloadRequest = 0;
     let rendererGeneration = 0, rendererRetryTimer = 0, modelNaturalWidth = 0, modelNaturalHeight = 0, rendererLoading = false, rendererFitPending = false, lastTouchAt = 0, lastTouchAIAt = 0;
     let rendererCapabilityCache = null, lastRendererDiagnostic = '', currentMoodLabel = '待机', lastVoiceNoticeReason = '', voiceNoticeTimer = 0, modelListError = '';
+    let contextLossRecoveryPending = false;
     const LOCAL_LINES = {
         zh: {
             started: ['准备好了！我们慢慢来。', '今天也一起把这些词拿下吧。'], state: ['这一题记下来就很好。', '保持节奏，下一题继续。'], milestone: ['这一组完成得很漂亮！', '进度又向前走了一步！'],
@@ -853,11 +854,72 @@ const Live2DCompanion = (function() {
         }
         askAI(kind, summary, false);
     }
+    // PIXI 的 Application.destroy(true, …) 会把 view 从 DOM 里摘掉；更关键的是
+    // ContextSystem.destroy() 会对该 view 调用 WEBGL_lose_context.loseContext()，
+    // 之后这个 canvas 再也拿不到可用的 WebGL 上下文。而 #companionLive2DCanvas 是
+    // index.html 里静态写死、不会重建的元素，于是第二次进入陪伴模式必然失败：
+    // 旧代码是 L2D_CANVAS_MISSING（元素已被摘走），只把元素放回去则是
+    // checkMaxIfStatementsInShader 收到 0 值（上下文已死）。
+    // 因此这里既要保证画布回到宿主内，又必须换成一个全新元素。
+    function recycleCompanionCanvas(canvas, host) {
+        if (!canvas) return;
+        const target = host || canvas.parentNode || null;
+        if (!target) return;
+        let fresh = canvas;
+        if (typeof canvas.cloneNode === 'function') {
+            try {
+                fresh = canvas.cloneNode(false);
+                if (canvas.parentNode) canvas.parentNode.replaceChild(fresh, canvas);
+                else target.appendChild(fresh);
+            } catch (e) {
+                fresh = canvas;
+            }
+        }
+        if (fresh === canvas && !canvas.isConnected) {
+            try { target.appendChild(canvas); } catch (e) {}
+        }
+        attachCanvasContextLossGuard(fresh);
+    }
+    // 备用图在 index.html 里首屏不加载（用 data-deferred-src 延迟），避免为一个
+    // 藏在 <section hidden> 里的 1.7MB GIF 付费。只有真的要显示它时才补上 src，
+    // 否则出错路径会露出空 img。
+    function ensureCompanionGifLoaded() {
+        const img = document.querySelector ? document.querySelector('#companionGifFallback img') : null;
+        if (!img) return;
+        const deferred = img.getAttribute('data-deferred-src');
+        if (deferred && !img.getAttribute('src')) {
+            img.setAttribute('src', deferred);
+            img.removeAttribute('data-deferred-src');
+        }
+    }
+    // WebGL 上下文丢失的恢复。PIXI 的 ContextSystem.destroy() 会对 view 调用
+    // WEBGL_lose_context.loseContext()，因此 destroyRenderer() 会把本监听器再次
+    // 触发；若不加保护，每次重入都会清掉并重设重试计时器，最终没有任何一次
+    // 真正执行加载，界面停在 L2D_WEBGL_CONTEXT_LOST。
+    function attachCanvasContextLossGuard(canvas) {
+        if (!canvas || canvas.dataset.contextGuardReady) return;
+        canvas.dataset.contextGuardReady = 'true';
+        canvas.addEventListener('webglcontextlost', function(event) {
+            event.preventDefault();
+            rendererCapabilityCache = null;
+            const fallback = document.getElementById('companionGifFallback');
+            if (fallback) { ensureCompanionGifLoaded(); fallback.hidden = false; }
+            showRendererDiagnostic('L2D_WEBGL_CONTEXT_LOST', Live2DModelManager.current(), 'WebGL 上下文已丢失，正在尝试恢复', rendererCapabilities());
+            if (contextLossRecoveryPending) return;
+            contextLossRecoveryPending = true;
+            destroyRenderer();
+            if (open) scheduleRendererReload(260);
+            setTimeout(function() { contextLossRecoveryPending = false; }, 1200);
+        });
+    }
     function disposeRenderer() {
         if (liveModel && liveModel.destroy) { try { liveModel.destroy({ children: true }); } catch (e) {} }
         liveModel = null;
+        const host = document.getElementById('companionLive2DHost');
+        const canvas = document.getElementById('companionLive2DCanvas') || (pixiApp && pixiApp.view) || null;
         if (pixiApp && pixiApp.destroy) { try { pixiApp.destroy(true, { children: true, texture: true, baseTexture: true }); } catch (e) {} }
         pixiApp = null;
+        recycleCompanionCanvas(canvas, host);
         modelNaturalWidth = 0;
         modelNaturalHeight = 0;
     }
@@ -906,7 +968,7 @@ const Live2DCompanion = (function() {
             rendererLoading = false;
             return { ok: false, code: 'L2D_HOST_MISSING' };
         }
-        if (fallback) fallback.hidden = false;
+        if (fallback) { ensureCompanionGifLoaded(); fallback.hidden = false; }
         const tag = document.getElementById('companionModelName');
         if (tag) tag.textContent = model ? model.display_name : '尚未选择模型';
         if (!model) {
@@ -992,7 +1054,7 @@ const Live2DCompanion = (function() {
             if (nextModel && nextModel.destroy) { try { nextModel.destroy({ children: true }); } catch (e) {} }
             if (nextApp && nextApp.destroy) { try { nextApp.destroy(true, { children: true, texture: true, baseTexture: true }); } catch (e) {} }
             disposeRenderer();
-            if (fallback) fallback.hidden = false;
+            if (fallback) { ensureCompanionGifLoaded(); fallback.hidden = false; }
             showRendererDiagnostic('L2D_LOAD_FAILED', model, phase + '：' + safeDiagnosticError(error), capability);
             return { ok: false, code: 'L2D_LOAD_FAILED' };
         } finally {
@@ -1195,17 +1257,9 @@ const Live2DCompanion = (function() {
         });
         window.addEventListener('resize', function() { if (open) scheduleRendererReload(180); });
         const companionHost = document.getElementById('companionLive2DHost');
-        const companionCanvas = document.getElementById('companionLive2DCanvas');
         if (companionHost) companionHost.addEventListener('pointerup', handleCharacterTouch);
-        if (companionCanvas) companionCanvas.addEventListener('webglcontextlost', function(event) {
-            event.preventDefault();
-            rendererCapabilityCache = null;
-            const fallback = document.getElementById('companionGifFallback');
-            if (fallback) fallback.hidden = false;
-            showRendererDiagnostic('L2D_WEBGL_CONTEXT_LOST', Live2DModelManager.current(), 'WebGL 上下文已丢失，正在尝试恢复', rendererCapabilities());
-            destroyRenderer();
-            if (open) scheduleRendererReload(260);
-        });
+        // 画布会在每次销毁时被换新（见 recycleCompanionCanvas），因此监听器不能只绑一次。
+        attachCanvasContextLossGuard(document.getElementById('companionLive2DCanvas'));
         setInterval(function() { if (session) session.tick(); }, 60000);
         Live2DModelManager.attachSettings();
     }
