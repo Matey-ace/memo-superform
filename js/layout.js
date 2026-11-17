@@ -307,17 +307,26 @@ const LayoutManager = (function() {
         `;
     }
 
-    function buildHeatmapToolbar() {
+    // 色点预览必须和图表用同一份有效色板：同一套六色、同一个明暗变体。
+    function paletteSwatchColors(palette) {
+        const dark = document.body.classList.contains('dark');
+        const colors = dark && Array.isArray(palette.darkColors) ? palette.darkColors : palette.colors;
+        return [colors[2], colors[3]];
+    }
+
+    function buildHeatmapToolbar(tileIndex) {
         const today = new Date();
         const monthLabel = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
         const palettes = ChartManager.getHeatmapPalettes();
-        const currentIdx = ChartManager.getPaletteIndex();
+        // 选中态取「这个模块」的色板，不是全局单值。
+        const currentIdx = ChartManager.getPaletteIndex(tileIndex);
         let swatchesHtml = '';
         palettes.forEach(function(p, i) {
             const isActive = i === currentIdx ? ' active' : '';
+            const dots = paletteSwatchColors(p);
             swatchesHtml += '<button class="palette-swatch' + isActive + '" data-palette="' + i + '" title="' + p.name + '">'
-                + '<span class="swatch-dot" style="background:' + p.colors[2] + '"></span>'
-                + '<span class="swatch-dot" style="background:' + p.colors[3] + '"></span>'
+                + '<span class="swatch-dot" style="background:' + dots[0] + '"></span>'
+                + '<span class="swatch-dot" style="background:' + dots[1] + '"></span>'
                 + '<span class="swatch-name">' + p.name + '</span>'
                 + '</button>';
         });
@@ -364,7 +373,7 @@ const LayoutManager = (function() {
             });
         } else if (config.toolbar === 'heatmap') {
             const div = document.createElement('div');
-            div.innerHTML = buildHeatmapToolbar();
+            div.innerHTML = buildHeatmapToolbar(parseInt(tile.dataset.tile));
             const toolbar = div.firstElementChild;
             const chartContainer = tileBody.querySelector('.chart-container');
             tileBody.insertBefore(toolbar, chartContainer);
@@ -389,16 +398,18 @@ const LayoutManager = (function() {
                     renderMonth(currentMonth);
                 });
             });
-            // 配色切换
+            // 配色切换：只改这个磁贴自己的配色，别的模块不受影响。
             toolbar.querySelectorAll('.palette-swatch').forEach(sw => {
                 sw.addEventListener('click', function() {
                     const idx = parseInt(this.dataset.palette);
-                    ChartManager.setPaletteIndex(idx);
+                    const tileIndex = parseInt(tile.dataset.tile);
+                    ChartManager.setPaletteIndex(idx, tileIndex);
                     toolbar.querySelectorAll('.palette-swatch').forEach(s => s.classList.remove('active'));
                     this.classList.add('active');
-                    const tileIndex = parseInt(tile.dataset.tile);
                     const ct = ChartManager.getChartType(tileIndex);
                     if (ct === 'heatmap') {
+                        // 保留当前月份：切色板不应该把视图弹回本月。
+                        // 该磁贴当前不是热力图时，选择已经记下，等切回热力图自然生效。
                         ChartManager.render(tileIndex, 'heatmap', { month: currentMonth });
                     }
                 });

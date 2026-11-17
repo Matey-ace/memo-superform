@@ -1520,7 +1520,10 @@ def verify_build(report_path):
                 # 仍会“能打开”，只是悄悄退回旧外观，冻结包检查要能抓住这种情况。
                 for path in ("/", "/index-anon.html", "/js/api.js", "/js/study-content-editor.js", "/css/style.css", "/css/diary.css", "/vendor/echarts.min.js", "/img/icon.ico", "/api/maimemo-auth/status",
                              "/css/standard-tokens.css", "/css/standard-shell.css", "/css/standard-settings.css",
-                             "/js/standard-settings-nav.js", "/js/standard-companion-guard.js"):
+                             "/js/standard-settings-nav.js", "/js/standard-companion-guard.js",
+                             # 笔记本设置分类目录：缺任一文件时分类页会悄悄退回长页，
+                             # 因此在冻结包里必须能取到。
+                             "/css/notebook-settings.css", "/js/notebook-settings-nav.js"):
                     with urllib.request.urlopen(base + path, timeout=10) as response:
                         if response.status != 200 or not response.read():
                             raise RuntimeError("打包资源校验失败: " + path)

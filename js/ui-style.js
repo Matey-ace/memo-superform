@@ -32,6 +32,9 @@
         css('css/companion-progress.css', 'memo-companion-progress');
         css('css/companion-settlement.css', 'memo-companion-settlement');
         css('css/article-vocab.css', 'memo-article-vocab');
+        // 笔记本设置区：分类目录样式。规则全部以 html[data-ui-style="notebook"]
+        // 开头并限定在 .settings-panel 内，普通版不会命中。
+        css('css/notebook-settings.css', 'memo-notebook-settings');
     } else {
         css('css/style.css', 'memo-dashboard-theme');
         css('css/ai-toolbar.css', 'memo-ai-toolbar');

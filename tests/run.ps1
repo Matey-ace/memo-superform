@@ -17,6 +17,8 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/auth-button-visibility-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/notebook-shared-path-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/standard-settings-nav-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/notebook-settings-nav-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/chart-palette-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/study-exit-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/layout-fullscreen-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/study-sync-session-race-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

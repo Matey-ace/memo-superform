@@ -1,0 +1,432 @@
+/* ============================================================
+   Memo Superform · Anon的笔记本 · 设置页分类目录
+   ============================================================
+   宽窗口：左侧纸面目录常驻，右侧显示选中分类（未翻页时是一页纸面封面）。
+   窄窗口：目录与详情各占一页，详情页顶部有「全部设置」返回入口。
+
+   所有规则都以 html[data-ui-style="notebook"] 开头并限定在设置面板内，
+   因此不会影响首页、图表、学习页，也不会命中普通版（普通版另有
+   css/standard-settings.css）。视觉沿用 style-anon.css 的纸面与玫瑰粉。
+   ============================================================ */
+
+/* ---------- 弹窗：笔记本里稍宽一点的一页纸 ---------- */
+html[data-ui-style="notebook"] .settings-panel .settings-content {
+    width: min(940px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    border-radius: 20px;
+    background: var(--paper);
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--shadow-lg);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-header {
+    padding: 15px 22px 14px;
+    background: linear-gradient(180deg, rgba(255, 240, 243, .72), rgba(255, 253, 254, 0));
+    position: relative;
+}
+
+/* 页眉下沿的一小条和纸胶带，延续笔记本的手账感 */
+html[data-ui-style="notebook"] .settings-panel .settings-header::after {
+    content: '';
+    position: absolute;
+    left: 22px;
+    bottom: -5px;
+    width: 84px;
+    height: 10px;
+    border-radius: 3px;
+    background: rgba(255, 183, 197, .38);
+    border-left: 2px dashed rgba(255, 255, 255, .7);
+    border-right: 2px dashed rgba(255, 255, 255, .7);
+    transform: rotate(-1.2deg);
+    pointer-events: none;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-header h2 {
+    font-size: 16px;
+    letter-spacing: 1.5px;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-body {
+    padding: 0;
+    overflow: hidden;
+    min-height: 0;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-footer {
+    padding: 12px 22px 14px;
+    background: linear-gradient(0deg, rgba(255, 240, 243, .55), rgba(255, 253, 254, 0));
+}
+
+/* ---------- 布局骨架 ---------- */
+html[data-ui-style="notebook"] .settings-panel .settings-layout {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+}
+
+/* ---------- 左：纸面目录 ---------- */
+html[data-ui-style="notebook"] .settings-panel .settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 16px 12px 20px;
+    overflow-y: auto;
+    min-height: 0;
+    background:
+        linear-gradient(180deg, rgba(255, 240, 243, .55), rgba(246, 239, 233, .35)),
+        var(--paper);
+    border-right: 1px dashed var(--line-strong);
+}
+
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-nav-heading {
+    font-family: var(--serif);
+    font-size: 11px;
+    letter-spacing: 3px;
+    /* #6b5a45 在 #fffdfe 上 6.53:1，在导航淡玫底色 #fff7f4 上约 6.27:1；
+       --ink-light (#a89880) 只有 2.78:1，11px 时看不清，这里只在本文件覆盖。 */
+    color: #6b5a45;
+    padding: 0 8px 6px;
+    border-bottom: 1px dashed var(--line);
+    margin-bottom: 2px;
+}
+
+/* 目录项 = 一本小册子的索引卡 */
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item {
+    position: relative;
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+    width: 100%;
+    padding: 9px 11px 9px 12px;
+    text-align: left;
+    font-family: var(--sans);
+    background: rgba(255, 253, 254, .75);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(139, 115, 85, .06);
+    cursor: pointer;
+    transition: transform .18s ease, box-shadow .18s ease,
+                border-color .18s ease, background .18s ease;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item:hover {
+    background: var(--paper);
+    border-color: var(--rose-soft);
+    box-shadow: 0 3px 10px rgba(139, 115, 85, .12);
+    transform: translateY(-1px);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item[data-accent="sky"]:hover {
+    border-color: #b8ddea;
+}
+
+/* 选中态：玫瑰粉的书签条 */
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item.is-active {
+    background: linear-gradient(100deg, var(--rose-pale), var(--paper) 72%);
+    border-color: var(--rose-soft);
+    box-shadow: 0 4px 12px rgba(255, 136, 153, .18);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item[data-accent="sky"].is-active {
+    background: linear-gradient(100deg, var(--sky-pale), var(--paper) 72%);
+    border-color: #b8ddea;
+    box-shadow: 0 4px 12px rgba(135, 206, 235, .22);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item.is-active::before {
+    content: '';
+    position: absolute;
+    left: -1px;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--rose);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item[data-accent="sky"].is-active::before {
+    background: var(--sky-deep);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(255, 136, 153, .25);
+    border-color: var(--rose);
+}
+
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-nav-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1;
+    background: rgba(255, 240, 243, .9);
+    border: 1px dashed var(--line-strong);
+    color: var(--ink-mid);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-item[data-accent="sky"] .notebook-settings-nav-icon {
+    background: rgba(234, 246, 253, .9);
+}
+
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-nav-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-title {
+    font-family: var(--serif);
+    font-size: 13.5px;
+    letter-spacing: .6px;
+    color: var(--ink);
+    line-height: 1.35;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-nav-summary {
+    font-size: 11px;
+    line-height: 1.5;
+    /* 目录里最需要看清的一行：同样加深到 #6b5a45（纸面 6.53:1）。 */
+    color: #6b5a45;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 目录里的一句话状态（账号已连接 / 未连接 / 等待授权…） */
+/* 状态三档取深色版：纸面 #fffdfe 与导航底色 #fff7f4 上都 >= 4.5:1 */
+html[data-ui-style="notebook"] .settings-panel .settings-nav-summary[data-state="ok"] { color: #2f7d55; }
+html[data-ui-style="notebook"] .settings-panel .settings-nav-summary[data-state="warn"] { color: #7d5f14; }
+html[data-ui-style="notebook"] .settings-panel .settings-nav-summary[data-state="error"] { color: #a84460; }
+
+/* ---------- 右：内容纸面 ---------- */
+html[data-ui-style="notebook"] .settings-panel .settings-pages {
+    overflow-y: auto;
+    min-height: 0;
+    padding: 16px 22px 18px;
+    background:
+        linear-gradient(rgba(122, 102, 80, .035) 1px, transparent 1px),
+        var(--paper);
+    background-size: 100% 26px, auto;
+}
+
+/* 宽窗口下没翻页时的那页纸面封面 */
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-cover {
+    max-width: 460px;
+    margin: 26px auto 0;
+    padding: 26px 24px 28px;
+    text-align: center;
+    background: linear-gradient(180deg, rgba(255, 240, 243, .55), rgba(255, 253, 254, .9));
+    border: 1px dashed var(--line-strong);
+    border-radius: 16px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .7);
+}
+
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-cover-kicker {
+    font-family: var(--serif);
+    font-size: 11px;
+    letter-spacing: 3px;
+    /* 小字不能用 --rose-deep (#e8788a，仅 2.77:1)；改用深玫瑰 #a84460（5.66:1）。 */
+    color: #a84460;
+    margin-bottom: 12px;
+}
+
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-cover-title {
+    font-family: var(--serif);
+    font-size: 16px;
+    letter-spacing: 1.5px;
+    color: var(--ink);
+    margin-bottom: 10px;
+}
+
+html[data-ui-style="notebook"] .settings-panel .notebook-settings-cover-text {
+    font-size: 12px;
+    line-height: 1.9;
+    color: var(--ink-mid);
+}
+
+/* ---------- 分类详情页 ---------- */
+html[data-ui-style="notebook"] .settings-panel .settings-page { display: none; }
+html[data-ui-style="notebook"] .settings-panel .settings-page.is-active { display: block; }
+
+html[data-ui-style="notebook"] .settings-panel .settings-page-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 4px;
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+    border-bottom: 1px dashed var(--line-strong);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-back {
+    grid-row: 1 / span 2;
+    align-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 12px;
+    font-family: var(--round);
+    font-size: 12px;
+    font-weight: 800;
+    /* --sky-deep (#6bb5d6) 在 --sky-pale 上只有 2.07:1，小字换成深天空蓝 #2b6b8c（5.33:1）。 */
+    color: #2b6b8c;
+    background: var(--sky-pale);
+    border: 1px solid #cfe6f5;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .18s ease;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-back:hover {
+    background: #dff0fb;
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(135, 206, 235, .25);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-back:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(135, 206, 235, .35);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-page-title {
+    font-family: var(--serif);
+    font-size: 16px;
+    letter-spacing: 1.5px;
+    color: var(--ink);
+    outline: none;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-page-title:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(255, 136, 153, .2);
+    border-radius: 6px;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-page-summary {
+    font-size: 11px;
+    line-height: 1.6;
+    /* 同目录摘要：加深到 #6b5a45，纸面 6.53:1。 */
+    color: #6b5a45;
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-page-summary[data-state="ok"] { color: #2f7d55; }
+html[data-ui-style="notebook"] .settings-panel .settings-page-summary[data-state="warn"] { color: #7d5f14; }
+html[data-ui-style="notebook"] .settings-panel .settings-page-summary[data-state="error"] { color: #a84460; }
+
+/* 分类页里的设置组：去掉长页时的分隔线，改成一张张小卡片 */
+html[data-ui-style="notebook"] .settings-panel .settings-page .setting-group {
+    padding: 14px 14px 4px;
+    margin-top: 10px;
+    border-bottom: 0;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(255, 253, 254, .82);
+    box-shadow: var(--shadow-sm);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-page .setting-group > h3 {
+    font-family: var(--serif);
+    font-size: 13px;
+    color: var(--ink);
+    letter-spacing: 1.2px;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 1px dashed var(--line);
+}
+
+html[data-ui-style="notebook"] .settings-panel .settings-page .setting-group .setting-item label {
+    color: var(--ink-mid);
+}
+
+/* 虚线小分隔，避免卡片内部过于拥挤 */
+html[data-ui-style="notebook"] .settings-panel .settings-page .setting-group > .hint:last-child {
+    margin-bottom: 12px;
+}
+
+/* ---------- 窄窗口：目录 ↔ 详情 各占一页 ---------- */
+@media (max-width: 900px) {
+    html[data-ui-style="notebook"] .settings-panel .settings-content {
+        width: calc(100vw - 20px);
+        max-height: calc(100vh - 28px);
+        margin: 14px auto;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-nav {
+        border-right: 0;
+        border-bottom: 1px dashed var(--line-strong);
+    }
+
+    /* 目录页：只有目录，没有右侧纸面 */
+    html[data-ui-style="notebook"] .settings-panel .settings-layout:not(.is-detail) .settings-pages {
+        display: none;
+    }
+
+    /* 详情页：目录暂时收起，回到目录靠页头的「全部设置」 */
+    html[data-ui-style="notebook"] .settings-panel .settings-layout.is-detail .settings-nav {
+        display: none;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-layout.is-detail .settings-pages {
+        display: block;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .notebook-settings-cover {
+        display: none;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-pages {
+        padding: 14px 16px 16px;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-nav-item {
+        grid-template-columns: 26px minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 560px) {
+    html[data-ui-style="notebook"] .settings-panel .settings-content {
+        width: 100vw;
+        max-height: 100vh;
+        margin: 0;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-page-header {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-back {
+        grid-row: auto;
+        justify-self: start;
+    }
+
+    html[data-ui-style="notebook"] .settings-panel .settings-page .setting-group {
+        padding: 12px 12px 2px;
+    }
+}
+
+/* 减少动态效果偏好：不做位移，只保留颜色变化 */
+@media (prefers-reduced-motion: reduce) {
+    html[data-ui-style="notebook"] .settings-panel .settings-nav-item,
+    html[data-ui-style="notebook"] .settings-panel .settings-back {
+        transition: none;
+    }
+    html[data-ui-style="notebook"] .settings-panel .settings-nav-item:hover,
+    html[data-ui-style="notebook"] .settings-panel .settings-back:hover {
+        transform: none;
+    }
+}
