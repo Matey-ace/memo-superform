@@ -39,6 +39,7 @@
                 </button>
             </div>
             <button id="articleVocabBtn" type="button" class="article-vocab-btn" title="粘贴文章，自动精选值得学的词并加入墨墨学习列表">从文章选词</button>
+            <button id="recentReadingBtn" type="button" class="article-vocab-btn" title="用最近学过的词生成一篇四六级仔细阅读练习">近期词汇阅读</button>
             <button id="companionModeBtn" type="button" class="companion-mode-btn" title="左侧背词、右侧 Live2D 陪伴">✦ 陪伴学习</button>
         </div>
         <div class="topbar-right">
@@ -600,5 +601,11 @@
     <script src="js/notebook-settings-nav.js?v=20261117-notebook-settings"></script>
     <script src="js/app-update.js?v=20260830-v078-app-update"></script>
     <script src="js/app.js?v=20260830-v078-app-update"></script>
+    <!-- 近期词汇阅读：业务层 + 界面层。两套主题共用同一份结构与逻辑，
+         差异只在样式表（见 js/ui-style.js 两个分支）。 -->
+    <script src="js/recent-vocab.js?v=20261118-reading"></script>
+    <script src="js/reading-practice.js?v=20261118-reading"></script>
+    <script src="js/reading-practice-ui.js?v=20261118-reading"></script>
+    <script src="js/reading-practice-wire.js?v=20261118-reading"></script>
 </body>
 </html>

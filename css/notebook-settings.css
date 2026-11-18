@@ -58,11 +58,28 @@ html[data-ui-style="notebook"] .settings-panel .settings-footer {
 }
 
 /* ---------- 布局骨架 ---------- */
+/* 高度必须"链式"传下来：.settings-content(flex column) → .settings-body(flex:1)
+   → .settings-layout(grid) → .settings-pages(滚动容器)。
+   之前 .settings-layout 用 height:100% 而 .settings-body 是普通 block，
+   网格行按 min-height:auto 被内容撑到 1360px，于是 .settings-pages 的
+   clientHeight 与 scrollHeight 相等、永远滚不动，底部控件被外层
+   overflow:hidden 裁掉。这里改成"占满父级"而不是"按内容撑高"。 */
+html[data-ui-style="notebook"] .settings-panel .settings-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
 html[data-ui-style="notebook"] .settings-panel .settings-layout {
     display: grid;
     grid-template-columns: 250px minmax(0, 1fr);
-    height: 100%;
+    /* flex:1 + min-height:0 才是"占满剩余高度且可压缩"；height:100% 在
+       flex 子项里会与内容高度打架。 */
+    flex: 1 1 auto;
+    height: auto;
     min-height: 0;
+    overflow: hidden;
 }
 
 /* ---------- 左：纸面目录 ---------- */

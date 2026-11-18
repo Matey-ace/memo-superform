@@ -37,6 +37,8 @@ foreach ($file in $jsFiles) { & node --check $file.FullName; if ($LASTEXITCODE -
 & node tests/companion-progress-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/companion-settlement-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & node tests/article-vocab-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/recent-vocab-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node tests/reading-practice-regression.js; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot 'release-guards.ps1')
 if ($env:OS -eq 'Windows_NT') {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'release-guards.ps1')

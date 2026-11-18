@@ -663,6 +663,9 @@ const MaimemoAPI = (function() {
         getToken, hasToken, connectionStatus, isStatusLoaded, getSessionEpoch, assertSession, clearCache,
         getStudyProgress, queryStudyRecords, getAllStudyRecords,
         startStudySync, getStudySyncStatus, cancelStudySync,
+        // 近期词汇阅读需要按需调用只读接口（study/get_today_items）。
+        // 走同一个 request() 通道，令牌与错误处理保持一致。
+        request,
         getWordsFromStudyRecords,
         listNotepads, listAllNotepads, getNotepad, getAllNotepadWords,
         getVocabulary, listInterpretations, listNotes,

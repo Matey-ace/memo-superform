@@ -35,6 +35,9 @@
         // 笔记本设置区：分类目录样式。规则全部以 html[data-ui-style="notebook"]
         // 开头并限定在 .settings-panel 内，普通版不会命中。
         css('css/notebook-settings.css', 'memo-notebook-settings');
+        // 近期词汇阅读：笔记本纸面视觉。规则以 html[data-ui-style="notebook"] 开头
+        // 并限定在 .reading-root 内，普通版不会命中。
+        css('css/reading-practice-notebook.css', 'memo-reading-notebook');
     } else {
         css('css/style.css', 'memo-dashboard-theme');
         css('css/ai-toolbar.css', 'memo-ai-toolbar');
@@ -52,6 +55,8 @@
         css('css/standard-tokens.css', 'memo-standard-tokens');
         css('css/standard-shell.css', 'memo-standard-shell');
         css('css/standard-settings.css', 'memo-standard-settings');
+        // 近期词汇阅读：普通版视觉。规则以 html[data-ui-style="standard"] 开头。
+        css('css/reading-practice.css', 'memo-reading-standard');
     }
 
     function applyBody(body) {

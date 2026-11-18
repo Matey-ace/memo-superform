@@ -49,8 +49,53 @@ MAX_JSON_BODY = 64 * 1024 * 1024
 MAX_UPSTREAM_JSON = 8 * 1024 * 1024
 
 PORT = 8888
-# 打包为 exe 时静态资源在 PyInstaller 的解压目录 _MEIPASS 中
+# 打包为 exe 时静态资源在 PyInstaller 的解压目录 _MEIPASS 中。
+#
+# 注意：_MEIPASS 是**一次性**的临时解压目录，它的清理时机取决于解压它的那个
+# 进程何时退出，而不是取决于正在提供服务的是哪个进程。一旦出现"拉起新进程后
+# 旧进程退出"（更新器、--mode 切换、request_relaunch 的 os._exit），目录可能被
+# 提前删掉，服务进程就会对首页与所有静态资源返回 404，而 /api/* 仍然 200。
+# 这就是"启动后 404"的结构性成因。
+#
+# 因此这里不直接把 WEB_DIR 绑死在一个可能消失的路径上：记录初始候选，
+# 真正取用时走 resolve_web_dir() 校验并可在失效时自愈。
 WEB_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+_WEB_DIR_CANDIDATES = [WEB_DIR]
+# 冷备：若解压目录失效，尝试这些位置（源码模式根目录、exe 同级 _internal）。
+if getattr(sys, "frozen", False):
+    _WEB_DIR_CANDIDATES.append(os.path.dirname(os.path.abspath(sys.executable)))
+    _WEB_DIR_CANDIDATES.append(os.path.join(
+        os.path.dirname(os.path.abspath(sys.executable)), "_internal"))
+
+# 静态根目录健康判定所需的最小文件集合。
+WEB_DIR_REQUIRED = ("index.html", "index-anon.html", "js/api.js", "css/style.css")
+
+
+def web_dir_is_usable(path):
+    """静态根目录是否真的可用：目录存在且关键文件齐备。"""
+    if not path or not os.path.isdir(path):
+        return False
+    return all(os.path.isfile(os.path.join(path, name)) for name in WEB_DIR_REQUIRED)
+
+
+def resolve_web_dir():
+    """返回当前可用的静态根目录；全部失效时返回原值。
+
+    这是 404 的**检测点**，不是自愈点，说清楚避免误解：
+    onefile 打包时资源只在 sys._MEIPASS 里，exe 同级目录与 _internal 都没有
+    index.html，所以 _WEB_DIR_CANDIDATES 的后两项对 onefile 是无害的死代码
+    （它们是为将来的 onedir 布局留的）。真正修掉"删了 _MEIPASS 就 404"的
+    是 launcher.py：健康检查要求"页面真能取到"，判失败后精确定位残留进程并
+    重启，而不是指望这里能把已经消失的目录变回来。
+    """
+    global WEB_DIR
+    if web_dir_is_usable(WEB_DIR):
+        return WEB_DIR
+    for candidate in _WEB_DIR_CANDIDATES:
+        if web_dir_is_usable(candidate):
+            WEB_DIR = candidate
+            return WEB_DIR
+    return WEB_DIR
 
 
 def _runtime_root():
@@ -162,7 +207,9 @@ class MemoThreadingTCPServer(socketserver.ThreadingTCPServer):
 
 class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=WEB_DIR, **kwargs)
+        # 用 resolve_web_dir() 而不是直接吃模块级 WEB_DIR：解压目录可能已被
+        # 别的进程删掉，这里每次都确认一次，失效时切到可用候选。
+        super().__init__(*args, directory=resolve_web_dir(), **kwargs)
 
     def end_headers(self):
         # 自动更新后，WebView 可能仍保存旧的 index/JS/CSS。应用资源完全在本地，
