@@ -224,11 +224,58 @@ html[data-ui-style="notebook"] .settings-layout {
 
 29 步全过，全程无控制台错误、无 404 / 失败请求、只判分一次。
 
+**验收期间自查出一次严重的验证偏差，已纠正并重做**：先前我为了调试在 8888 上留了一个
+`python server.py` 开发服务器，导致「EXE 验收」实际上访问的是开发服务器而不是打包后的
+二进制——那些通过结果不算数。已确认 8888 上没有其它进程后重跑，并在脚本开头打印
+`Get-Process -Id <listening pid>` 的 `ProcessName/Path`，确认为
+`MemoSuperform @ D:\MeMo1\dist\MemoSuperform.exe` 才算数。
+
+### 真实产品链路（不是"整层打桩"）
+
+原有 29 步流程把业务模块整体替换成了桩，只能证明界面骨架可用。
+本轮另加 `real-product-flow.js`：页面、`reading-practice.js`、`recent-vocab.js`、
+存储、判分**全部用仓库真实代码**，只替换两处外部依赖（墨墨账号读取、AI 上游调用）。
+在真实 EXE 上两主题均 `REAL_PRODUCT_FLOW_PASS`；全选 B 稳定得 3/5，证明判分用的是冻结答案。
+
+### 真实 EXE 上的残留实例恢复（故障可见 → 自动恢复）
+
+在同一台机器、同一个二进制上完整走了一遍：
+
+1. 正常启动，页面 200；
+2. 只删掉**正在服务的那一份** `_MEIPASS` 里的 `index.html`；
+3. 页面立刻 404，而 `/api/maimemo-auth/status` 仍是 200（正是用户报的"接口活着、页面打不开"）；
+4. 再次双击启动；
+5. 旧实例被精确定位并结束（pid 42664 → gone），新实例起在新解压目录 `_MEI6082`，页面恢复 200。
+
+复现结论：404 的根因确实是"静态目录绑在一次性的解压目录上 + 健康判定不看页面能不能打开"，
+不是路由或缓存问题。
+
 ### 本轮发现并修掉的自测问题
 
 - `dedupe` 原本会**丢弃**没有 `voc_id` 的记录，导致「学过却不出现」；改为按规范化拼写兜底去重。
 - `collect` 原本不返回起止日期，而界面必须展示日期范围；补 `start`/`end`。
 - `verify_build` 原本不检查新增的六个阅读资源，缺文件时会「按钮在、点了没反应」；补齐检查。
+- **界面调 `generate()` 时没传 `source` / `accountScope`**，而业务层要求 `source.rangeKey`，
+  结果是点「生成练习」100% 失败。这条是独立审查指出的阻断问题，已用真实模块复现
+  （`UI_ARGS → source.rangeKey 缺失`）并修复，补传后实测可正常生成。
+- **冻结答案只校验长度不校验 id 集合**：塞两条同 id 就能让某题脱离冻结、判分回落到可篡改字段。
+  已改为「id 不重复 + 与题目 id 集合一致 + 与展示答案一致」三重校验。
+- **审题只回 1 题也判通过**：另外 4 题从未被独立审题却可发布。已改为逐题覆盖，缺一题即拒。
+- **`reviewed` 是个可任意置位的布尔**：改成 true 就能提交。已要求同时满足
+  `reviewProblems` 为空、`reviewedAt` 可解析、逐题结论数量与题目数一致。
+- **`accountScope` 恒为 anonymous**：两个真实账号的草稿混在同一个存储键里。已把采集到的
+  作用域一路传到生成/保存/读取/提交/列表，并监听 `memo-account-changed` 作废在途任务。
+- **「重做」返回的是上一次的分数**（与界面注释"成绩另记一条"矛盾）：提交去重原本只按
+  `practiceId`。已引入 `attemptKey`——同一会话连点只算一次，重做换 key 重新判分。
+- **引文只校验"3 个词元连续出现"**：跨句拼接、纯虚词都能过。已要求含实词且是原文连续片段。
+- **覆盖度/题型/干扰项只报警告**：5 题挤在一段、全同题型、干扰项含正确答案都能通过。
+  已升级为硬失败。
+- **接口 500 被报成"你没学过"**：`recordsError` 时 `reason` 仍是 `empty`；成功时 `reason` 也仍是
+  `empty`。已改为错误优先，成功时清空 reason。
+- **「今天」只读 `today_items`**：今日接口一挂，本地明明有今天的记录也报"今天没学"。已改为以本地
+  记录为底合并今日接口。
+- **题材永远是"校园"**：界面从不传 theme。已按目标词稳定散列轮换，并显示在文章信息里
+  （同组词必得同一题材，换组词会换题材）。
 
 ---
 
@@ -248,11 +295,13 @@ html[data-ui-style="notebook"] .settings-layout {
 
 ## 六、产物
 
-- 路径：`D:\MeMo1\dist\MemoSuperform.exe`
+- 目录：`D:\MeMo1\dist\MemoSuperform-0.92-reading-practice\`
+- 主程序：`D:\MeMo1\dist\MemoSuperform-0.92-reading-practice\MemoSuperform.exe`
 - 版本：0.92，`frozen=true`
+- 大小：98,281,558 字节
 - 启动：双击，或 `MemoSuperform.exe --mode web` / `--mode desktop`
 - 构建标识：`0.92`，`--verify-build` 通过 30 项检查
-- SHA256：见交付回复
+- SHA256：`CD123B2BEEBF3EBFBEBE09C9ACAC75766457DFB4BB663A704C1971BD94419832`
 
 ---
 

@@ -100,6 +100,19 @@
             .trim();
     }
 
+    /* 常见虚词表：用来判断一段引文里有没有实词。
+     * 只用于"这条引文能不能当定位依据"，不参与其它匹配逻辑。 */
+    var STOP_WORDS = [
+        'a', 'an', 'the', 'and', 'or', 'but', 'if', 'then', 'than', 'that', 'this',
+        'these', 'those', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'with', 'from',
+        'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'it', 'its', 'they',
+        'them', 'their', 'we', 'our', 'you', 'your', 'he', 'she', 'his', 'her',
+        'not', 'no', 'so', 'such', 'into', 'over', 'under', 'about', 'which', 'who',
+        'what', 'when', 'where', 'how', 'also', 'more', 'most', 'some', 'any', 'all',
+        'can', 'could', 'would', 'should', 'may', 'might', 'will', 'do', 'does', 'did',
+        'there', 'here', 'up', 'down', 'out', 'off', 'have', 'has', 'had'
+    ];
+
     /* 词元化：按空白切分后把连字符再拆开（'well-known' → well, known），
      * 比较单位是词元，所以 "art" 永远不会匹配到 "heart"。 */
     function tokenize(text) {
@@ -502,6 +515,8 @@
             createdAt: context.createdAt || nowIso(),
             level: level.key,
             levelLabel: level.label,
+            /* 本篇所用的题材。界面上要显示，重做时也要沿用同一个题材。 */
+            theme: THEMES.indexOf(context.theme) >= 0 ? context.theme : THEMES[0],
             title: safeText(source.title, 300),
             paragraphs: paragraphs,
             wordCount: practiceWordCount(paragraphs),
@@ -652,12 +667,33 @@
                         Math.floor(paragraphIndex) !== paragraphIndex) {
                         fail(label + ' evidence.paragraphIndex 非法：' + str(paragraphIndex));
                     } else {
-                        var quoteTokens = tokenize(evidence.quote);
-                        if (!trimmed(evidence.quote)) fail(label + ' evidence.quote 为空');
+                        var quoteText = trimmed(evidence.quote);
+                        var quoteTokens = tokenize(quoteText);
+                        if (!quoteText) fail(label + ' evidence.quote 为空');
                         else if (quoteTokens.length < MIN_QUOTE_TOKENS) {
                             fail(label + ' evidence.quote 太短（至少 ' + MIN_QUOTE_TOKENS + ' 个词），无法作为定位依据');
                         } else if (!containsTokens(tokenize(paragraphList[paragraphIndex]), quoteTokens)) {
                             fail(label + ' evidence.quote 没有出现在第 ' + paragraphIndex + ' 段中');
+                        } else {
+                            /* 光"词元连续出现"太松：跨句拼接（"... later. One university"）
+                             * 或一堆虚词（"the end of"）都能过，定位句就失去意义。
+                             * 这里再要求：
+                             *   1. 至少含一个实词（非停用词）；
+                             *   2. 整段引文确实落在原文的一处连续文本里（按原样子串比对，
+                             *      允许空白不同），而不是跨句拼接出来的。 */
+                            var hasContentWord = quoteTokens.some(function (token) {
+                                return STOP_WORDS.indexOf(token) < 0;
+                            });
+                            if (!hasContentWord) {
+                                fail(label + ' evidence.quote 全是虚词，不能作为定位依据');
+                            } else {
+                                var haystack = String(paragraphList[paragraphIndex] || '')
+                                    .replace(/\s+/g, ' ').toLowerCase();
+                                var needle = quoteText.replace(/\s+/g, ' ').toLowerCase();
+                                if (haystack.indexOf(needle) < 0) {
+                                    fail(label + ' evidence.quote 不是原文中的连续片段（疑似跨句拼接）');
+                                }
+                            }
                         }
                     }
                 }
@@ -680,27 +716,88 @@
                 }
             });
 
+            /* 冻结答案必须与题目**一一对应**：只校验"长度相等 + id 存在"是可以被
+             * 重复 id 绕过的（5 条记录里塞两个 q1，q5 就落在冻结表外，
+             * 判分回落到可被篡改的 questions[].answer）。这里要求：
+             *   1. id 不得重复；
+             *   2. 冻结 id 集合与题目 id 集合完全一致；
+             *   3. 冻结值与题目展示的 answer 一致（否则用户按显示的正确答案作答却判错）。 */
             var frozen = practice.frozenAnswers;
             if (!Array.isArray(frozen) || frozen.length !== questions.length) {
                 fail('缺少冻结答案 frozenAnswers');
             } else {
+                var frozenSeen = Object.create(null);
+                var frozenOk = true;
                 frozen.forEach(function (entry) {
-                    if (!entry || !questionIds[trimmed(entry.id)]) fail('冻结答案里有未知题目 id');
-                    else if (OPTION_KEYS.indexOf(trimmed(entry.answer).toUpperCase()) < 0) {
-                        fail('冻结答案 ' + str(entry.id) + ' 不是 A~D');
+                    var fid = entry ? trimmed(entry.id) : '';
+                    if (!fid || !questionIds[fid]) {
+                        fail('冻结答案里有未知题目 id');
+                        frozenOk = false;
+                    } else if (frozenSeen[fid]) {
+                        fail('冻结答案里题目 id 重复：' + fid + '（有题目会脱离冻结）');
+                        frozenOk = false;
+                    } else {
+                        frozenSeen[fid] = trimmed(entry.answer).toUpperCase();
+                        if (OPTION_KEYS.indexOf(frozenSeen[fid]) < 0) {
+                            fail('冻结答案 ' + fid + ' 不是 A~D');
+                            frozenOk = false;
+                        }
                     }
                 });
+                if (frozenOk) {
+                    Object.keys(questionIds).forEach(function (qid) {
+                        if (!(qid in frozenSeen)) fail('题目 ' + qid + ' 没有冻结答案');
+                    });
+                    questions.forEach(function (question, index) {
+                        var qid = trimmed(question.id);
+                        var shown = trimmed(question.answer).toUpperCase();
+                        if (qid in frozenSeen && frozenSeen[qid] !== shown) {
+                            fail('第 ' + (index + 1) + ' 题冻结答案 ' + frozenSeen[qid] +
+                                 ' 与题目答案 ' + shown + ' 不一致');
+                        }
+                    });
+                }
             }
 
-            /* 下面两条只作告警：说明命题质量差，但不是结构错误。 */
             var paragraphsUsed = [];
             questions.forEach(function (question) {
                 var index = question && question.evidence ? question.evidence.paragraphIndex : -1;
                 if (typeof index === 'number' && paragraphsUsed.indexOf(index) < 0) paragraphsUsed.push(index);
             });
-            if (paragraphsUsed.length === 1 && paragraphList.length > 1) {
-                warnings.push('5 道题的定位依据全部集中在第 ' + paragraphsUsed[0] + ' 段');
+            /* 覆盖度与答案分布是命题质量要求，不是"最好有"：
+             * 题目全挤在一段、或全是同一种题型，这份练习就没有考查到整篇文章。
+             * 因此从告警升级为硬失败——不合格的内容不能变成可提交的练习。 */
+            if (paragraphList.length > 1) {
+                var needParagraphs = Math.min(3, paragraphList.length);
+                if (paragraphsUsed.length < needParagraphs) {
+                    fail('5 道题的定位依据只覆盖了 ' + paragraphsUsed.length +
+                         ' 段，要求至少覆盖 ' + needParagraphs + ' 段');
+                }
             }
+            var typeSeen = Object.create(null);
+            questions.forEach(function (question) {
+                var qtype = trimmed(question.type).toLowerCase();
+                if (qtype) typeSeen[qtype] = true;
+            });
+            var typeCount = Object.keys(typeSeen).length;
+            if (typeCount < 3) {
+                fail('题型只有 ' + typeCount + ' 种（' + Object.keys(typeSeen).join('/') + '），要求至少 3 种');
+            }
+            /* 干扰项里不能出现正确答案，也不能重复——否则选项本身自相矛盾。 */
+            questions.forEach(function (question, index) {
+                var qAnswer = trimmed(question.answer).toUpperCase();
+                var seenKey = Object.create(null);
+                var list = Array.isArray(question.distractors) ? question.distractors : [];
+                list.forEach(function (entry) {
+                    var dkey = trimmed(entry && entry.key).toUpperCase();
+                    if (!dkey) return;
+                    if (dkey === qAnswer) {
+                        fail('第 ' + (index + 1) + ' 题 干扰项里包含了正确答案 ' + qAnswer);
+                    }
+                    if (seenKey[dkey]) fail('第 ' + (index + 1) + ' 题 干扰项 ' + dkey + ' 重复');
+                    seenKey[dkey] = true;
+                });
+            });
             var answers = questions.map(function (question) { return trimmed(question.answer).toUpperCase(); });
             if (answers.length > 2 && answers.every(function (value) { return value === answers[0]; })) {
                 warnings.push('所有题目答案都是 ' + answers[0] + '，存在固定答案位置风险');
@@ -781,14 +878,24 @@
         });
         if (review.overall !== 'ok') problems.push('审题整体结论为 problems');
         if (!review.perQuestion.length) problems.push('审题没有返回逐题结论');
+
+        /* 覆盖率：审题必须对**每一道题**都给出结论。只回 1 题也判 ok 的话，
+         * 另外 4 题从未被独立审题，整篇照样能提交——审题就成了摆设。 */
+        var questionIds = Object.keys(frozen);
+        var reviewedIds = Object.create(null);
         review.perQuestion.forEach(function (entry) {
             var id = entry.id || '?';
+            if (entry.id) reviewedIds[entry.id] = true;
             if (!entry.unique) problems.push(id + ' 不存在唯一最佳答案');
             if (!entry.evidenceSupported) problems.push(id + ' 的依据未能在原文成立');
             if (frozen[id] && entry.bestAnswer && frozen[id] !== entry.bestAnswer) {
                 problems.push(id + ' 审题答案 ' + entry.bestAnswer + ' 与生成答案 ' + frozen[id] + ' 不一致');
             }
             if (frozen[id] && !entry.bestAnswer) problems.push(id + ' 审题没有给出最佳答案');
+            if (!frozen[id]) problems.push(id + ' 不是本篇的题目');
+        });
+        questionIds.forEach(function (qid) {
+            if (!reviewedIds[qid]) problems.push(qid + ' 没有被独立审题覆盖');
         });
         return { ok: problems.length === 0, problems: problems };
     }
@@ -885,7 +992,22 @@
         if (!candidates.length) {
             return { ok: false, reason: 'no-candidates', errors: ['没有可用于出题的目标词'] };
         }
-        var theme = THEMES.indexOf(options.theme) >= 0 ? options.theme : THEMES[0];
+        /* 主题：显式传了就用；没传就按本篇目标词轮换，避免每一篇都是"校园"。
+         * 用词的拼写做稳定散列——同一组词必得同一主题（可复现），
+         * 换一组词就会换主题（有变化）。 */
+        var theme;
+        if (THEMES.indexOf(options.theme) >= 0) {
+            theme = options.theme;
+        } else {
+            var seedText = (options.candidates || []).filter(Boolean).map(function (item) {
+                return trimmed(item.spelling).toLowerCase();
+            }).sort().join('|');
+            var seed = 0;
+            for (var si = 0; si < seedText.length; si += 1) {
+                seed = (seed * 31 + seedText.charCodeAt(si)) % 1000003;
+            }
+            theme = THEMES[seed % THEMES.length];
+        }
         var targetWords = toInt(options.targetWords, level.targetWords);
         if (targetWords < level.allowed[0] || targetWords > level.allowed[1]) targetWords = level.targetWords;
 
@@ -952,6 +1074,7 @@
 
         var practice = normalizePractice(parsed.value, {
             level: level,
+            theme: theme,
             candidates: candidates,
             source: options.source || {},
             accountScope: options.accountScope || 'anonymous',
@@ -1076,8 +1199,30 @@
     function isSubmittable(practice) {
         var checked = validate(practice);
         if (!checked.ok) return { ok: false, errors: checked.errors, warnings: checked.warnings };
-        if (!practice.generation || practice.generation.reviewed !== true) {
+        var generation = practice.generation || {};
+        /* reviewed 不能是一个"谁都能置 true"的裸布尔。必须同时满足：
+         *   1. reviewed === true；
+         *   2. 没有遗留的审题问题（reviewProblems 为空）；
+         *   3. reviewedAt 是可解析的时间；
+         *   4. 逐题结论数量与题目数一致（覆盖到每一题）。
+         * 否则篡改一个布尔值就能把未审题的练习变成可提交。 */
+        if (generation.reviewed !== true) {
             return { ok: false, errors: ['这份练习还没有通过独立审题，不能提交'], warnings: checked.warnings };
+        }
+        var reviewErrors = [];
+        if (Array.isArray(generation.reviewProblems) && generation.reviewProblems.length) {
+            reviewErrors.push('审题存在未解决的问题：' + generation.reviewProblems.slice(0, 3).join('；'));
+        }
+        if (!generation.reviewedAt || isNaN(Date.parse(generation.reviewedAt))) {
+            reviewErrors.push('缺少可用的审题时间，无法确认这份练习经过独立审题');
+        }
+        var perQuestion = Array.isArray(generation.reviewPerQuestion) ? generation.reviewPerQuestion : null;
+        var questionCount = Array.isArray(practice.questions) ? practice.questions.length : 0;
+        if (!perQuestion || perQuestion.length !== questionCount) {
+            reviewErrors.push('逐题审题结论数量与题目数不一致');
+        }
+        if (reviewErrors.length) {
+            return { ok: false, errors: reviewErrors, warnings: checked.warnings };
         }
         return { ok: true, errors: [], warnings: checked.warnings };
     }
@@ -1198,16 +1343,29 @@
             return { ok: false, errors: ['账号不一致，拒绝提交'], message: '账号已切换' };
         }
         var attempts = readList(deps, scope, 'attempts');
-        /* 防重复提交：同一练习已有记录就直接返回它，不新增第二条。 */
+
+        /* 防重复提交 vs 重做，是两个相反的要求：
+         *   · 连点两次「提交」不能算两遍分 → 必须去重；
+         *   · 「重做本文」是另一次作答 → 必须另记一条，绝不能返回旧分数。
+         * 靠 attemptKey 区分：调用方每开始一次作答就生成一个新的 key，
+         * 同一个 key 重复提交只会落一条记录。没有 key 时退回按 practiceId 去重，
+         * 保持对旧调用的兼容（那种情况下"重复"就是连点）。 */
+        var attemptKey = trimmed(options && options.attemptKey);
         for (var i = 0; i < attempts.length; i += 1) {
-            if (attempts[i] && attempts[i].practiceId === practice.id) {
-                return { ok: true, duplicate: true, attempt: attempts[i], accountScope: scope, result: attempts[i].result };
+            var prev = attempts[i];
+            if (!prev || prev.practiceId !== practice.id) continue;
+            var sameSession = attemptKey
+                ? trimmed(prev.attemptKey) === attemptKey
+                : true;
+            if (sameSession) {
+                return { ok: true, duplicate: true, attempt: prev, accountScope: scope, result: prev.result };
             }
         }
         var result = grade(practice, answers);
         var record = {
             id: makeId('attempt'),
             practiceId: practice.id,
+            attemptKey: attemptKey || '',
             title: practice.title,
             level: practice.level,
             levelLabel: practice.levelLabel,

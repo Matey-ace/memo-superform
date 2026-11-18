@@ -112,9 +112,15 @@ group('日期级时间戳不被当成逐词答题时间', () => {
   const window = V.rangeWindow('today', Date.UTC(2026, 10, 18, 4, 0));
   const out = V.candidatesFromRecords(records, window);
   assert.strictEqual(out.length, 1, '纯日期也能匹配当天');
-  // 不能凭空产出分钟级时间
-  assert.ok(!/T\d\d:/.test(String(out[0].lastStudyDate)) || out[0].lastStudyDate.length === 10,
-    '日期级输入不应被伪造成具体时刻');
+  /* 必须断言"仍然是纯日期"。原来的写法是
+   *   !/Tdd:/.test(x) || x.length === 10
+   * 左边对任何纯日期恒为 true，于是把日期伪造成 '2026-11-18T08:30:00'
+   * 也照样通过（右半边恒被短路），等于没测。
+   * 这里直接锁死格式：10 位 YYYY-MM-DD，且不含任何时刻成分。 */
+  assert.strictEqual(String(out[0].lastStudyDate), '2026-11-18',
+    '日期级输入被改写了，实际 ' + out[0].lastStudyDate);
+  assert.ok(!/T|:/.test(String(out[0].lastStudyDate)),
+    '日期级输入不应被伪造成具体时刻，实际 ' + out[0].lastStudyDate);
 });
 
 /* ---------------- 完整性判定 ---------------- */
@@ -122,12 +128,23 @@ group('日期级时间戳不被当成逐词答题时间', () => {
 group('完整性：正常 / 未同步 / 过旧 / 部分', () => {
   const now = Date.UTC(2026, 10, 18, 4, 0);
   const fresh = V.evaluateCompleteness({
-    sync: { bootstrap_complete: true, needs_verify: false },
+    // 产品实际读的是 needs_reconcile（不是 needs_verify）：
+    // 用不存在的字段会让"完整性"这条测试靠"字段被忽略"而通过。
+    sync: { bootstrap_complete: true, needs_reconcile: false },
     syncedAt: '2026-11-18T06:00:00+08:00', nowMs: now,
     window: V.rangeWindow('d7', now), candidateCount: 5, recordCount: 100,
     todayError: null, todayTruncated: false, todayLimit: 1000
   });
   assert.strictEqual(fresh.completeness, 'complete', '刚同步完应为完整，实际 ' + fresh.completeness);
+  // 反向确认：needs_reconcile=true 必须真的被判成 partial，
+  // 否则上面那条只是因为字段被忽略才通过。
+  const reconcile = V.evaluateCompleteness({
+    sync: { bootstrap_complete: true, needs_reconcile: true },
+    syncedAt: '2026-11-18T06:00:00+08:00', nowMs: now,
+    window: V.rangeWindow('d7', now), candidateCount: 5, recordCount: 100,
+    todayError: null, todayTruncated: false, todayLimit: 1000
+  });
+  assert.strictEqual(reconcile.partial, true, 'needs_reconcile 应判 partial，实际 ' + reconcile.completeness);
 
   const notSynced = V.evaluateCompleteness({
     sync: { bootstrap_complete: false },
@@ -137,7 +154,7 @@ group('完整性：正常 / 未同步 / 过旧 / 部分', () => {
   assert.strictEqual(notSynced.partial, true, '未完成初次同步应判 partial');
 
   const stale = V.evaluateCompleteness({
-    sync: { bootstrap_complete: true, needs_verify: false },
+    sync: { bootstrap_complete: true, needs_reconcile: false },
     syncedAt: '2026-11-10T06:00:00+08:00', nowMs: now,
     window: V.rangeWindow('d7', now), candidateCount: 5, recordCount: 100,
     todayError: null, todayTruncated: false, todayLimit: 1000
@@ -145,7 +162,7 @@ group('完整性：正常 / 未同步 / 过旧 / 部分', () => {
   assert.strictEqual(stale.completeness, 'stale', '同步超过 24h 应为 stale，实际 ' + stale.completeness);
 
   const truncated = V.evaluateCompleteness({
-    sync: { bootstrap_complete: true, needs_verify: false },
+    sync: { bootstrap_complete: true, needs_reconcile: false },
     syncedAt: '2026-11-18T06:00:00+08:00', nowMs: now,
     window: V.rangeWindow('today', now), candidateCount: 5, recordCount: 100,
     todayError: null, todayTruncated: true, todayLimit: 1000
@@ -236,6 +253,26 @@ asyncGroup('collect：今天已完成走 get_today_items', async () => {
   assert.strictEqual(requested.o.body.is_finished, true, '必须只要已完成的词');
   assert.strictEqual(out.ok, true);
   assert.strictEqual(out.candidates.length, 1);
+});
+
+asyncGroup('collect：今天有本地记录时不会因为今日接口出错而报"今天没学"', async () => {
+  V.resetDeps();
+  const api = fakeApi({
+    // 本地记录明确显示今天学过两个词
+    records: [
+      { voc_id: 'a', voc_spelling: 'alpha', last_study_date: '2026-11-18' },
+      { voc_id: 'b', voc_spelling: 'beta', last_study_date: '2026-11-18' }
+    ]
+  });
+  // 今日接口直接挂掉
+  api.request = async () => { throw new Error('today 500'); };
+  const out = await V.collect('today', { deps: { api, now: () => Date.UTC(2026, 10, 18, 4, 0) } });
+  assert.strictEqual(out.ok, true, '本地有今天的记录就应当有候选词，实际 ' + JSON.stringify({ok:out.ok, reason:out.reason}));
+  assert.ok(out.candidates.length >= 2,
+    '应至少合并出本地记录的 2 个词，实际 ' + out.candidates.length);
+  const names = out.candidates.map(c => c.spelling).sort();
+  assert.ok(names.indexOf('alpha') >= 0 && names.indexOf('beta') >= 0,
+    '本地记录里的词必须在结果里，实际 ' + names.join(','));
 });
 
 asyncGroup('collect：账号切换返回不同作用域', async () => {

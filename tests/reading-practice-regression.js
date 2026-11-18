@@ -135,7 +135,22 @@ function makePractice(overrides) {
                        { key: 'D', why: '文章反对戏剧性决心更有效。' } ],
         type: 'main' }
     ],
-    generation: { provider: 'stub', model: 'stub', promptVersion: 'v1', reviewed: true, reviewNotes: [] },
+    generation: {
+        provider: 'stub', model: 'stub', promptVersion: 'v1',
+        reviewed: true, reviewNotes: [],
+        // isSubmittable 现在要求审题元数据自洽：时间可解析、无遗留问题、
+        // 逐题结论覆盖每一道题。缺任何一项都不可提交。
+        reviewedAt: '2026-11-18T08:10:00+08:00',
+        reviewOverall: 'ok',
+        reviewProblems: [],
+        reviewPerQuestion: [
+            { id: 'q1', unique: true, bestAnswer: 'A', evidenceSupported: true, distractorsReasonable: true },
+            { id: 'q2', unique: true, bestAnswer: 'B', evidenceSupported: true, distractorsReasonable: true },
+            { id: 'q3', unique: true, bestAnswer: 'B', evidenceSupported: true, distractorsReasonable: true },
+            { id: 'q4', unique: true, bestAnswer: 'A', evidenceSupported: true, distractorsReasonable: true },
+            { id: 'q5', unique: true, bestAnswer: 'B', evidenceSupported: true, distractorsReasonable: true }
+        ]
+    },
     accountScope: 'profile:test'
   };
   // 产品要求：判分只认冻结答案，校验必须能看到 frozenAnswers。
@@ -486,12 +501,16 @@ group('提示词明确是仔细阅读，并且显式禁止段落匹配', () => {
   assert.ok(/仔细阅读|careful reading|Section C/i.test(prompt), '提示词必须指明仔细阅读/Section C');
   assert.ok(/5/.test(prompt), '必须要求 5 道题');
   assert.ok(/A.*B.*C.*D|四个选项|four options/i.test(prompt), '必须要求四个选项');
-  // 出现"段落匹配"只允许出现在**禁止**语境里（Section C 不是 Section B）
-  const occurrences = prompt.split('段落匹配').length - 1;
-  const allNegated = prompt.split('段落匹配').slice(1).every(function (tail) {
-    // 每个出现点前面必须有"不是/禁止"这类否定词
-    return true;
+  /* "段落匹配"只允许出现在**禁止**语境里。
+   * 原来的写法里 every(...) 直接 return true，等于没判；这里改成真的看上下文：
+   * 每一处"段落匹配"所在的那一行都必须带否定词，否则视为提示词在要求段落匹配。 */
+  const NEGATIVE = /不是|禁止|不要|不得|而非|严禁/;
+  const lines = prompt.split(/\r?\n/);
+  const offenders = lines.filter(function (line) {
+    return line.indexOf('段落匹配') >= 0 && !NEGATIVE.test(line);
   });
+  assert.strictEqual(offenders.length, 0,
+    '提示词里出现了未加否定的"段落匹配"：' + offenders.join(' / ').slice(0, 200));
   assert.ok(prompt.indexOf('不是 Section B 段落匹配') >= 0, '提示词必须明确"不是 Section B 段落匹配"');
   // 关键：不能要求出十道段落匹配题（禁止语境里的"禁止出十道段落匹配题"是允许的）
   assert.ok(!/(请出|生成|给出)\s*十道/.test(prompt), '不得要求生成十道题');

@@ -570,7 +570,12 @@
 
             var rawRows;
             if (range.key === 'today') {
-                rawRows = candidatesFromTodayItems(todayItems, window.end, indexRecordsById(records));
+                /* "今天"不能只看 get_today_items：接口挂掉、被截断或字段变动时，
+                 * 本地记录里明明有今天的词，却会告诉用户"今天还没学"。
+                 * 因此以**本地记录**为底，今日接口只作为补充来源合并进来。 */
+                var fromRecords = candidatesFromRecords(records, window);
+                var fromToday = candidatesFromTodayItems(todayItems, window.end, indexRecordsById(records));
+                rawRows = dedupe(fromRecords.concat(fromToday));
             } else {
                 rawRows = candidatesFromRecords(records, window);
             }
@@ -603,7 +608,15 @@
 
             if (candidates.length === 0) {
                 var noBootstrap = !sync || sync.bootstrap_complete === false;
-                if (noBootstrap && records.length === 0) {
+                /* 接口出错必须优先于"你没有学过"：recordsError / syncError 存在时
+                 * 根本不知道用户学过什么，把 500 说成"没记录"是误报。 */
+                if (recordsError || syncError) {
+                    result.reason = 'error';
+                    result.completeness = 'empty';
+                    /* 这两条说明已经在上面 push 过，这里只补一句"所以无法判断"，
+                     * 避免用户把接口故障读成"我今天没学"。 */
+                    result.notes.push('接口异常，暂时无法判断这段时间是否学过单词，请稍后重试或先完成一次同步');
+                } else if (noBootstrap && records.length === 0) {
                     result.reason = 'not-synced';
                     result.completeness = 'empty';
                     result.notes.push('本地还没有学习记录，请先完成一次数据同步');
@@ -622,7 +635,9 @@
             }
 
             result.ok = true;
-            if (verdict.partial) result.reason = 'partial';
+            /* 成功时不能留着 emptyResult 的默认 reason='empty'：调用方按 reason
+             * 分支时会把"取到了词"当成"没有词"。只有确实不完整时才标 partial。 */
+            result.reason = verdict.partial ? 'partial' : '';
             return result;
         } catch (error) {
             var failure = emptyResult(range, deps, {

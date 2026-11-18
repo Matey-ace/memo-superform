@@ -43,6 +43,9 @@
         phase: 'setup',          // setup | generating | answering | reviewing
         rangeKey: DEFAULT_RANGE,
         levelKey: DEFAULT_LEVEL,
+        /* 当前账号作用域：草稿与成绩按它分区存储。取不到就留空，
+         * 业务层会退到 anonymous（未登录也能练，但不与任何账号混在一起）。 */
+        accountScope: '',
         collection: null,        // collect() 的结果
         selected: [],            // 选中的 vocId
         candidates: [],
@@ -50,6 +53,9 @@
         answers: {},             // questionId -> 'A'..'D'
         flagged: {},             // questionId -> true
         attempt: null,           // 判分记录
+        /* 每次开始作答生成一个新 key：同一 key 重复提交只算一次（防连点），
+         * 换 key 就是新的一次作答（重做必须重新判分），两者靠它区分。 */
+        attemptKey: '',
         showExplanation: {},
         pane: 'article',         // 窄窗口：article | questions
         scrollTop: 0,
@@ -62,6 +68,46 @@
     var mountedHost = null;
     var shell = {};
     var generationToken = 0;
+    var accountBound = false;
+
+    /* 切换账号时必须作废旧任务并清掉上一位用户的痕迹。
+     * 否则：账号 A 的生成请求晚回来，token 仍然相等，会被写进 state.practice，
+     * 随后以账号 B 的作用域存进 B 的存储（实测复现过这种串号）。
+     * 另外 token 归零后迟到的 A 响应必然对不上，一定被丢弃。 */
+    function resetForAccountChange() {
+        generationToken += 1;
+        state.accountScope = '';
+        state.collection = null;
+        state.candidates = [];
+        state.selected = [];
+        state.practice = null;
+        state.answers = {};
+        state.flagged = {};
+        state.attempt = null;
+        state.showExplanation = {};
+        state.phase = 'setup';
+        state.notice = null;
+        state.progress = null;
+        state.error = null;
+        state.busy = false;
+        var module = practiceModule();
+        if (module && typeof module.cancel === 'function') {
+            try { module.cancel(); } catch (error) { /* 忽略 */ }
+        }
+    }
+
+    function bindAccountChange() {
+        if (accountBound) return;
+        accountBound = true;
+        try {
+            if (typeof root.addEventListener === 'function') {
+                root.addEventListener('memo-account-changed', function () {
+                    resetForAccountChange();
+                    if (state.phase !== 'setup' && mountedHost) renderSetup();
+                });
+            }
+        } catch (error) { /* 事件不可用就当没有，不影响主流程 */ }
+    }
 
     /* ================= 骨架 ================= */
 
@@ -141,6 +187,11 @@
     }
 
     /* ================= 第一步：选范围、取词 ================= */
+
+    /* 开始一次新的作答会话：换 key，使这次提交一定是新的一次判分。 */
+    function newAttemptKey() {
+        return 'sess-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36);
+    }
 
     function renderSetup() {
         state.phase = 'setup';
@@ -253,6 +304,9 @@
             }
         }
         state.collection = collection;
+        /* 采集结果里带着当前账号作用域，存下来供生成/草稿/成绩复用；
+         * 不存的话所有账号会共用同一个存储分区（实测复现过）。 */
+        if (collection && collection.accountScope) state.accountScope = collection.accountScope;
 
         clear(metaHost);
         var complete = completenessLabel(collection.completeness);
@@ -424,11 +478,25 @@
         shell.progressHost.appendChild(progress);
 
         var result;
+        /* source 必须由界面显式带上：业务层要记录"这篇练习取自哪个时间范围、
+         * 当时数据是否完整、什么时候同步的"。不传的话 validate 必然报
+         * source.rangeKey 缺失 → 生成 100% 失败（已用真实模块实测确认）。
+         * accountScope 同理：练习、草稿、成绩都按账号分区存储。 */
+        var collection = state.collection || {};
+        var source = {
+            rangeKey: collection.rangeKey || state.rangeKey || DEFAULT_RANGE,
+            rangeLabel: collection.rangeLabel || '',
+            days: collection.days || 7,
+            completeness: collection.completeness || 'complete',
+            syncedAt: collection.syncedAt || ''
+        };
         try {
             result = await module.generate({
                 candidates: picked,
                 levelKey: level.key,
                 targetWords: level.target,
+                source: source,
+                accountScope: state.accountScope || collection.accountScope || '',
                 onProgress: function (stage) {
                     if (token !== generationToken) return;
                     if (stage === 'prompt') progressText.textContent = '正在准备提示词…';
@@ -467,9 +535,10 @@
         state.flagged = {};
         state.attempt = null;
         state.showExplanation = {};
+        state.attemptKey = newAttemptKey();
 
         // 保存草稿（校验通过的才存）
-        try { module.save(state.practice); } catch (error) { /* 存储失败不阻塞作答 */ }
+        try { module.save(state.practice, { accountScope: state.accountScope }); } catch (error) { /* 存储失败不阻塞作答 */ }
         renderPractice();
     }
 
@@ -507,6 +576,7 @@
         var meta = el('div', 'reading-article-meta');
         meta.appendChild(el('span', null,
             (p.levelLabel || '') + ' · ' + p.wordCount + ' 词 · ' +
+            (p.theme ? p.theme + '题材 · ' : '') +
             ((p.source && p.source.rangeLabel) || '') + ' · AI 原创模拟练习'));
         articlePane.appendChild(meta);
 
@@ -528,7 +598,9 @@
         saveBtn.type = 'button';
         saveBtn.addEventListener('click', function () {
             var module = practiceModule();
-            var saved = module && typeof module.save === 'function' ? module.save(state.practice) : { ok: false };
+            var saved = module && typeof module.save === 'function'
+                ? module.save(state.practice, { accountScope: state.accountScope })
+                : { ok: false };
             var note = shell.body.querySelector('[data-save-note]');
             if (note) note.textContent = saved && saved.ok ? '已保存，可退出后继续' : '保存失败';
         });
@@ -662,7 +734,10 @@
 
         var outcome;
         try {
-            outcome = module.submit(p, state.answers);
+            outcome = module.submit(p, state.answers, {
+                accountScope: state.accountScope,
+                attemptKey: state.attemptKey || ''
+            });
         } catch (error) {
             outcome = { ok: false, message: error && error.message ? error.message : String(error) };
         }
@@ -716,6 +791,7 @@
             state.flagged = {};
             state.attempt = null;
             state.showExplanation = {};
+            state.attemptKey = newAttemptKey();
             renderPractice();
         });
         actions.appendChild(redoBtn);
@@ -857,12 +933,13 @@
     function mount(host) {
         if (!host) return;
         mountedHost = host;
+        bindAccountChange();
         buildShell(host);
         var module = practiceModule();
         // 有草稿就提示继续；没有就进选择页
         if (module && typeof module.listDrafts === 'function') {
             var drafts = [];
-            try { drafts = module.listDrafts() || []; } catch (error) { drafts = []; }
+            try { drafts = module.listDrafts({ accountScope: state.accountScope }) || []; } catch (error) { drafts = []; }
             if (drafts.length) {
                 renderSetup();
                 var body = shell.body;
@@ -870,10 +947,11 @@
                     {
                         label: '继续作答',
                         onClick: function () {
-                            var loaded = module.load(drafts[0].id);
+                            var loaded = module.load(drafts[0].id, { accountScope: state.accountScope });
                             if (loaded) {
                                 state.practice = loaded;
                                 state.answers = {};
+                                state.attemptKey = newAttemptKey();
                                 state.pane = 'article';
                                 renderPractice();
                             }
@@ -902,7 +980,7 @@
         var module = practiceModule();
         var practice = idOrPractice;
         if (typeof idOrPractice === 'string' && module && typeof module.load === 'function') {
-            practice = module.load(idOrPractice);
+            practice = module.load(idOrPractice, { accountScope: state.accountScope });
         }
         if (!practice) return false;
         state.practice = practice;
@@ -910,6 +988,7 @@
         state.flagged = {};
         state.attempt = null;
         state.showExplanation = {};
+        state.attemptKey = newAttemptKey();
         if (mountedHost) {
             buildShell(mountedHost);
             renderPractice();
