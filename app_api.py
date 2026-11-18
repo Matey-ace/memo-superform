@@ -703,10 +703,20 @@ class LocalApiMixin:
     def _handle_api_get(self, path, parsed):
         # 与数据库无关的本地接口（运行模式 / 语音资源包状态）
         if path == "/api/app/current-mode":
+            # 身份字段供 launcher 的健康判定核对（审计 P2-2）：
+            # 只有 mode/data_dir 存在时，任何本机 HTTP 服务都可能被误判为当前实例。
+            # app_id/build_version 让启动器能确认"这个端口上跑的是不是本应用、同版本"。
+            try:
+                from build_info import BUILD_VERSION
+            except Exception:
+                BUILD_VERSION = "unknown"
             return self._send_json(200, {
                 "mode": _current_mode(),
                 "is_frozen": bool(getattr(sys, "frozen", False)),
-                "data_dir": DATA_DIR,
+                # 只在诊断需要时给出完整路径；常规只读接口不外泄本机路径（审计 P3-2）。
+                "data_dir": DATA_DIR if getattr(sys, "_MEMO_DIAGNOSTICS", False) else "",
+                "app_id": "memo-superform",
+                "build_version": BUILD_VERSION,
             })
 
         if path in ("/api/app/update-status", "/api/app/update/check"):
@@ -870,6 +880,31 @@ class LocalApiMixin:
                 state = db.get_sync_state(profile_id)
                 return self._send_json(200, {"records": records, "count": len(records), "sync": state})
 
+            # ---- 近期词汇阅读：服务端存档（归属由本机账号派生，客户端不能自选）----
+            if path == "/api/reading/practices":
+                profile_id = self._profile_id(required=True)
+                if not profile_id:
+                    return
+                return self._send_json(200, {"practices": db.list_reading_practices(profile_id)})
+
+            if path.startswith("/api/reading/practices/"):
+                profile_id = self._profile_id(required=True)
+                if not profile_id:
+                    return
+                practice_id = path[len("/api/reading/practices/"):].split("/")[0]
+                if not practice_id:
+                    return self._send_json(400, {"error": "缺少练习标识"})
+                practice = db.get_reading_practice(profile_id, practice_id)
+                if practice is None:
+                    return self._send_json(404, {"error": "没有这份练习"})
+                return self._send_json(200, {"practice": practice})
+
+            if path == "/api/reading/attempts":
+                profile_id = self._profile_id(required=True)
+                if not profile_id:
+                    return
+                return self._send_json(200, {"attempts": db.list_reading_attempts(profile_id)})
+
             if path == "/api/study-sync/status":
                 token, profile_id = self._memo_identity(required=True)
                 if not token or not profile_id:
@@ -1012,6 +1047,47 @@ class LocalApiMixin:
                     return self._send_json(200, {"ok": True, "role": role})
                 except Exception as exc:
                     return self._send_json(400, {"error": str(exc)})
+
+            # ---- 近期词汇阅读：服务端存档与判分归属 ----
+            # 归属一律由 _profile_id() 按本机当前账号派生；请求体里的任何
+            # accountScope 字段都被忽略，客户端不能靠自选字符串读到别人的数据。
+            if path == "/api/reading/practices":
+                profile_id = self._profile_id(required=True)
+                if not profile_id:
+                    return
+                practice = body.get("practice")
+                if not isinstance(practice, dict):
+                    return self._send_json(400, {"error": "practice 必须是对象"})
+                try:
+                    practice_id = db.save_reading_practice(profile_id, practice)
+                except ValueError as exc:
+                    return self._send_json(400, {"error": str(exc)})
+                return self._send_json(200, {"ok": True, "practiceId": practice_id})
+
+            if path == "/api/reading/attempts":
+                profile_id = self._profile_id(required=True)
+                if not profile_id:
+                    return
+                attempt = body.get("attempt")
+                if not isinstance(attempt, dict):
+                    return self._send_json(400, {"error": "attempt 必须是对象"})
+                practice_id = str(attempt.get("practiceId") or "").strip()
+                attempt_key = str(attempt.get("attemptKey") or "")
+                # 防重复记分：同一 practice_id + attempt_key 已存在就直接返回旧记录，
+                # 与客户端本地去重语义保持一致（连点不重复，重做换 key 才新增）。
+                if practice_id and attempt_key:
+                    existing = db.find_reading_attempt(profile_id, practice_id, attempt_key)
+                    if existing:
+                        return self._send_json(200, {
+                            "ok": True, "duplicate": True,
+                            "attemptId": str(attempt.get("id") or ""),
+                            "result": existing["result"],
+                        })
+                try:
+                    attempt_id = db.save_reading_attempt(profile_id, attempt)
+                except ValueError as exc:
+                    return self._send_json(400, {"error": str(exc)})
+                return self._send_json(200, {"ok": True, "attemptId": attempt_id})
 
             # 运行模式设置（与数据库无关）
             if path == "/api/app/set-default-mode":
@@ -1430,6 +1506,20 @@ class LocalApiMixin:
                 return self._send_json(200 if deleted else 404, {"ok": deleted})
             except Exception as exc:
                 return self._send_json(400, {"error": str(exc)})
+        if path.startswith("/api/reading/practices/"):
+            if not DB_READY:
+                return self._send_json(503, {"error": "数据库未就绪"})
+            profile_id = self._profile_id(required=True)
+            if not profile_id:
+                return
+            practice_id = path[len("/api/reading/practices/"):].split("/")[0]
+            if not practice_id:
+                return self._send_json(400, {"error": "缺少练习标识"})
+            try:
+                removed = db.delete_reading_practice(profile_id, practice_id)
+            except Exception as exc:
+                return self._send_json(500, {"error": str(exc)})
+            return self._send_json(200 if removed else 404, {"ok": bool(removed), "removed": removed})
         if path == "/api/maimemo-auth/data":
             if not DB_READY:
                 return self._send_json(503, {"error": "数据库未就绪"})

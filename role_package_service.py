@@ -24,6 +24,7 @@ import threading
 import time
 import uuid
 import zipfile
+from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
 import companion_runtime
@@ -41,6 +42,20 @@ JOB_STATES = ("queued", "inspecting", "awaiting_confirm", "installing",
               "completed", "partial_failed", "cancelled", "failed", "recovering")
 
 _REQUIRED_AUDIO = (".wav", ".mp3", ".flac", ".ogg", ".m4a")
+
+# 角色包内允许的成员扩展名（审计 P2-1）。
+# 角色包是"用户主动选择的本地 ZIP"，但其中曾可夹带 .exe/.dll/.ps1/.bat/.lnk/.js
+# 等可执行文件，它们会随包落盘到数据目录。虽然当前执行链只从固定的
+# .venv311/Scripts/python.exe 与 tts_engine/worker_main.py 启动（不执行角色目录内容），
+# 但落盘的可执行文件仍可能被误点或被备份带走，故在检查阶段直接拒绝。
+_ALLOWED_MEMBER_SUFFIXES = frozenset({
+    ".json", ".txt", ".md",
+    ".wav", ".mp3", ".flac", ".ogg", ".m4a",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".model", ".mat", ".bin",
+    # GPT-SoVITS 模型权重与索引
+    ".ckpt", ".pth", ".safetensors", ".pt", ".onnx", ".index",
+})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -248,6 +263,11 @@ def inspect_source(source_ref: Any) -> dict[str, Any]:
                          if not role_root or info.filename.startswith(role_root + "/")]
                 for name in files:
                     _safe_member(name, paths["incoming"])
+                    # 扩展名白名单：拒绝夹带可执行类型（审计 P2-1）。
+                    # 无扩展名的文件（如部分模型权重）也拒绝，避免绕过。
+                    suffix = PurePosixPath(str(name).replace("\\", "/")).suffix.lower()
+                    if suffix not in _ALLOWED_MEMBER_SUFFIXES:
+                        raise RolePackageError("角色包包含不允许的文件类型：%s" % name)
                 missing = _missing_fields(zf, role_root, manifest)
                 roles.append({
                     "role_root": role_root,

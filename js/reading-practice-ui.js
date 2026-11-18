@@ -943,34 +943,61 @@
         bindAccountChange();
         buildShell(host);
         var module = practiceModule();
-        // 有草稿就提示继续；没有就进选择页
-        if (module && typeof module.listDrafts === 'function') {
-            var drafts = [];
-            try { drafts = module.listDrafts({ accountScope: state.accountScope }) || []; } catch (error) { drafts = []; }
-            if (drafts.length) {
+        // 草稿以服务端为准（服务端按当前账号派生归属，换账号/换端口都能正确取回）。
+        // 服务端不可用时回退到本地缓存，保持离线可练。
+        var showResume = function (drafts, fromRemote) {
+            if (drafts && drafts.length) {
                 renderSetup();
                 var body = shell.body;
                 var box = noticeBox('', '有一份未完成的练习：' + (drafts[0].title || '未命名') + '（' + formatTime(drafts[0].createdAt) + '）', [
                     {
                         label: '继续作答',
                         onClick: function () {
-                            var loaded = module.load(drafts[0].id, { accountScope: state.accountScope });
-                            if (loaded) {
+                            var opts = { accountScope: state.accountScope };
+                            var finish = function (loaded) {
+                                if (!loaded) return;
                                 state.practice = loaded;
                                 state.answers = {};
                                 state.attemptKey = newAttemptKey();
                                 state.pane = 'article';
                                 renderPractice();
+                            };
+                            if (fromRemote && module && typeof module.loadRemote === 'function') {
+                                module.loadRemote(drafts[0].id, opts).then(function (res) {
+                                    finish(res && res.practice ? res.practice
+                                        : (module.load ? module.load(drafts[0].id, opts) : null));
+                                }).catch(function () { finish(module.load ? module.load(drafts[0].id, opts) : null); });
+                            } else {
+                                finish(module.load ? module.load(drafts[0].id, opts) : null);
                             }
                         }
                     },
                     { label: '重新开始', onClick: renderSetup }
                 ]);
                 body.insertBefore(box, body.firstChild);
-                return;
+                return true;
             }
+            return false;
+        };
+
+        var localDrafts = [];
+        try { localDrafts = (module && typeof module.listDrafts === 'function')
+            ? module.listDrafts({ accountScope: state.accountScope }) || [] : []; } catch (error) { localDrafts = []; }
+
+        if (module && typeof module.listDraftsRemote === 'function') {
+            module.listDraftsRemote({ accountScope: state.accountScope }).then(function (res) {
+                if (state.accountScope !== (res && res.scope ? res.scope : state.accountScope)) return;
+                if (res && res.ok) {
+                    if (!showResume(res.drafts, true)) renderSetup();
+                } else if (!showResume(localDrafts, false)) {
+                    renderSetup();
+                }
+            }).catch(function () { if (!showResume(localDrafts, false)) renderSetup(); });
+            // 先渲染选择页，避免等待服务端时空白
+            renderSetup();
+            return;
         }
-        renderSetup();
+        if (!showResume(localDrafts, false)) renderSetup();
     }
 
     function open() {

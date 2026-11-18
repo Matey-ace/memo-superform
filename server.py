@@ -592,18 +592,58 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         except (ValueError, OSError):
             return True
 
+    def _allowed_origins(self):
+        """本实例自身允许的跨源来源（精确到端口）。
+
+        只认"本应用自己的这个 origin"：同 host 的其它端口**不算**。
+        理由：CSRF 防护依赖"跨域简单请求无法携带 X-Requested-With"，
+        而 CORS 一旦对同 host 的任意端口回显 Allow-Origin，这道屏障就失效了
+        （实测：127.0.0.1:8899 的页面可以带自定义头调用 127.0.0.1:8888 的写接口，
+        并真实改写了 launcher.json）。因此这里按 scheme://host:port 精确比对。
+        """
+        try:
+            host_header = (self.headers.get('Host') or '').strip().lower()
+        except Exception:
+            host_header = ''
+        port = ''
+        if host_header:
+            if host_header.startswith('['):
+                closing = host_header.find(']')
+                if closing >= 0:
+                    rest = host_header[closing + 1:]
+                    if rest.startswith(':') and rest[1:].isdigit():
+                        port = rest[1:]
+            elif ':' in host_header:
+                candidate = host_header.rpartition(':')[2]
+                if candidate.isdigit():
+                    port = candidate
+        if not port:
+            port = str(getattr(self.server, 'server_address', ('', PORT))[1] or PORT)
+        names = ('localhost', '127.0.0.1', '[::1]', '::1')
+        allowed = set()
+        for scheme in ('http', 'https'):
+            for name in names:
+                allowed.add('%s://%s:%s' % (scheme, name, port))
+                # 默认端口写成不带端口的形式也是合法 origin
+                if (scheme == 'http' and port == '80') or (scheme == 'https' and port == '443'):
+                    allowed.add('%s://%s' % (scheme, name))
+        return allowed
+
     def _send_cors_headers(self):
         origin = (self.headers.get('Origin') or '').strip()
-        if origin:
-            try:
-                o = urlparse(origin)
-                host = (o.hostname or '').lower()
-                if host in ('localhost', '127.0.0.1', '::1'):
-                    self.send_header("Access-Control-Allow-Origin", origin)
-                    self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-                    self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, X-Requested-With")
-            except Exception:
-                pass
+        if not origin:
+            return
+        try:
+            if origin.lower().rstrip('/') not in self._allowed_origins():
+                # 非本实例来源：不回显 Allow-Origin，浏览器会拦截读取与自定义头请求
+                return
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, X-Requested-With")
+            self.send_header("Access-Control-Allow-Credentials", "true")
+        except Exception:
+            pass
 
     def do_OPTIONS(self):
         if not self._is_allowed_host():
@@ -629,9 +669,28 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self._web_proxy_request(target, method=method, inject_interceptor=inject)
         return True
 
+    def _is_forbidden_origin(self):
+        """拒绝任何明确来自非本实例 origin 的请求（审计 P3-1）。
+
+        之前外站 Origin 也拿到 200（只是不回显 ACAO，浏览器读不到响应）。
+        这里直接拒绝，让保护意图与实际行为一致。
+        没有 Origin 头（curl/同源顶层导航/本机客户端）保持放行。
+        """
+        origin = (self.headers.get('Origin') or '').strip()
+        if not origin:
+            return False
+        return origin.lower().rstrip('/') not in self._allowed_origins()
+
+    def _reject_forbidden(self):
+        """对 API/proxy 返回 JSON 403（保持既有测试契约），其余用 HTTP 403。"""
+        path = urlparse(getattr(self, 'path', '') or '').path
+        if path.startswith('/api/') or path.startswith('/proxy/'):
+            return self._send_json(403, {"error": "请求来源校验失败"})
+        return self.send_error(403, "Forbidden")
+
     def do_GET(self):
-        if not self._is_allowed_host():
-            self.send_error(403, "Forbidden")
+        if not self._is_allowed_host() or self._is_forbidden_origin():
+            self._reject_forbidden()
             return
         parsed = urlparse(self.path)
         path = parsed.path
@@ -713,8 +772,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
             self._disable_local_asset_cache = False
 
     def do_POST(self):
-        if not self._is_allowed_host():
-            self.send_error(403, "Forbidden")
+        if not self._is_allowed_host() or self._is_forbidden_origin():
+            self._reject_forbidden()
             return
         parsed = urlparse(self.path)
         path = parsed.path
@@ -831,8 +890,8 @@ class MemoProxyHandler(LocalApiMixin, http.server.SimpleHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
     def do_DELETE(self):
-        if not self._is_allowed_host():
-            self.send_error(403, "Forbidden")
+        if not self._is_allowed_host() or self._is_forbidden_origin():
+            self._reject_forbidden()
             return
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):

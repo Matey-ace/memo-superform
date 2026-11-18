@@ -236,6 +236,9 @@ def delete_profile_learning_data(profile_id: Any = None) -> dict[str, int]:
     tables = (
         "study_records", "study_record_snapshots", "snapshot_runs", "daily_stats",
         "recommendations", "sync_runs", "sync_segments", "sync_today_items", "sync_state",
+        # 阅读练习也属于"该档案的学习数据"：断开账号或重建学习库时一并清除，
+        # 否则下一个账号会在同一台机器上看到上一位用户的练习与成绩。
+        "reading_practices", "reading_attempts",
     )
     deleted: dict[str, int] = {}
     with _write_connection() as conn:
@@ -1029,3 +1032,187 @@ def _parse_date(value: Any) -> Optional[date]:
 
 if __name__ == "__main__":
     print(init_db())
+
+
+# --------------------------------------------------------------------------- #
+# 近期词汇阅读练习（服务端存档）
+#
+# 归属由服务端按当前账号派生 profile_id 决定，客户端传入的 scope 一律忽略。
+# 这样"服务端校验归属"不是一句口号：换账号时 profile_id 变了，
+# 读不到上一位用户的练习与成绩。
+# --------------------------------------------------------------------------- #
+
+def save_reading_practice(profile_id, practice):
+    """写入/更新一份练习存档；返回 practice_id。"""
+    if not isinstance(practice, dict):
+        raise ValueError("practice 必须是对象")
+    practice_id = str(practice.get("id") or "").strip()
+    if not practice_id:
+        raise ValueError("practice.id 不能为空")
+    payload = json.dumps(practice, ensure_ascii=False, sort_keys=True)
+    now = _utc_now()
+    # pk 必须在进入写事务之前解析：ensure_sync_profile 自身会开一条写连接，
+    # 放进 BEGIN IMMEDIATE 里会触发 "database is locked"。
+    pk = ensure_sync_profile(profile_id)
+    with _write_connection() as conn:
+        conn.execute(
+            "INSERT INTO reading_practices"
+            "(profile_id, practice_id, title, level_key, level_label, word_count,"
+            " reviewed, created_at, payload_json, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(profile_id, practice_id) DO UPDATE SET"
+            " title=excluded.title, level_key=excluded.level_key,"
+            " level_label=excluded.level_label, word_count=excluded.word_count,"
+            " reviewed=excluded.reviewed, payload_json=excluded.payload_json,"
+            " updated_at=excluded.updated_at",
+            (
+                pk,
+                practice_id,
+                str(practice.get("title") or "")[:300],
+                str(practice.get("level") or "")[:32],
+                str(practice.get("levelLabel") or "")[:64],
+                int(practice.get("wordCount") or 0),
+                1 if (practice.get("generation") or {}).get("reviewed") else 0,
+                str(practice.get("createdAt") or now),
+                payload,
+                now,
+            ),
+        )
+    return practice_id
+
+
+def get_reading_practice(profile_id, practice_id):
+    """读取一份练习存档；不存在返回 None。"""
+    with get_connection() as conn:
+        pk = _profile_pk(profile_id)
+        row = conn.execute(
+            "SELECT payload_json FROM reading_practices WHERE profile_id=? AND practice_id=?",
+            (pk, str(practice_id)),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except (ValueError, TypeError):
+        return None
+
+
+def list_reading_practices(profile_id, limit=50):
+    """列出该账号的练习存档摘要（按更新时间倒序）。"""
+    with get_connection() as conn:
+        pk = _profile_pk(profile_id)
+        rows = conn.execute(
+            "SELECT practice_id, title, level_key, level_label, word_count, reviewed,"
+            " created_at, updated_at FROM reading_practices"
+            " WHERE profile_id=? ORDER BY updated_at DESC LIMIT ?",
+            (pk, max(1, int(limit))),
+        ).fetchall()
+    return [
+        {
+            "id": row[0], "title": row[1], "level": row[2], "levelLabel": row[3],
+            "wordCount": int(row[4] or 0), "reviewed": bool(row[5]),
+            "createdAt": row[6], "updatedAt": row[7],
+        }
+        for row in rows
+    ]
+
+
+def delete_reading_practice(profile_id, practice_id):
+    """删除一份练习及其作答记录；返回受影响行数。"""
+    pk = ensure_sync_profile(profile_id)
+    with _write_connection() as conn:
+        removed = conn.execute(
+            "DELETE FROM reading_practices WHERE profile_id=? AND practice_id=?",
+            (pk, str(practice_id)),
+        ).rowcount
+        conn.execute(
+            "DELETE FROM reading_attempts WHERE profile_id=? AND practice_id=?",
+            (pk, str(practice_id)),
+        )
+    return max(0, int(removed or 0))
+
+
+def save_reading_attempt(profile_id, attempt):
+    """写入一条作答记录。
+
+    同一 (profile_id, practice_id, attempt_key) 只保留一条：
+    · 连点提交（同 key）→ 覆盖为同一条，不重复记分；
+    · 重做（新 key）→ 新增一条。
+    attempt_key 为空时退化为每次新增（旧调用方行为）。
+    """
+    if not isinstance(attempt, dict):
+        raise ValueError("attempt 必须是对象")
+    practice_id = str(attempt.get("practiceId") or "").strip()
+    attempt_id = str(attempt.get("id") or "").strip()
+    if not practice_id or not attempt_id:
+        raise ValueError("attempt 必须带 practiceId 与 id")
+    attempt_key = str(attempt.get("attemptKey") or "")
+    result = attempt.get("result") or {}
+    now = _utc_now()
+    pk = ensure_sync_profile(profile_id)
+    with _write_connection() as conn:
+        conn.execute(
+            "INSERT INTO reading_attempts"
+            "(profile_id, attempt_id, practice_id, attempt_key, correct_count,"
+            " total_count, answers_json, result_json, submitted_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(profile_id, attempt_id) DO UPDATE SET"
+            " attempt_key=excluded.attempt_key, correct_count=excluded.correct_count,"
+            " total_count=excluded.total_count, answers_json=excluded.answers_json,"
+            " result_json=excluded.result_json, submitted_at=excluded.submitted_at",
+            (
+                pk,
+                attempt_id,
+                practice_id,
+                attempt_key,
+                int(result.get("correct") or 0),
+                int(result.get("total") or 0),
+                json.dumps(attempt.get("answers") or {}, ensure_ascii=False, sort_keys=True),
+                json.dumps(result, ensure_ascii=False, sort_keys=True),
+                str(attempt.get("submittedAt") or now),
+            ),
+        )
+    return attempt_id
+
+
+def find_reading_attempt(profile_id, practice_id, attempt_key):
+    """按 practice_id + attempt_key 查已有作答（用于防重复记分）。"""
+    with get_connection() as conn:
+        pk = _profile_pk(profile_id)
+        row = conn.execute(
+            "SELECT result_json, answers_json, submitted_at FROM reading_attempts"
+            " WHERE profile_id=? AND practice_id=? AND attempt_key=?",
+            (pk, str(practice_id), str(attempt_key)),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return {"result": json.loads(row[0] or "{}"),
+                "answers": json.loads(row[1] or "{}"),
+                "submittedAt": row[2]}
+    except (ValueError, TypeError):
+        return None
+
+
+def list_reading_attempts(profile_id, limit=100):
+    """列出该账号的作答记录（按提交时间倒序）。"""
+    with get_connection() as conn:
+        pk = _profile_pk(profile_id)
+        rows = conn.execute(
+            "SELECT attempt_id, practice_id, attempt_key, correct_count, total_count,"
+            " result_json, submitted_at FROM reading_attempts"
+            " WHERE profile_id=? ORDER BY submitted_at DESC LIMIT ?",
+            (pk, max(1, int(limit))),
+        ).fetchall()
+    items = []
+    for row in rows:
+        try:
+            result = json.loads(row[5] or "{}")
+        except (ValueError, TypeError):
+            result = {}
+        items.append({
+            "id": row[0], "practiceId": row[1], "attemptKey": row[2],
+            "correct": int(row[3] or 0), "total": int(row[4] or 0),
+            "result": result, "submittedAt": row[6],
+        })
+    return items

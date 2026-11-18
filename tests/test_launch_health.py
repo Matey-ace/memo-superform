@@ -131,9 +131,14 @@ class HealthProbeTests(unittest.TestCase):
 
     def test_fully_healthy_instance_is_accepted(self):
         import launcher
+        from build_info import BUILD_VERSION
         big = b"<!DOCTYPE html><html><head><title>Memo</title></head><body>" + b"x" * 3000 + b"</body></html>"
         port = self._serve({
-            "/api/app/current-mode": json.dumps({"mode": "web", "data_dir": "C:/tmp"}),
+            # 健康判定现在要求 app_id + build_version 与本应用一致（审计 P2-2）。
+            "/api/app/current-mode": json.dumps({
+                "mode": "web", "data_dir": "C:/tmp",
+                "app_id": "memo-superform", "build_version": BUILD_VERSION,
+            }),
             "/index.html": "HTML",
             "/js/api.js": "x",
             "/css/style.css": "x",

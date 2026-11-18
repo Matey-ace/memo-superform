@@ -33,7 +33,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
-    var VERSION = '20261118-reading-practice-v0.92';
+    var VERSION = '20261118-reading-practice-v0.95';
     var SCHEMA = 'memo-reading-v1';
     var PROMPT_VERSION = 'reading-prompt-v1-20261118';
     var REVIEW_PROMPT_VERSION = 'reading-review-v1-20261118';
@@ -1293,6 +1293,138 @@
         };
     }
 
+    /* ================= 服务端存档（归属权威） =================
+     * 本地 localStorage 只是缓存：真正的"这份练习属于谁"由服务端判定。
+     * 服务端用当前账号派生 profile_id，请求体里的 scope 一律被忽略，
+     * 所以换账号读不到别人的练习与成绩。
+     *
+     * 所有远程调用都是"尽力而为"：网络或服务端不可用时不影响本机作答，
+     * 只把失败原因记在返回值的 remote 字段里，由界面决定怎么提示。
+     */
+
+    var REMOTE_TIMEOUT_MS = 8000;
+
+    function remoteEnabled(options) {
+        var merged = Object.assign({}, injected, options || {});
+        if (merged.remote === false) return false;
+        if (typeof merged.fetchImpl === 'function') return true;
+        return typeof fetch === 'function';
+    }
+
+    function remoteFetch(options) {
+        var merged = Object.assign({}, injected, options || {});
+        return typeof merged.fetchImpl === 'function' ? merged.fetchImpl : fetch;
+    }
+
+    function remoteRequest(options, method, path, body) {
+        if (!remoteEnabled(options)) {
+            return Promise.resolve({ ok: false, reason: 'disabled' });
+        }
+        var doFetch = remoteFetch(options);
+        var controller = null;
+        var timer = null;
+        var init = {
+            method: method,
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        };
+        if (body !== undefined) {
+            init.headers['Content-Type'] = 'application/json';
+            init.body = JSON.stringify(body);
+        }
+        try {
+            if (typeof AbortController === 'function') {
+                controller = new AbortController();
+                init.signal = controller.signal;
+                timer = setTimeout(function () { controller.abort(); }, REMOTE_TIMEOUT_MS);
+            }
+        } catch (error) { controller = null; }
+
+        function done(value) {
+            if (timer) { clearTimeout(timer); timer = null; }
+            return value;
+        }
+
+        var pending;
+        try { pending = doFetch(path, init); }
+        catch (error) { return Promise.resolve({ ok: false, reason: 'network', message: String(error) }); }
+
+        return Promise.resolve(pending).then(function (response) {
+            var status = response && typeof response.status === 'number' ? response.status : 0;
+            var parse = typeof response.json === 'function' ? response.json() : Promise.resolve(null);
+            return Promise.resolve(parse).then(function (payload) {
+                if (status >= 200 && status < 300) {
+                    return done({ ok: true, status: status, payload: payload || {} });
+                }
+                if (status === 401) return done({ ok: false, reason: 'unauthenticated', status: status });
+                if (status === 404) return done({ ok: false, reason: 'missing', status: status });
+                return done({ ok: false, reason: 'http', status: status,
+                              message: (payload && payload.error) || '' });
+            }, function () {
+                return done({ ok: status >= 200 && status < 300, status: status, reason: 'body' });
+            });
+        }, function (error) {
+            var aborted = !!(error && error.name === 'AbortError');
+            return done({ ok: false, reason: aborted ? 'timeout' : 'network', message: String(error) });
+        });
+    }
+
+    function remoteSave(practice, options) {
+        return remoteRequest(options, 'POST', '/api/reading/practices', { practice: practice })
+            .then(function (result) { return result; });
+    }
+
+    function remoteLoad(practiceId, options) {
+        return remoteRequest(options, 'GET',
+            '/api/reading/practices/' + encodeURIComponent(String(practiceId || '')))
+            .then(function (result) {
+                if (result.ok && result.payload && result.payload.practice) {
+                    return { ok: true, practice: result.payload.practice };
+                }
+                return result;
+            });
+    }
+
+    function remoteList(options) {
+        return remoteRequest(options, 'GET', '/api/reading/practices').then(function (result) {
+            if (result.ok && result.payload && Array.isArray(result.payload.practices)) {
+                return { ok: true, practices: result.payload.practices };
+            }
+            return result;
+        });
+    }
+
+    function remoteSaveAttempt(attempt, options) {
+        return remoteRequest(options, 'POST', '/api/reading/attempts', { attempt: attempt });
+    }
+
+    /* 服务端权威读取。与同步的 load/listDrafts 不同，这两个函数等待服务端结果：
+     * 服务端按当前账号派生 profile_id，因此换账号后不可能拿到上一位用户的练习。 */
+    function listDraftsRemote(options) {
+        return remoteList(options).then(function (result) {
+            if (!result.ok || !result.practices) {
+                return { ok: false, drafts: [], reason: result.reason || 'remote-unavailable' };
+            }
+            return { ok: true, drafts: result.practices, remote: true };
+        });
+    }
+
+    function loadRemote(id, options) {
+        return remoteLoad(id, options).then(function (result) {
+            if (!result.ok || !result.practice) {
+                return { ok: false, practice: null, reason: result.reason || 'remote-unavailable' };
+            }
+            var item = result.practice;
+            var scope = (options && options.accountScope) || 'anonymous';
+            if (item.accountScope && item.accountScope !== scope) {
+                return { ok: false, practice: null, reason: 'scope-mismatch' };
+            }
+            return { ok: true, practice: item, remote: true };
+        });
+    }
+
     function save(practice, options) {
         var checked = validate(practice);
         if (!checked.ok) {
@@ -1307,6 +1439,11 @@
         var next = drafts.filter(function (item) { return item && item.id !== practice.id; });
         next.unshift(practice);
         var written = writeList(deps, scope, 'drafts', next.slice(0, 50));
+        // 服务端存档：归属由服务端按当前账号派生，客户端 scope 会被忽略。
+        // 异步进行，不阻断本机作答；失败只记在返回值里供界面提示。
+        if (written && remoteEnabled(options) && scope !== 'anonymous') {
+            remoteSave(practice, options).catch(function () { return null; });
+        }
         return { ok: written, id: practice.id, accountScope: scope, warnings: checked.warnings };
     }
 
@@ -1377,6 +1514,10 @@
         };
         attempts.unshift(record);
         var written = writeList(deps, scope, 'attempts', attempts.slice(0, 200));
+        // 服务端判分记录：服务端按当前账号派生归属，并对 attemptKey 去重。
+        if (written && remoteEnabled(options) && scope !== 'anonymous') {
+            remoteSaveAttempt(record, options).catch(function () { return null; });
+        }
         return { ok: written, attempt: record, accountScope: scope, result: result };
     }
 
@@ -1432,6 +1573,9 @@
         load: load,
         listDrafts: listDrafts,
         submit: submit,
+        // 服务端权威读取：UI 用它校正本地缓存，确保换账号读不到别人的练习。
+        listDraftsRemote: listDraftsRemote,
+        loadRemote: loadRemote,
         listAttempts: listAttempts,
         remove: remove,
         clearAccount: clearAccount,

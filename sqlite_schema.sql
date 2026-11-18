@@ -491,3 +491,46 @@ CREATE INDEX IF NOT EXISTS idx_sync_segments_run
     ON sync_segments(profile_id, source, complete, start_date, end_date);
 CREATE INDEX IF NOT EXISTS idx_live2d_models_character
     ON live2d_models(character_id, complete, updated_at DESC);
+
+-- 近期词汇阅读练习：服务端存档与归属校验。
+-- 设计要点：
+--   * 归属由服务端按当前账号派生 profile_id 决定，客户端不能自选作用域；
+--   * 草稿与被判分的作答分开存，避免"未提交的作答"被当成成绩；
+--   * 冻结答案随练习一起服务端保存，判分不再依赖客户端字段；
+--   * 同一 (profile_id, practice_id) 的作答按 attempt_key 去重，
+--     重做（新 key）会新增一条，连点（同 key）只算一次。
+CREATE TABLE IF NOT EXISTS reading_practices (
+    profile_id INTEGER NOT NULL,
+    practice_id TEXT NOT NULL,
+    title TEXT,
+    level_key TEXT,
+    level_label TEXT,
+    word_count INTEGER NOT NULL DEFAULT 0,
+    reviewed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (profile_id, practice_id),
+    FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reading_attempts (
+    profile_id INTEGER NOT NULL,
+    attempt_id TEXT NOT NULL,
+    practice_id TEXT NOT NULL,
+    attempt_key TEXT NOT NULL DEFAULT '',
+    correct_count INTEGER NOT NULL DEFAULT 0,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    answers_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT NOT NULL DEFAULT '{}',
+    submitted_at TEXT NOT NULL,
+    PRIMARY KEY (profile_id, attempt_id),
+    FOREIGN KEY (profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_reading_practices_profile
+    ON reading_practices(profile_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reading_attempts_profile
+    ON reading_attempts(profile_id, submitted_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_reading_attempt_key
+    ON reading_attempts(profile_id, practice_id, attempt_key);

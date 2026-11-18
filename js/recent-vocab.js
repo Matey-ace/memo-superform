@@ -29,7 +29,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
-    var VERSION = '20261118-recent-vocab-v0.92';
+    var VERSION = '20261118-recent-vocab-v0.95';
     var BJ_OFFSET_MINUTES = 480;                 // 北京时间固定 UTC+8，无夏令时
     var DAY_MS = 24 * 60 * 60 * 1000;
     // 「缓存过旧」的门槛：上一次成功同步距今超过 24 小时就认为数据可能过期。

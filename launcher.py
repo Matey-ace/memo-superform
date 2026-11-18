@@ -727,6 +727,14 @@ def probe_instance_health(port, timeout=1.2):
         return None
     if payload.get("mode") not in ("web", "desktop") or "data_dir" not in payload:
         return None
+    # 身份与构建版本校验（审计 P2-2）：
+    # 只有 mode/data_dir 时，任何本机 HTTP 服务（旧版本实例、指向别的数据目录的
+    # 实例、甚至一个假服务）都可能被当成"当前健康实例"，让用户被送到一个
+    # 不是本应用/不是本版本的页面上。要求 app_id 与 BUILD_VERSION 同时匹配。
+    if str(payload.get("app_id") or "") != "memo-superform":
+        return None
+    if str(payload.get("build_version") or "") != BUILD_VERSION:
+        return None
 
     try:
         with urllib.request.urlopen(base + "/index.html", timeout=timeout) as response:
