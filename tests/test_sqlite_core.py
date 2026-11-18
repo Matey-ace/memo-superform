@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
+import os
 import pathlib
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
+import uuid
 from datetime import timedelta
+
+# 并发用例的规模：足以触发 WAL 文件反复重建，又不至于让回归套件变慢。
+THREADS = 8
+WRITES_PER_THREAD = 15
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -150,6 +157,111 @@ class SQLiteCoreTests(unittest.TestCase):
         self.assertGreaterEqual(deleted["study_records"], 1)
         self.assertEqual([], db.get_records(self.profile))
         self.assertTrue(db.get_live2d_preference(self.profile)["companion_enabled"])
+
+
+class WarmConnectionTests(unittest.TestCase):
+    """WAL 保活连接：默认关闭，启用后可关闭，切换数据目录时必须释放句柄。"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        db.init_db(self.temp.name)
+        self.profile = "d" * 64
+
+    def tearDown(self):
+        db.close_warm()
+        self.temp.cleanup()
+
+    def test_keep_warm_reads_identical_records_and_releases_the_handle(self):
+        db.upsert_study_records(self.profile, [dict(voc_id="warm-one", voc_spelling="alpha",
+                                                    add_date="2026-08-01", last_study_date="2026-08-20",
+                                                    study_count=2)])
+        baseline = db.get_records(self.profile)
+        db.keep_warm(True)
+        try:
+            warmed = db.get_records(self.profile)
+            self.assertEqual(baseline, warmed, "保活连接不得改变读取结果")
+            self.assertEqual(1, db.get_record_count(self.profile))
+        finally:
+            db.close_warm()
+        # 关闭后仍可正常读取，且临时目录能被清理（tearDown 会验证）。
+        self.assertEqual(baseline, db.get_records(self.profile))
+
+    def test_switching_data_dir_releases_the_warm_connection(self):
+        db.keep_warm(True)
+        self.assertTrue(os.path.exists(db.database_path()))
+        other = tempfile.TemporaryDirectory()
+        try:
+            db.init_db(other.name)
+            # 旧库句柄必须已释放：Windows 上未释放时这里会抛 PermissionError。
+            os.remove(os.path.join(self.temp.name, "memo-superform.db"))
+        finally:
+            other.cleanup()
+
+    def test_warm_connection_removes_readonly_failures_under_concurrency(self):
+        """并发下 WAL 的 -wal/-shm 反复删除重建会偶发 SQLITE_READONLY。
+
+        保活连接让这两个文件常驻，实测可把该错误降到 0；这是保活连接除耗时以外的
+        正确性收益。断言的是"并发写入零异常、全部落库"，而不仅是"没有 readonly"：
+        否则全部写入抛 `database is locked` 等其他异常时，本用例仍会假通过。
+        这里只断言"保活后不出现该错误"，不反断言无保活时必然复现（那取决于并发
+        强度，属于概率事件）。
+        """
+        db.keep_warm(True)
+        try:
+            errors = []
+            barrier = threading.Barrier(THREADS)
+            # 主键在循环外解析一次：ensure_sync_profile 自身是写事务，放在循环里会
+            # 把锁竞争放大一倍，也让用例慢到不适合回归套件。
+            pk = db._profile_pk(self.profile)
+            expected_rows = THREADS * WRITES_PER_THREAD
+
+            def worker():
+                barrier.wait()
+                for _ in range(WRITES_PER_THREAD):
+                    try:
+                        with db._write_connection() as conn:
+                            conn.execute("INSERT INTO study_records(profile_id,voc_id,voc_spelling,"
+                                         "record_hash,is_active,created_at,updated_at,last_seen_at) "
+                                         "VALUES(?,?,?,?,1,?,?,?)",
+                                         (pk, uuid.uuid4().hex[:12], uuid.uuid4().hex[:8],
+                                          uuid.uuid4().hex, db._utc_now(), db._utc_now(), db._utc_now()))
+                    except Exception as exc:  # 记录后继续，统计全部失败类型
+                        errors.append(type(exc).__name__ + ": " + str(exc))
+
+            threads = [threading.Thread(target=worker) for _ in range(THREADS)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=120)
+            # 线程必须全部正常结束：仍存活说明有写入卡死，此时异常统计也不完整。
+            self.assertEqual([], [t for t in threads if t.is_alive()], "工作线程必须全部结束")
+            # 任何写入异常都算失败（readonly 只是其中一种），不允许"全失败也通过"。
+            self.assertEqual([], errors, "并发写入不允许出现任何异常：" + str(errors[:3]))
+            conn = db.get_connection()
+            try:
+                inserted = conn.execute(
+                    "SELECT COUNT(*) FROM study_records WHERE profile_id=?", (pk,)).fetchone()[0]
+            finally:
+                conn.close()
+            self.assertEqual(expected_rows, inserted,
+                             "实际落库数量必须等于 THREADS×WRITES_PER_THREAD")
+        finally:
+            db.close_warm()
+
+    def test_backup_and_write_still_succeed_with_warm_connection(self):
+        db.upsert_study_records(self.profile, [dict(voc_id="warm-two", voc_spelling="beta",
+                                                    add_date="2026-08-02", last_study_date="2026-08-21",
+                                                    study_count=1)])
+        db.keep_warm(True)
+        try:
+            target = db.create_database_backup()
+            self.assertTrue(os.path.exists(target), "保活连接下在线备份必须成功")
+            db.upsert_study_records(self.profile, [dict(voc_id="warm-three", voc_spelling="gamma",
+                                                        add_date="2026-08-03", last_study_date="2026-08-22",
+                                                        study_count=1)])
+            self.assertEqual(2, db.get_record_count(self.profile))
+        finally:
+            db.close_warm()
 
 
 if __name__ == "__main__":

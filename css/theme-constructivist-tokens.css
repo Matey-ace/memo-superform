@@ -1,0 +1,99 @@
+/* Standard-only design tokens. No base element styling; no product loading here.
+   MAIN_SCOPE is always the prefix. :has disables tokens during companion mode;
+   utility subjects also explicitly exclude the companion root and descendants. */
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) {
+  --c-paper: #EFE7D6; --c-paper-2: #E5DBC6; --c-paper-3: #D8CCB2;
+  --c-ink: #1A1714; --c-ink-2: #3D3731; --c-ink-3: #6B6258;
+  --c-vermilion: #B8321F; --c-vermilion-2: #8E2416; --c-vermilion-bg: #F3D9CF;
+  --c-indigo: #1F3A4D; --c-ochre: #9C6B30; --c-success: #2F5D3A;
+  --c-rule: #1A1714; --c-rule-soft: rgba(26,23,20,0.22);
+  --f-display: "Noto Serif SC", SimSun, "Source Han Serif SC", serif;
+  --f-serif: "Noto Serif SC", SimSun, serif;
+  --f-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --f-num: "Bahnschrift", "DIN Alternate", "Segoe UI", sans-serif;
+  --fs-xs: 12px; --fs-sm: 14px; --fs-md: 16px; --fs-lg: 20px;
+  --fs-xl: 28px; --fs-2xl: 40px; --fs-3xl: 56px; --fs-4xl: 80px;
+  --lh-body: 1.65; --lh-head: 1.2; --lh-num: 1;
+  --ls-cjk-head: 0.08em; --ls-latin-cap: 0.12em; --ls-body: 0;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px; --sp-9: 96px;
+  --rule-heavy: 2px solid var(--c-rule);
+  --rule-light: 1px solid var(--c-rule);
+  --rule-hair: 1px solid var(--c-rule-soft);
+  --r-none: 0; --r-tap: 2px;
+  --shadow-hard: 4px 4px 0 var(--c-ink); --shadow-hard-sm: 2px 2px 0 var(--c-ink);
+  --ease: cubic-bezier(0.2,0,0,1);
+  --dur-fast: 120ms; --dur-base: 180ms; --dur-slow: 260ms;
+  --sky-top: var(--sp-8); --floor-bottom: var(--sp-7);
+  --tap-min: 32px; --content-max: 1440px;
+}
+/* Keep dependent tokens on the same node so dark colors resolve before inheritance. */
+html[data-ui-style="standard"]:has(> body.dark:not(.companion-mode)) {
+  --c-paper: #16130F; --c-paper-2: #211D18; --c-paper-3: #2E2922;
+  --c-ink: #ECE3CF; --c-ink-2: #C9BFAA; --c-ink-3: #968C7A;
+  --c-vermilion: #D2452E; --c-vermilion-2: #E8634B; --c-vermilion-bg: #3A1A13;
+  --c-rule: #ECE3CF; --c-rule-soft: rgba(236,227,207,0.20);
+}
+/* Shared structural utilities; no selectors for bare elements. */
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-rule-heavy:not(#companionStudy, #companionStudy *) {
+  border: 0; border-block-start: var(--rule-heavy); margin: 0;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-rule-light:not(#companionStudy, #companionStudy *) {
+  border: 0; border-block-start: var(--rule-light); margin: 0;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-rule-hair:not(#companionStudy, #companionStudy *) {
+  border: 0; border-block-start: var(--rule-hair); margin: 0;
+}
+/* Canonical double frame; components must reuse this treatment. */
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-double-frame:not(#companionStudy, #companionStudy *) {
+  border: 2px solid var(--c-ink); border-radius: var(--r-none);
+  box-shadow: inset 0 0 0 3px var(--c-paper), inset 0 0 0 4px var(--c-ink);
+  background-color: var(--c-paper); padding: var(--sp-5);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-banxin:not(#companionStudy, #companionStudy *) {
+  font-family: var(--f-serif); font-size: var(--fs-lg); line-height: var(--lh-head);
+  letter-spacing: var(--ls-cjk-head); color: var(--c-ink);
+  padding: var(--sp-2) var(--sp-3); border-block-end: var(--rule-light);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-fish-tail:not(#companionStudy, #companionStudy *) {
+  position: relative; padding-inline-start: var(--sp-5);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-fish-tail:not(#companionStudy, #companionStudy *)::before {
+  content: ""; position: absolute; inset-block-start: 0; inset-inline-start: 0;
+  width: 10px; height: 14px; background-color: var(--c-ink);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-book-ear:not(#companionStudy, #companionStudy *) {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--tap-min); min-width: var(--tap-min); padding: 0 var(--sp-2);
+  font-family: var(--f-num); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs); color: var(--c-paper); background-color: var(--c-ink);
+  border: var(--rule-light); border-radius: var(--r-none);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-seal:not(#companionStudy, #companionStudy *) {
+  display: inline-flex; align-items: center; gap: var(--sp-1); padding: var(--sp-1) var(--sp-2);
+  font-family: var(--f-serif); font-size: var(--fs-xs); line-height: var(--lh-head);
+  color: var(--c-vermilion-2); background-color: var(--c-vermilion-bg);
+  border: 2px solid var(--c-vermilion); border-radius: var(--r-none);
+}
+/* Semantic color is decorative; readable text stays ink in both modes. */
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-seal[data-tone="success"]:not(#companionStudy, #companionStudy *) {
+  color: var(--c-ink); background-color: var(--c-paper-2); border-color: var(--c-success);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-seal[data-tone="muted"]:not(#companionStudy, #companionStudy *) {
+  color: var(--c-ink); background-color: var(--c-paper-3); border-color: var(--c-rule-soft);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) :is(.memo-num, .memo-num-hero):not(#companionStudy, #companionStudy *) {
+  font-family: var(--f-num); font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1; line-height: var(--lh-num); letter-spacing: 0;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-num-hero:not(#companionStudy, #companionStudy *) {
+  font-size: var(--fs-4xl); color: var(--c-ink);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-sky:not(#companionStudy, #companionStudy *) { padding-block-start: var(--sky-top); }
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-floor:not(#companionStudy, #companionStudy *) { padding-block-end: var(--floor-bottom); }
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .memo-jiehang:not(#companionStudy, #companionStudy *) > * + *:not(#companionStudy, #companionStudy *) { border-block-start: var(--rule-hair); }
+/* Required accessibility override, not an unauthorized palette change. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-style="standard"]:has(> body:not(.companion-mode)) { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; }
+}

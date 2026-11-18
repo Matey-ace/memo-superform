@@ -15,6 +15,10 @@ const ChartManager = (function() {
     let cachedRecords = null;
     let cachedAIClassification = null;
     let cachedNotepadWords = null;
+    // 仪表盘被隐藏（陪伴模式）期间被跳过的重绘请求标记。
+    // 退出陪伴模式由 live2d-companion.js 统一触发一次可见重绘，因此这里只记标记，
+    // 不自己排重试定时器——避免和退出路径各画一次。
+    let pendingVisibleRender = false;
 
     // 热力图配色预设（6 套，每套含亮色/暗色）
     const heatmapPalettes = [
@@ -234,6 +238,19 @@ const ChartManager = (function() {
     // 根据当前主题返回图表文字颜色
     function getThemeColors() {
         const dark = document.body.classList.contains('dark');
+        if (isMainChartTheme()) {
+            return {
+                type: dark ? 'dark' : 'light',
+                title: dark ? '#ECE3CF' : '#1A1714',
+                subtext: dark ? '#C9BFAA' : '#3D3731',
+                axis: dark ? '#968C7A' : '#6B6258',
+                axisLine: dark ? '#ECE3CF' : '#1A1714',
+                splitLine: dark ? 'rgba(236,227,207,0.20)' : 'rgba(26,23,20,0.22)',
+                tooltipBg: dark ? '#211D18' : '#EFE7D6',
+                tooltipBorder: dark ? '#ECE3CF' : '#1A1714',
+                tooltipText: dark ? '#ECE3CF' : '#1A1714'
+            };
+        }
         return {
             type: dark ? 'dark' : 'light',
             title: dark ? '#e5e7eb' : '#1a1a2e',
@@ -245,6 +262,214 @@ const ChartManager = (function() {
             tooltipBorder: dark ? '#374151' : '#e5e7eb',
             tooltipText: dark ? '#e5e7eb' : '#1a1a2e'
         };
+    }
+
+    function isMainChartTheme() {
+        return document.documentElement.getAttribute('data-ui-style') === 'standard' &&
+            !document.body.classList.contains('companion-mode');
+    }
+
+    // ---- 配色索引：全局默认 + 普通版逐磁贴作用域 ----
+    // 共享键：'heatmap_palette' 是笔记本与旧版普通版共用的全局单值。
+    // 读语义保持不变（作为所有模块的初始默认值）；普通版写入只落到专属键，
+    // 绝不改写共享键，避免影响笔记本。
+    const LEGACY_PALETTE_KEY = 'heatmap_palette';
+    const TILE_PALETTE_KEY = 'standard_heatmap_palette_by_tile';
+    // 没有磁贴上下文时（例如直接调用 renderHeatmap / setPaletteIndex(idx)）使用这个键。
+    const DEFAULT_TILE_KEY = '*';
+
+    function normalizePaletteIndex(value) {
+        const index = parseInt(value, 10);
+        return Number.isFinite(index) && index >= 0 && index < heatmapPalettes.length ? index : null;
+    }
+
+    function readLegacyPaletteIndex() {
+        try {
+            const index = normalizePaletteIndex(localStorage.getItem(LEGACY_PALETTE_KEY));
+            return index === null ? 0 : index;
+        } catch (error) {
+            return 0;
+        }
+    }
+
+    function readTilePaletteMap() {
+        try {
+            const raw = localStorage.getItem(TILE_PALETTE_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+            const map = {};
+            Object.keys(parsed).forEach(key => {
+                const index = normalizePaletteIndex(parsed[key]);
+                if (index !== null) map[String(key)] = index;
+            });
+            return map;
+        } catch (error) {
+            // 损坏的 JSON 不应让配色功能整体失效：退化为「全部用默认色板」。
+            return {};
+        }
+    }
+
+    // currentPaletteIndex 仍由上方原有那行从共享键读出，作为全局默认（笔记本语义不变）。
+    if (normalizePaletteIndex(currentPaletteIndex) === null) currentPaletteIndex = readLegacyPaletteIndex();
+    // 普通版逐磁贴选择（键 = 磁贴索引字符串，另含 '*' 默认项）。
+    let tilePaletteMap = readTilePaletteMap();
+
+    function tileKeyOf(tileIndex) {
+        const index = parseInt(tileIndex, 10);
+        return Number.isFinite(index) && index >= 0 ? String(index) : DEFAULT_TILE_KEY;
+    }
+
+    function hasTileKey(map, key) {
+        return Object.prototype.hasOwnProperty.call(map, key);
+    }
+
+    // 该磁贴的有效色板索引：磁贴选择 → 普通版默认项 → 共享键默认 → 0
+    function getTilePaletteIndex(tileIndex) {
+        const key = tileKeyOf(tileIndex);
+        if (hasTileKey(tilePaletteMap, key)) return tilePaletteMap[key];
+        if (key !== DEFAULT_TILE_KEY && hasTileKey(tilePaletteMap, DEFAULT_TILE_KEY)) {
+            return tilePaletteMap[DEFAULT_TILE_KEY];
+        }
+        // 旧用户的全局选择（含笔记本写的值）是所有人的初始默认。
+        return readLegacyPaletteIndex();
+    }
+
+    function persistTilePaletteMap() {
+        try {
+            localStorage.setItem(TILE_PALETTE_KEY, JSON.stringify(tilePaletteMap));
+        } catch (error) {
+            // 存储不可用（隐私模式/配额）时仅内存生效，不抛错。
+        }
+    }
+
+    function setTilePaletteIndex(tileIndex, index) {
+        tilePaletteMap[tileKeyOf(tileIndex)] = index;
+        persistTilePaletteMap();
+    }
+
+    // render() 知道 tileIndex，但它转调的 renderHeatmap 只拿到 containerId。
+    // 这里从容器 id 'chart-<n>' 反推磁贴身份，保证两个入口（render / 直接调用）一致。
+    function tileIndexFromContainer(containerId) {
+        const match = /^chart-(\d+)$/.exec(String(containerId || ''));
+        return match ? parseInt(match[1], 10) : null;
+    }
+
+    function resolveHeatmapPaletteIndex(options, containerId) {
+        let tileIndex = options && options.tileIndex !== undefined ? options.tileIndex : undefined;
+        if (tileIndex === undefined || tileIndex === null) tileIndex = tileIndexFromContainer(containerId);
+        return getTilePaletteIndex(tileIndex);
+    }
+
+    function mainChartPalette() {
+        return ['#B8321F', '#1A1714', '#6B6258', '#9C6B30', '#1F3A4D', '#D8CCB2'];
+    }
+
+    // 六套预设的名称与色值在普通版与笔记本里必须是同一份语义数据。
+    // 这里不再按主题重混颜色：用户选了「GitHub绿」，图表就必须是绿的。
+    function heatmapPresets() {
+        return heatmapPalettes;
+    }
+
+    // ---- 通用主题绘制（只负责文字/背景/边框/圆角/字体）----
+    // 唯一例外：heatmap 每个格子的 itemStyle.color 与逐格标签色是「用户选择的
+    // 数据色板」，paintMainChart 只做快照→walk→还原，绝不替换成主题色。
+    // 旧实现把 level 重映射到构成主义色，才出现「点 GitHub绿 出陶土色」。
+    function paintMainChart(option, C) {
+        if (!isMainChartTheme()) return option;
+        const palette = mainChartPalette();
+        const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif';
+        const paper = C.type === 'dark' ? '#16130F' : '#EFE7D6';
+        const walk = node => {
+            if (!node || typeof node !== 'object') return;
+            Object.keys(node).forEach(key => {
+                const value = node[key];
+                if (key === 'color' || key === 'backgroundColor' || key === 'borderColor' ||
+                    key === 'textBorderColor' || key === 'shadowColor') {
+                    node[key] = key === 'backgroundColor' ? paper :
+                        key === 'shadowColor' ? 'transparent' : C.title;
+                } else if (key === 'borderRadius' || key === 'shadowBlur' ||
+                    key === 'shadowOffsetX' || key === 'shadowOffsetY' || key === 'textBorderWidth') {
+                    node[key] = 0;
+                } else {
+                    if (key === 'textStyle' || key === 'subtextStyle' || key === 'axisLabel' ||
+                        key === 'nameTextStyle' || key === 'label' || key === 'dayLabel') {
+                        value.fontFamily = font;
+                    }
+                    walk(value);
+                }
+            });
+        };
+        // 热力图格子颜色 = 用户选择的数据色板，通用绘制不得改写；
+        // 逐格标签颜色/描边是按格子深浅算出的对比色，同样属于数据绘制。
+        // 先快照，walk 之后再还原，其余（字体/圆角/文字墨色）仍然统一。
+        const heatSeries = (option.series || []).find(series => series.type === 'heatmap');
+        const heatCellPaint = heatSeries ? (heatSeries.data || []).map(item => ({
+            color: item.itemStyle && item.itemStyle.color,
+            borderRadius: item.itemStyle && item.itemStyle.borderRadius,
+            labelColor: item.label && item.label.color,
+            labelBorderColor: item.label && item.label.textBorderColor,
+            labelBorderWidth: item.label && item.label.textBorderWidth
+        })) : null;
+        walk(option);
+        option.color = palette.slice();
+        option.textStyle = { ...(option.textStyle || {}), fontFamily: font, color: C.title };
+        if (option.tooltip) {
+            Object.assign(option.tooltip, {
+                backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, borderWidth: 1,
+                textStyle: { ...option.tooltip.textStyle, color: C.tooltipText, fontFamily: font },
+                extraCssText: 'border-radius:0;box-shadow:none;backdrop-filter:none;'
+            });
+            if (option.series && option.series[0].name === '保持率') {
+                const formatter = option.tooltip.formatter;
+                option.tooltip.formatter = function(params) {
+                    return formatter(params).replace(/color:#(?:52c41a|1890ff|fa8c16|f5222d)/g,
+                        'color:' + C.tooltipText);
+                };
+            }
+        }
+        (option.series || []).forEach((series, index) => {
+            const color = palette[index % palette.length];
+            if (series.type === 'heatmap') {
+                // 热力图的格子颜色属于「用户选择的数据色板」，通用绘制不再接管。
+                // 每个格子自带按等级算好的颜色；标签颜色/描边是逐格按对比度算的，
+                // walk() 会统一改成主题墨色，这里按原设计还原，保证浅格深字、
+                // 深格白字两边都读得清。
+                series.data.forEach((item, dataIndex) => {
+                    const saved = heatCellPaint ? heatCellPaint[dataIndex] : null;
+                    if (!saved) return;
+                    item.itemStyle = { ...(item.itemStyle || {}) };
+                    if (saved.color !== undefined) item.itemStyle.color = saved.color;
+                    if (saved.borderRadius !== undefined) item.itemStyle.borderRadius = saved.borderRadius;
+                    if (item.label) {
+                        item.label.color = saved.labelColor;
+                        item.label.textBorderColor = saved.labelBorderColor;
+                        item.label.textBorderWidth = saved.labelBorderWidth;
+                    }
+                });
+            } else {
+                series.itemStyle = { ...(series.itemStyle || {}),
+                    ...(series.type === 'pie' ? {} : { color }),
+                    borderColor: C.type === 'dark' ? '#ECE3CF' : '#1A1714', borderWidth: 1 };
+                if (series.lineStyle) Object.assign(series.lineStyle, { color,
+                    ...(C.type === 'dark' ? { shadowColor: '#ECE3CF', shadowBlur: 0, shadowOffsetY: 1 } : {}) });
+                if (series.areaStyle) series.areaStyle = { ...series.areaStyle, color, opacity: 0.08 };
+                if (series.markLine) series.markLine.lineStyle.color = C.title;
+                if (series.label) {
+                    const luminance = hex => {
+                        const rgb = [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+                            .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+                        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                    };
+                    const bg = luminance(color);
+                    const lightContrast = (luminance('#EFE7D6') + 0.05) / (bg + 0.05);
+                    const darkContrast = (bg + 0.05) / (luminance('#1A1714') + 0.05);
+                    series.label.color = series.label.position === 'inside' ?
+                        (lightContrast > darkContrast ? '#EFE7D6' : '#1A1714') : C.title;
+                }
+            }
+        });
+        return option;
     }
 
     // ---- 图表渲染函数 ----
@@ -279,8 +504,10 @@ const ChartManager = (function() {
 
         // 格子数据带颜色
         // 每个数据项单独指定格子颜色和数字颜色，保证深色格子上数字清晰可见
+        // 该磁贴自己的有效色板（普通版逐模块）；笔记本模式仍然走全局索引。
+        const paletteIndex = resolveHeatmapPaletteIndex(options, containerId);
+        const palette = heatmapPresets()[paletteIndex] || heatmapPresets()[0];
         const coloredData = result.data.map(([dateStr, count]) => {
-            const palette = heatmapPalettes[currentPaletteIndex] || heatmapPalettes[0];
             const color = getHeatColor(count, result.maxCount, C, palette);
             const darkTheme = C.type === 'dark';
             const ratio = count / Math.max(result.maxCount, 1);
@@ -381,7 +608,7 @@ const ChartManager = (function() {
             }]
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -494,7 +721,7 @@ const ChartManager = (function() {
             ]
         };
         
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -656,7 +883,7 @@ const ChartManager = (function() {
             ]
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -667,7 +894,7 @@ const ChartManager = (function() {
         
         if (!classificationData) {
             // 占位提示
-            chart.setOption({
+            chart.setOption(paintMainChart({
                 title: {
                     text: 'AI 单词分类',
                     subtext: '点击上方按钮，使用 AI 分析你的单词分类',
@@ -676,7 +903,7 @@ const ChartManager = (function() {
                     textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
                     subtextStyle: { fontSize: 11, color: C.subtext }
                 }
-            });
+            }, C));
             return chart;
         }
         
@@ -749,7 +976,7 @@ const ChartManager = (function() {
             ]
         };
         
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
     
@@ -760,7 +987,7 @@ const ChartManager = (function() {
         const chart = echarts.init(document.getElementById(containerId));
 
         if (!notepadWords || notepadWords.length === 0) {
-            chart.setOption({
+            chart.setOption(paintMainChart({
                 title: {
                     text: '词书单词进度',
                     subtext: '云词本里还没有单词，先添加一些单词到词书吧',
@@ -769,7 +996,7 @@ const ChartManager = (function() {
                     textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
                     subtextStyle: { fontSize: 11, color: C.subtext }
                 }
-            });
+            }, C));
             return chart;
         }
 
@@ -885,7 +1112,7 @@ const ChartManager = (function() {
             }))
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
 
@@ -994,7 +1221,7 @@ const ChartManager = (function() {
             ]
         };
 
-        chart.setOption(option);
+        chart.setOption(paintMainChart(option, C));
         return chart;
     }
 
@@ -1031,6 +1258,13 @@ const ChartManager = (function() {
         const containerId = 'chart-' + tileIndex;
         const container = document.getElementById(containerId);
         if (!container) return null;
+        // 隐藏容器（display:none、祖先 hidden、零尺寸）下不建图：ECharts 会拿到 0x0 画布。
+        // 这条覆盖 renderVisibleFromSelectors 之外的旁路入口（AI 分类完成、趋势/热力图
+        // 选择器、磁贴类型切换），它们不经过可见性筛选。
+        if (!container.offsetParent && !container.getClientRects().length) {
+            pendingVisibleRender = true;
+            return null;
+        }
         
         // 背单词磁贴：已加载时不重复渲染（避免自动刷新重载iframe）
         if (chartType === 'study-web' && container.querySelector('.study-web-iframe')) {
@@ -1067,7 +1301,11 @@ const ChartManager = (function() {
                 chart = renderRecommendationChart(containerId);
                 break;
             case 'study-web':
-                chart = StudyWeb.render(containerId);
+                chart = StudyWeb.render(containerId, {
+                    // 磁贴内的“退出背单词”把磁贴还原成一个普通图表。这只影响
+                    // 当前视图，不动学习记录、账号或云端状态。
+                    onExit: function() { exitStudyTile(tileIndex, container); }
+                });
                 break;
             case 'diary':
                 chart = (window.DiaryChart ? DiaryChart.render(containerId, options) : null);
@@ -1085,6 +1323,27 @@ const ChartManager = (function() {
         return chart;
     }
     
+    // 退出学习磁贴：先把磁贴切回一个普通图表类型，再重新渲染。
+    // 走 selector + applyChartToTile 的既有路径，让标题、图标、工具栏一起复原。
+    function exitStudyTile(tileIndex, container) {
+        var tile = document.querySelector('.tile[data-tile="' + tileIndex + '"]');
+        var selector = tile ? tile.querySelector('.chart-selector') : null;
+        var next = (typeof StudyWeb.fallbackChartFor === 'function' && StudyWeb.fallbackChartFor(container)) || 'heatmap';
+        if (selector) {
+            // 选择器里排除了 study-web 之外的第一个可选项，保证一定切到别的图表。
+            var option = Array.prototype.slice.call(selector.options).find(function(item) {
+                return item.value !== 'study-web';
+            });
+            next = option ? option.value : next;
+            selector.value = next;
+        }
+        if (tile && typeof LayoutManager !== 'undefined' && LayoutManager.applyChartToTile) {
+            LayoutManager.applyChartToTile(tile, next);
+        }
+        render(tileIndex, next, {});
+        return next;
+    }
+
     // 重新渲染所有可见图表
     function rerenderAll() {
         Object.keys(chartInstances).forEach(tileIndex => {
@@ -1171,6 +1430,7 @@ const ChartManager = (function() {
     function recCardHtml(r, isReviewed) {
         var level = ['low', 'mid', 'high'].includes(r.level) ? r.level : 'low';
         var color = /^#[a-f0-9]{3}(?:[a-f0-9]{3})?$/i.test(r.level_color || '') ? r.level_color : '#999';
+        if (isMainChartTheme()) color = getThemeColors().type === 'dark' ? '#E8634B' : '#B8321F';
         var score = Number.isFinite(Number(r.risk_score)) ? Number(r.risk_score) : 0;
         var cls = 'rec-card level-' + level + (isReviewed ? ' reviewed' : '');
         var meta = [];
@@ -1262,6 +1522,15 @@ const ChartManager = (function() {
     }
 
 function renderVisibleFromSelectors(skipAI) {
+        // 仪表盘被 hidden（陪伴模式）时没有布局盒：echarts.init 会拿到 0x0 画布，
+        // 既画不出东西，也会在退出后留下尺寸错误的实例。磁贴自身 display 仍是 flex，
+        // 所以必须查 #dashboard.hidden，不能只看 tile.style.display。
+        var dashboardEl = document.getElementById('dashboard');
+        if (dashboardEl && dashboardEl.hidden) {
+            pendingVisibleRender = true;
+            return;
+        }
+        pendingVisibleRender = false;
         document.querySelectorAll('.tile').forEach(function(tile) {
             if (tile.style.display === 'none') return;
             var tileIndex = parseInt(tile.dataset.tile);
@@ -1302,11 +1571,23 @@ function renderVisibleFromSelectors(skipAI) {
         Object.keys(chartInstances).forEach(k => delete chartInstances[k]);
     }
     
-    function getHeatmapPalettes() { return heatmapPalettes; }
-    function getPaletteIndex() { return currentPaletteIndex; }
-    function setPaletteIndex(idx) {
-        currentPaletteIndex = idx;
-        localStorage.setItem('heatmap_palette', String(idx));
+    function getHeatmapPalettes() { return heatmapPresets(); }
+    // 省略 tileIndex 时读全局默认（笔记本与无磁贴上下文）。
+    function getPaletteIndex(tileIndex) {
+        if (tileIndex === undefined || tileIndex === null) return currentPaletteIndex;
+        return getTilePaletteIndex(tileIndex);
+    }
+    function setPaletteIndex(idx, tileIndex) {
+        const index = normalizePaletteIndex(idx);
+        if (index === null) return;
+        currentPaletteIndex = index;
+        // 普通版（带磁贴身份）：只写专属键，各模块互不影响，共享键保持只读。
+        if (tileIndex !== undefined && tileIndex !== null) {
+            setTilePaletteIndex(tileIndex, index);
+            return;
+        }
+        // 笔记本 / 无磁贴上下文：保持原有单值持久化语义，完全不改。
+        localStorage.setItem(LEGACY_PALETTE_KEY, String(index));
     }
 
     return {

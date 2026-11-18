@@ -1,0 +1,744 @@
+/* Memo Superform - 近期词汇阅读 · 笔记本（Anon 的笔记本）视觉
+ *
+ * 纸面、粉蓝、手账感：暖白纸底、玫瑰粉强调、天蓝辅助、虚线分隔、
+ * 柔和圆角、轻投影、衬线标题。所有规则都以 html[data-ui-style="notebook"] 开头，
+ * 普通版不会命中；反之普通版的样式表也不会命中这里。
+ *
+ * 设计 token 来自 css/style-anon.css：
+ *   --rose #ff8899  --rose-deep #e8788a  --rose-soft #ffb7c5  --rose-pale #fff0f3
+ *   --sky #87ceeb  --sky-pale #eaf6fd  --bg #f6efe9  --paper #fffdfe
+ *   --ink #4a3728  --ink-mid #7a6650  --ink-light #a89880
+ *   --line #f0dfd9  --line-strong #e8cfc6
+ */
+
+html[data-ui-style="notebook"] .reading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 26px;
+    /* 遮罩带一点暖色，跟纸面主题协调，而不是冷灰 */
+    background: rgba(74, 55, 40, .34);
+    backdrop-filter: blur(2px);
+}
+
+/* 关键：hidden 必须能盖住上面的 display:flex，否则关不掉。 */
+html[data-ui-style="notebook"] .reading-overlay[hidden] { display: none; }
+
+html[data-ui-style="notebook"] .reading-root {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(1160px, 100%);
+    height: min(88vh, 900px);
+    min-height: 0;
+    background: var(--paper, #fffdfe);
+    border: 1px solid var(--line-strong, #e8cfc6);
+    border-radius: var(--radius, 16px);
+    box-shadow: 0 20px 52px rgba(74, 55, 40, .18), 0 2px 6px rgba(74, 55, 40, .06);
+    overflow: hidden;
+    color: var(--ink, #4a3728);
+    font-family: var(--sans, "Noto Sans SC", system-ui, sans-serif);
+    font-size: 14px;
+    line-height: 1.8;
+}
+
+/* 横向信纸纹理（和设置页纸面一套语言） */
+html[data-ui-style="notebook"] .reading-root::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+        linear-gradient(rgba(122, 102, 80, .032) 1px, transparent 1px);
+    background-size: 100% 27px, auto;
+    border-radius: inherit;
+}
+
+html[data-ui-style="notebook"] .reading-host {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ---------- 顶部条 ---------- */
+html[data-ui-style="notebook"] .reading-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 0 0 auto;
+    padding: 14px 22px 12px;
+    border-bottom: 1px dashed var(--line-strong, #e8cfc6);
+    background: linear-gradient(180deg, rgba(255, 240, 243, .62), rgba(255, 253, 254, .2));
+}
+
+html[data-ui-style="notebook"] .reading-title {
+    margin: 0;
+    font-family: var(--serif, "Noto Serif SC", Georgia, serif);
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    color: var(--ink, #4a3728);
+}
+
+html[data-ui-style="notebook"] .reading-subtitle {
+    font-size: 12px;
+    color: var(--ink-mid, #7a6650);
+}
+
+html[data-ui-style="notebook"] .reading-head-spacer { flex: 1 1 auto; }
+
+/* ---------- 按钮：手账贴纸感 ---------- */
+html[data-ui-style="notebook"] .reading-btn {
+    padding: 6px 15px;
+    border: 1px solid var(--line-strong, #e8cfc6);
+    border-radius: 10px;
+    background: var(--paper, #fffdfe);
+    color: var(--ink, #4a3728);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .16s ease, border-color .16s ease, transform .12s ease;
+}
+
+html[data-ui-style="notebook"] .reading-btn:hover:not(:disabled) {
+    background: var(--rose-pale, #fff0f3);
+    border-color: var(--rose-soft, #ffb7c5);
+}
+
+html[data-ui-style="notebook"] .reading-btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+html[data-ui-style="notebook"] .reading-btn:focus-visible {
+    outline: 2px solid var(--rose-deep, #e8788a);
+    outline-offset: 2px;
+}
+
+html[data-ui-style="notebook"] .reading-btn:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+html[data-ui-style="notebook"] .reading-btn-primary {
+    background: var(--rose, #ff8899);
+    border-color: var(--rose-deep, #e8788a);
+    color: #ffffff;
+    box-shadow: 0 2px 6px rgba(232, 120, 138, .28);
+}
+
+html[data-ui-style="notebook"] .reading-btn-primary:hover:not(:disabled) {
+    background: var(--rose-deep, #e8788a);
+    border-color: var(--rose-deep, #e8788a);
+}
+
+/* ---------- 滚动主体 ---------- */
+html[data-ui-style="notebook"] .reading-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 18px 22px 22px;
+}
+
+/* 纸卷滚动条 */
+html[data-ui-style="notebook"] .reading-body::-webkit-scrollbar { width: 8px; }
+html[data-ui-style="notebook"] .reading-body::-webkit-scrollbar-track { background: transparent; }
+html[data-ui-style="notebook"] .reading-body::-webkit-scrollbar-thumb {
+    background: var(--rose-soft, #ffb7c5);
+    border-radius: 99px;
+}
+
+/* ---------- 分区卡片：贴纸便签 ---------- */
+html[data-ui-style="notebook"] .reading-section {
+    margin-bottom: 16px;
+    padding: 15px 16px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, .82), rgba(255, 240, 243, .34));
+    border: 1px dashed var(--line-strong, #e8cfc6);
+    border-radius: 14px;
+}
+
+html[data-ui-style="notebook"] .reading-section-title {
+    margin: 0 0 10px;
+    font-family: var(--serif, "Noto Serif SC", Georgia, serif);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    color: var(--ink, #4a3728);
+}
+
+/* ---------- 时间范围：小圆贴 ---------- */
+html[data-ui-style="notebook"] .reading-ranges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+html[data-ui-style="notebook"] .reading-range {
+    padding: 5px 15px;
+    border: 1px solid var(--line-strong, #e8cfc6);
+    border-radius: 999px;
+    background: var(--paper, #fffdfe);
+    color: var(--ink-mid, #7a6650);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .16s ease, color .16s ease, border-color .16s ease;
+}
+
+html[data-ui-style="notebook"] .reading-range:hover {
+    background: var(--rose-pale, #fff0f3);
+}
+
+html[data-ui-style="notebook"] .reading-range[aria-pressed="true"] {
+    background: var(--rose, #ff8899);
+    border-color: var(--rose-deep, #e8788a);
+    color: #ffffff;
+    box-shadow: 0 2px 5px rgba(232, 120, 138, .28);
+}
+
+html[data-ui-style="notebook"] .reading-range:focus-visible {
+    outline: 2px solid var(--rose-deep, #e8788a);
+    outline-offset: 2px;
+}
+
+/* ---------- 元信息：便签格 ---------- */
+html[data-ui-style="notebook"] .reading-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+html[data-ui-style="notebook"] .reading-meta-item {
+    padding: 8px 11px;
+    background: rgba(255, 255, 255, .74);
+    border: 1px solid var(--line, #f0dfd9);
+    border-radius: 10px;
+}
+
+html[data-ui-style="notebook"] .reading-meta-label {
+    display: block;
+    font-size: 11px;
+    letter-spacing: .6px;
+    color: var(--ink-light, #a89880);
+    margin-bottom: 2px;
+}
+
+html[data-ui-style="notebook"] .reading-meta-value {
+    font-size: 13px;
+    color: var(--ink, #4a3728);
+    font-weight: 500;
+    word-break: break-word;
+}
+
+/* 状态色用小字深色版本，保证对比度：不用 --rose-deep 那种偏浅的粉 */
+html[data-ui-style="notebook"] .reading-meta-value[data-state="ok"] { color: #2f7d55; }
+html[data-ui-style="notebook"] .reading-meta-value[data-state="warn"] { color: #7d5f14; }
+html[data-ui-style="notebook"] .reading-meta-value[data-state="error"] { color: #a84460; }
+
+/* ---------- 提示块 ---------- */
+html[data-ui-style="notebook"] .reading-notice {
+    padding: 12px 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.75;
+    border: 1px dashed var(--line-strong, #e8cfc6);
+    background: rgba(255, 255, 255, .7);
+    color: var(--ink-mid, #7a6650);
+    margin-bottom: 14px;
+}
+
+html[data-ui-style="notebook"] .reading-notice[data-kind="warn"] {
+    background: #fdf6e8;
+    border-color: #e8d5a8;
+    color: #7d5f14;
+}
+
+html[data-ui-style="notebook"] .reading-notice[data-kind="error"] {
+    background: #fdeff3;
+    border-color: #f0c3d0;
+    color: #a84460;
+}
+
+html[data-ui-style="notebook"] .reading-notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+/* ---------- 候选词：贴纸 ---------- */
+html[data-ui-style="notebook"] .reading-words {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    max-height: 216px;
+    overflow-y: auto;
+    padding: 2px;
+}
+
+html[data-ui-style="notebook"] .reading-word {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border: 1px solid var(--line-strong, #e8cfc6);
+    border-radius: 999px;
+    background: var(--paper, #fffdfe);
+    font-size: 13px;
+    color: var(--ink-mid, #7a6650);
+    cursor: pointer;
+    user-select: none;
+    transition: background .14s ease, border-color .14s ease;
+}
+
+html[data-ui-style="notebook"] .reading-word:hover {
+    background: var(--rose-pale, #fff0f3);
+}
+
+html[data-ui-style="notebook"] .reading-word[aria-pressed="true"] {
+    background: var(--sky-pale, #eaf6fd);
+    border-color: var(--sky, #87ceeb);
+    color: #2c6178;
+}
+
+html[data-ui-style="notebook"] .reading-word:focus-within {
+    outline: 2px solid var(--rose-deep, #e8788a);
+    outline-offset: 1px;
+}
+
+html[data-ui-style="notebook"] .reading-word-count {
+    font-size: 12px;
+    color: var(--ink-light, #a89880);
+    margin-left: 4px;
+}
+
+/* ---------- 难度选择 ---------- */
+html[data-ui-style="notebook"] .reading-levels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+html[data-ui-style="notebook"] .reading-level {
+    flex: 1 1 200px;
+    padding: 13px 15px;
+    border: 1px dashed var(--line-strong, #e8cfc6);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .78);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    transition: background .16s ease, border-color .16s ease;
+}
+
+html[data-ui-style="notebook"] .reading-level:hover {
+    background: var(--rose-pale, #fff0f3);
+}
+
+html[data-ui-style="notebook"] .reading-level[aria-pressed="true"] {
+    border-style: solid;
+    border-color: var(--rose, #ff8899);
+    background: linear-gradient(180deg, rgba(255, 240, 243, .95), rgba(255, 255, 255, .8));
+    box-shadow: inset 0 0 0 1px var(--rose-soft, #ffb7c5);
+}
+
+html[data-ui-style="notebook"] .reading-level:focus-visible {
+    outline: 2px solid var(--rose-deep, #e8788a);
+    outline-offset: 2px;
+}
+
+html[data-ui-style="notebook"] .reading-level-name {
+    display: block;
+    font-family: var(--serif, "Noto Serif SC", Georgia, serif);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--ink, #4a3728);
+    margin-bottom: 2px;
+}
+
+html[data-ui-style="notebook"] .reading-level-hint {
+    font-size: 12px;
+    color: var(--ink-light, #a89880);
+}
+
+/* ---------- 进度 ---------- */
+html[data-ui-style="notebook"] .reading-progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--rose-pale, #fff0f3);
+    border: 1px dashed var(--rose-soft, #ffb7c5);
+    border-radius: 12px;
+    font-size: 13px;
+    color: var(--ink-mid, #7a6650);
+}
+
+html[data-ui-style="notebook"] .reading-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--rose-soft, #ffb7c5);
+    border-top-color: var(--rose-deep, #e8788a);
+    border-radius: 50%;
+    animation: reading-spin-nb .8s linear infinite;
+    flex: 0 0 auto;
+}
+
+@keyframes reading-spin-nb { to { transform: rotate(360deg); } }
+
+/* ---------- 作答布局 ---------- */
+html[data-ui-style="notebook"] .reading-practice {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+html[data-ui-style="notebook"] .reading-article-pane,
+html[data-ui-style="notebook"] .reading-question-pane {
+    min-width: 0;
+    background: var(--paper, #fffdfe);
+    border: 1px dashed var(--line-strong, #e8cfc6);
+    border-radius: var(--radius, 16px);
+    padding: 18px 20px;
+    box-shadow: 0 2px 8px rgba(74, 55, 40, .05);
+}
+
+html[data-ui-style="notebook"] .reading-article-title {
+    margin: 0 0 4px;
+    font-family: var(--serif, "Noto Serif SC", Georgia, serif);
+    font-size: 17px;
+    line-height: 1.5;
+    font-weight: 600;
+    letter-spacing: .6px;
+    color: var(--ink, #4a3728);
+}
+
+html[data-ui-style="notebook"] .reading-article-meta {
+    font-size: 12px;
+    color: var(--ink-light, #a89880);
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--line, #f0dfd9);
+}
+
+/* 正文用衬线，像印在纸上 */
+html[data-ui-style="notebook"] .reading-paragraph {
+    margin: 0 0 13px;
+    font-family: Georgia, "Times New Roman", var(--serif, serif);
+    font-size: 15px;
+    line-height: 1.95;
+    color: #3d2f22;
+}
+
+html[data-ui-style="notebook"] .reading-paragraph[data-highlight="true"] {
+    background: var(--rose-pale, #fff0f3);
+    box-shadow: 0 0 0 6px var(--rose-pale, #fff0f3);
+    border-radius: 2px;
+}
+
+/* ---------- 题目 ---------- */
+html[data-ui-style="notebook"] .reading-qbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--line, #f0dfd9);
+    font-size: 12px;
+    color: var(--ink-light, #a89880);
+}
+
+html[data-ui-style="notebook"] .reading-qbar-spacer { flex: 1 1 auto; }
+
+html[data-ui-style="notebook"] .reading-question {
+    margin-bottom: 18px;
+    padding-bottom: 16px;
+    border-bottom: 1px dashed var(--line, #f0dfd9);
+}
+
+html[data-ui-style="notebook"] .reading-question:last-child {
+    border-bottom: 0;
+    margin-bottom: 0;
+}
+
+html[data-ui-style="notebook"] .reading-stem {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink, #4a3728);
+    line-height: 1.75;
+}
+
+html[data-ui-style="notebook"] .reading-options {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+html[data-ui-style="notebook"] .reading-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 8px 12px;
+    border: 1px solid var(--line, #f0dfd9);
+    border-radius: 11px;
+    background: rgba(255, 255, 255, .72);
+    cursor: pointer;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: #443426;
+    transition: background .14s ease, border-color .14s ease;
+}
+
+html[data-ui-style="notebook"] .reading-option:hover {
+    background: var(--rose-pale, #fff0f3);
+    border-color: var(--rose-soft, #ffb7c5);
+}
+
+html[data-ui-style="notebook"] .reading-option input {
+    margin: 4px 0 0;
+    accent-color: var(--rose-deep, #e8788a);
+    flex: 0 0 auto;
+}
+
+html[data-ui-style="notebook"] .reading-option:focus-within {
+    outline: 2px solid var(--rose-deep, #e8788a);
+    outline-offset: 1px;
+}
+
+html[data-ui-style="notebook"] .reading-option[data-chosen="true"] {
+    background: var(--sky-pale, #eaf6fd);
+    border-color: var(--sky, #87ceeb);
+}
+
+html[data-ui-style="notebook"] .reading-option-key {
+    font-weight: 600;
+    color: var(--ink-light, #a89880);
+    flex: 0 0 auto;
+}
+
+html[data-ui-style="notebook"] .reading-option[data-chosen="true"] .reading-option-key {
+    color: #2c6178;
+}
+
+html[data-ui-style="notebook"] .reading-option[data-result="correct"] {
+    background: #e8f6ee;
+    border-color: #8fceac;
+}
+
+html[data-ui-style="notebook"] .reading-option[data-result="wrong"] {
+    background: #fdeff3;
+    border-color: #f0c3d0;
+}
+
+html[data-ui-style="notebook"] .reading-flagged {
+    font-size: 12px;
+    color: #7d5f14;
+}
+
+/* ---------- 提交条 ---------- */
+html[data-ui-style="notebook"] .reading-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--line, #f0dfd9);
+}
+
+html[data-ui-style="notebook"] .reading-actions-spacer { flex: 1 1 auto; }
+
+html[data-ui-style="notebook"] .reading-status-note {
+    font-size: 12.5px;
+    color: var(--ink-light, #a89880);
+}
+
+html[data-ui-style="notebook"] .reading-status-note[data-kind="warn"] { color: #7d5f14; }
+
+/* ---------- 解析 ---------- */
+html[data-ui-style="notebook"] .reading-result-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+html[data-ui-style="notebook"] .reading-score {
+    font-family: var(--serif, "Noto Serif SC", Georgia, serif);
+    font-size: 26px;
+    font-weight: 600;
+    color: #2f7d55;
+    letter-spacing: 1px;
+}
+
+html[data-ui-style="notebook"] .reading-score-sub {
+    font-size: 13px;
+    color: var(--ink-light, #a89880);
+}
+
+html[data-ui-style="notebook"] .reading-disclaimer {
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--ink-mid, #7a6650);
+    padding: 10px 13px;
+    background: var(--sky-pale, #eaf6fd);
+    border: 1px dashed var(--sky, #87ceeb);
+    border-radius: 11px;
+    margin-bottom: 16px;
+}
+
+html[data-ui-style="notebook"] .reading-explain {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, .74);
+    border: 1px dashed var(--line-strong, #e8cfc6);
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.8;
+}
+
+html[data-ui-style="notebook"] .reading-explain[hidden] { display: none; }
+
+html[data-ui-style="notebook"] .reading-explain-row {
+    margin-bottom: 8px;
+}
+
+html[data-ui-style="notebook"] .reading-explain-row:last-child { margin-bottom: 0; }
+
+html[data-ui-style="notebook"] .reading-explain-label {
+    display: inline-block;
+    min-width: 72px;
+    color: var(--ink-light, #a89880);
+    font-size: 12px;
+}
+
+/* 定位句：像被荧光笔划过的纸条 */
+html[data-ui-style="notebook"] .reading-evidence {
+    padding: 8px 11px;
+    margin: 4px 0 0;
+    background: var(--rose-pale, #fff0f3);
+    border-left: 3px solid var(--rose-soft, #ffb7c5);
+    border-radius: 0 9px 9px 0;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 13px;
+    color: #4a3728;
+    cursor: pointer;
+}
+
+html[data-ui-style="notebook"] .reading-evidence:hover {
+    background: #ffe6ec;
+}
+
+html[data-ui-style="notebook"] .reading-evidence:focus-visible {
+    outline: 2px solid var(--rose-deep, #e8788a);
+    outline-offset: 2px;
+}
+
+html[data-ui-style="notebook"] .reading-distractor {
+    display: block;
+    margin: 2px 0;
+    font-size: 12.5px;
+    color: var(--ink-mid, #7a6650);
+}
+
+html[data-ui-style="notebook"] .reading-distractor-key {
+    font-weight: 600;
+    margin-right: 4px;
+}
+
+/* ---------- 目标词复习 ---------- */
+html[data-ui-style="notebook"] .reading-vocab-review {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 11px;
+}
+
+html[data-ui-style="notebook"] .reading-vocab-card {
+    padding: 11px 13px;
+    background: rgba(255, 255, 255, .78);
+    border: 1px solid var(--line, #f0dfd9);
+    border-radius: 12px;
+}
+
+html[data-ui-style="notebook"] .reading-vocab-word {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    color: var(--ink, #4a3728);
+    font-size: 14px;
+}
+
+html[data-ui-style="notebook"] .reading-vocab-surface {
+    font-size: 12px;
+    color: var(--ink-light, #a89880);
+    margin-left: 6px;
+}
+
+html[data-ui-style="notebook"] .reading-vocab-context {
+    font-size: 12.5px;
+    color: var(--ink-mid, #7a6650);
+    margin-top: 6px;
+    line-height: 1.75;
+}
+
+/* ---------- 窄窗口切换 ---------- */
+html[data-ui-style="notebook"] .reading-switch {
+    display: none;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+@media (max-width: 900px) {
+    html[data-ui-style="notebook"] .reading-practice {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    html[data-ui-style="notebook"] .reading-switch {
+        display: flex;
+    }
+
+    html[data-ui-style="notebook"] .reading-practice[data-pane="article"] .reading-question-pane { display: none; }
+    html[data-ui-style="notebook"] .reading-practice[data-pane="questions"] .reading-article-pane { display: none; }
+
+    html[data-ui-style="notebook"] .reading-root {
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+    }
+
+    html[data-ui-style="notebook"] .reading-overlay { padding: 0; }
+}
+
+@media (max-width: 560px) {
+    html[data-ui-style="notebook"] .reading-body { padding: 12px; }
+    html[data-ui-style="notebook"] .reading-section { padding: 12px; }
+    html[data-ui-style="notebook"] .reading-article-pane,
+    html[data-ui-style="notebook"] .reading-question-pane { padding: 14px; }
+    html[data-ui-style="notebook"] .reading-title { letter-spacing: 1px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html[data-ui-style="notebook"] .reading-spinner { animation: none; }
+    html[data-ui-style="notebook"] .reading-btn,
+    html[data-ui-style="notebook"] .reading-option,
+    html[data-ui-style="notebook"] .reading-word,
+    html[data-ui-style="notebook"] .reading-range { transition: none; }
+}

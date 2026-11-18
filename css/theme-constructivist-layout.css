@@ -1,0 +1,58 @@
+/* SA5: preserve topbar control geometry and all protected settings. */
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) > body:not(#companionStudy, #companionStudy *) {
+background:var(--c-paper);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .topbar:not(#companionStudy, #companionStudy *) {
+background:var(--c-paper);border-bottom-color:var(--c-ink);box-shadow:none;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) .topbar h1:not(#companionStudy, #companionStudy *) {
+letter-spacing:0;
+background:none;background-clip:border-box;-webkit-background-clip:border-box;-webkit-text-fill-color:currentColor;color:var(--c-ink);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard:not(#companionStudy, #companionStudy *) {
+width:calc(100% - 96px);max-width:var(--content-max);margin-inline:auto;
+padding:var(--sky-top) 0 var(--floor-bottom);gap:var(--sp-5);
+grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:minmax(0,1fr);background:var(--c-paper);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard > .tile:not(#companionStudy, #companionStudy *) {
+min-width:0;min-height:0;grid-column:span 12;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard:where(.layout-split2,.layout-grid4) > .tile:not(#companionStudy, #companionStudy *) {
+grid-column:span 6;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard.layout-split3 > .tile:not(#companionStudy, #companionStudy *) {
+grid-column:span 4;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard.layout-grid4:not(#companionStudy, #companionStudy *) {
+grid-template-rows:repeat(2,minmax(0,1fr));
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard :where(.tile-header,.tile-actions,.tile-body):not(#companionStudy, #companionStudy *) {
+min-width:0;min-height:0;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard .tile-title:not(#companionStudy, #companionStudy *) {
+font-family:var(--f-display);letter-spacing:0;overflow-wrap:anywhere;
+}
+@media (min-width:1440px) {
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard:not(#companionStudy, #companionStudy *) {
+width:calc(100% - 128px);
+}
+}
+@media (max-width:1100px) {
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard:not(.layout-single):not(#companionStudy, #companionStudy *) {
+overflow-y:auto;grid-auto-rows:minmax(320px,1fr);grid-template-rows:none;
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard:not(.layout-single) > .tile:not(#companionStudy, #companionStudy *) {
+grid-column:span 12;
+}
+}
+@media (max-width:768px) {
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard:not(#companionStudy, #companionStudy *) {
+width:calc(100% - 32px);padding-top:var(--sp-6);padding-bottom:var(--sp-5);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard .tile-header:not(#companionStudy, #companionStudy *) {
+flex-wrap:wrap;gap:var(--sp-2);
+}
+html[data-ui-style="standard"]:has(> body:not(.companion-mode)) #dashboard .tile-actions:not(#companionStudy, #companionStudy *) {
+margin-left:auto;max-width:100%;
+}
+}

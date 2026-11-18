@@ -29,6 +29,15 @@
         css('css/style-anon.css', 'memo-dashboard-theme');
         css('css/study-web-notebook.css', 'memo-study-theme');
         css('css/live2d-companion.css', 'memo-live2d-companion');
+        css('css/companion-progress.css', 'memo-companion-progress');
+        css('css/companion-settlement.css', 'memo-companion-settlement');
+        css('css/article-vocab.css', 'memo-article-vocab');
+        // 笔记本设置区：分类目录样式。规则全部以 html[data-ui-style="notebook"]
+        // 开头并限定在 .settings-panel 内，普通版不会命中。
+        css('css/notebook-settings.css', 'memo-notebook-settings');
+        // 近期词汇阅读：笔记本纸面视觉。规则以 html[data-ui-style="notebook"] 开头
+        // 并限定在 .reading-root 内，普通版不会命中。
+        css('css/reading-practice-notebook.css', 'memo-reading-notebook');
     } else {
         css('css/style.css', 'memo-dashboard-theme');
         css('css/ai-toolbar.css', 'memo-ai-toolbar');
@@ -36,6 +45,18 @@
         css('css/study-web.css', 'memo-study-core');
         css('css/study-web-standard.css', 'memo-study-theme');
         css('css/live2d-companion.css', 'memo-live2d-companion');
+        // 陪伴进度与结算演出在两套主题下都要可用：样式表自身用 CSS 变量
+        // 覆盖主题差异，因此这里两套分支都加载同一组文件。
+        css('css/companion-progress.css', 'memo-companion-progress');
+        css('css/companion-settlement.css', 'memo-companion-settlement');
+        css('css/article-vocab.css', 'memo-article-vocab');
+        // 普通版视觉层：一套安静的个人自习桌面。全部选择器都以
+        // html[data-ui-style="standard"] 开头，笔记本主题不会命中。
+        css('css/standard-tokens.css', 'memo-standard-tokens');
+        css('css/standard-shell.css', 'memo-standard-shell');
+        css('css/standard-settings.css', 'memo-standard-settings');
+        // 近期词汇阅读：普通版视觉。规则以 html[data-ui-style="standard"] 开头。
+        css('css/reading-practice.css', 'memo-reading-standard');
     }
 
     function applyBody(body) {

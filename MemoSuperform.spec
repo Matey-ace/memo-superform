@@ -11,6 +11,15 @@ a = Analysis(
     # 可执行文件自包含，避免产出启动后只能使用浏览器模式的残缺包。
     hiddenimports=[
         'windows_tray',
+        # 陪伴升级模块全部在函数内惰性导入（避免启动时就加载 TTS/Live2D 栈）。
+        # PyInstaller 的静态分析能跟到这类导入，但显式列出可防止后续把某处改成
+        # 动态导入后，源码模式可用而 EXE 里缺失该模块。
+        'companion_runtime',
+        'companion_memory',
+        'companion_sessions',
+        'companion_progress_sources',
+        'role_package_service',
+        'ai_memory_injection',
         'webview',
         'webview.guilib',
         'webview.platforms.winforms',

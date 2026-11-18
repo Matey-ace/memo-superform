@@ -5,6 +5,9 @@
 
 const StudyWeb = (function() {
     var preferredStudyContainer = null;
+    // 全屏/退出等父级容器需要关闭本磁贴内的浮层，但没有直接引用内部闭包。
+    // 用 WeakMap 保存每个容器的收起函数，避免把内部状态暴露成公开 API。
+    var studyOverlayClosers = new WeakMap();
     var defaultShortcuts = StudyShortcuts.defaultShortcuts;
     var loadShortcuts = StudyShortcuts.loadShortcuts;
     var saveShortcuts = StudyShortcuts.saveShortcuts;
@@ -17,6 +20,13 @@ const StudyWeb = (function() {
     var findShortcutAction = StudyShortcuts.findShortcutAction;
     var updateShortcutLabels = StudyShortcuts.updateShortcutLabels;
     var sendKey = StudyShortcuts.sendKey;
+
+    // 笔记本主题是冻结的：普通版新增的退出按钮、浮层确认框等都不能渗进去。
+    // 这里统一提供一个判断，供本文件各处使用（渲染闭包里也会用到）。
+    function isStandardTheme() {
+        return !(typeof window !== 'undefined' && window.MemoUIStyle && window.MemoUIStyle.isNotebook) &&
+            !(typeof document !== 'undefined' && document.body && document.body.classList.contains('notebook-mode'));
+    }
 
     function render(containerId, options) {
         var container = document.getElementById(containerId);
@@ -45,6 +55,16 @@ const StudyWeb = (function() {
                 encodeURIComponent('https://tc-apis.maimemo.com/webstudy/app');
         }
 
+        // 学习磁贴过去只能靠上方图表下拉框离开，用户找不到出口，因此普通版给出
+        // 明确可见的“退出背单词”。笔记本主题是冻结的，不能因为它多出一个控件，
+        // 所以这段只在普通版注入；笔记本仍用原来的下拉框离开。
+        var exitBar = isStandardTheme()
+            ? '<div class="study-web-exitbar">' +
+                  '<button class="study-web-exit" type="button" data-exit-study aria-label="退出背单词，返回仪表盘">' +
+                      '← 退出背单词</button>' +
+              '</div>'
+            : '';
+
         container.innerHTML =
             '<div class="study-web-container">' +
                 '<iframe class="study-web-iframe" title="墨墨背单词学习与账号登录" src="' + iframeSrc + '" ' +
@@ -53,6 +73,7 @@ const StudyWeb = (function() {
                     '<div class="spinner"></div>' +
                     '<p>' + (token ? '正在加载墨墨背单词...' : '正在跳转登录页...') + '</p>' +
                 '</div>' +
+                exitBar +
                 '<div class="study-web-actions" hidden aria-label="快捷判断">' +
                     '<button class="study-web-btn know" data-action="FAMILIAR" data-key="1" title="快捷键 1：认识">' +
                         '\u8ba4\u8bc6<span class="key-hint">1</span></button>' +
@@ -85,6 +106,7 @@ const StudyWeb = (function() {
         var contentEditorPanel = container.querySelector('.study-content-editor');
         var shortcutToggle = container.querySelector('.study-shortcut-toggle');
         var shortcutPanel = container.querySelector('.study-shortcut-panel');
+        var exitButton = container.querySelector('.study-web-exit');
         var studyControlsActive = false;
         var studyAddWordOverlayOpen = false;
         var studyHomeFallbackPending = false;
@@ -248,7 +270,9 @@ const StudyWeb = (function() {
 
         window.addEventListener('message', handleStudyNavigationMessage);
 
-        iframe.addEventListener('load', function() {
+        // 具名处理函数：销毁路径要显式摘掉它，否则退出陪伴模式后 iframe 每次
+        // 导航仍会触发一套已经无主的界面同步。
+        function handleIframeLoad() {
             var url = '';
             try { url = iframe.contentWindow.location.href; } catch(e) {}
             studyHomeFallbackPending = false;
@@ -263,7 +287,8 @@ const StudyWeb = (function() {
                 // 登录页已经可交互：必须撤掉全屏 loading，不能用提示层盖住表单。
                 setStudyControlsActive(false);
             }
-        });
+        }
+        iframe.addEventListener('load', handleIframeLoad);
 
         // 绑定按钮事件。
         updateShortcutLabels(container, shortcutMap);
@@ -281,6 +306,7 @@ const StudyWeb = (function() {
                 });
             });
             var shortcutCloseTimer = 0;
+            var shortcutOpenFrame = 0;
             shortcutToggle.setAttribute('aria-expanded', 'false');
             shortcutPanel.setAttribute('aria-hidden', 'true');
             function setShortcutPanelOpen(open) {
@@ -289,8 +315,9 @@ const StudyWeb = (function() {
                 shortcutPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
                 if (open) {
                     shortcutPanel.hidden = false;
-                    requestAnimationFrame(function() {
-                        requestAnimationFrame(function() { shortcutPanel.classList.add('is-open'); });
+                    cancelAnimationFrame(shortcutOpenFrame);
+                    shortcutOpenFrame = requestAnimationFrame(function() {
+                        shortcutOpenFrame = requestAnimationFrame(function() { shortcutPanel.classList.add('is-open'); });
                     });
                     return;
                 }
@@ -333,6 +360,31 @@ const StudyWeb = (function() {
                 });
                 updateShortcutLabels(container, shortcutMap);
             });
+        // 退出学习磁贴：先关掉本磁贴内的浮层（内容编辑器/快捷键），再交给上层
+        // 决定回到哪个图表。onExit 不提供时至少把浮层收起并提示，绝不留死路。
+        // 返回 false 表示用户取消了退出（存在未保存草稿且拒绝丢弃）。
+        function closeOverlays() {
+            // 笔记本主题保持原来的行为：不弹确认框，只收起浮层。
+            if (isStandardTheme() && typeof contentEditor.hasUnsavedDraft === 'function' && contentEditor.hasUnsavedDraft()) {
+                var discard = typeof window.confirm === 'function'
+                    ? window.confirm('单词内容还有未保存的修改，离开会丢失。确定离开吗？')
+                    : true;
+                if (!discard) return false;
+            }
+            if (typeof contentEditor.setOpen === 'function') contentEditor.setOpen(false);
+            setShortcutPanelOpen(false);
+            return true;
+        }
+        studyOverlayClosers.set(container, closeOverlays);
+        // 只有普通版注入了退出按钮；笔记本主题下 exitButton 为 null。
+        var exitHandler = null;
+        if (exitButton) {
+            exitHandler = function() {
+                if (!closeOverlays()) return;
+                if (typeof options.onExit === 'function') options.onExit();
+            };
+            exitButton.addEventListener('click', exitHandler);
+        }
         document.addEventListener('keydown', handleShortcutKeydown);
         function selectStudyOwner() { preferredStudyContainer = container; }
         container.addEventListener('pointerdown', selectStudyOwner);
@@ -340,10 +392,15 @@ const StudyWeb = (function() {
 
         return createMockInstance(container, function() {
             document.removeEventListener('keydown', handleShortcutKeydown);
+            iframe.removeEventListener('load', handleIframeLoad);
             container.removeEventListener('pointerdown', selectStudyOwner);
             container.removeEventListener('focusin', selectStudyOwner);
             if (preferredStudyContainer === container) preferredStudyContainer = null;
             window.removeEventListener('message', handleStudyNavigationMessage);
+            clearTimeout(shortcutCloseTimer);
+            cancelAnimationFrame(shortcutOpenFrame);
+            studyOverlayClosers.delete(container);
+            if (exitButton && exitHandler) exitButton.removeEventListener('click', exitHandler);
             contentEditor.dispose();
             stopStudyScreenWatch();
             reportStudyEvent({ type: 'screen', active: false });
@@ -415,5 +472,16 @@ const StudyWeb = (function() {
         };
     }
 
-    return { render: render };
+    // 父级（全屏弹层）退出前调用：先收起磁贴内浮层，再销毁实例。
+    // 返回 false 表示存在未保存草稿且用户选择留下，调用方应中止关闭。
+    function closeOverlays(container) {
+        var closer = container && studyOverlayClosers.get(container);
+        if (typeof closer !== 'function') return true;
+        return closer() !== false;
+    }
+    // 用户在磁贴里点“退出背单词”时的默认行为：把磁贴换成它进入前的图表类型。
+    function fallbackChartFor(container) {
+        return (window.MemoDashboard && MemoDashboard.chartConfig) ? 'heatmap' : null;
+    }
+    return { render: render, closeOverlays: closeOverlays, fallbackChartFor: fallbackChartFor };
 })();

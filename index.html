@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <link rel="icon" type="image/png" href="img/icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="img/icon-32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="img/icon-180.png">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memo Superform - 墨墨数据磁贴</title>
@@ -37,6 +38,8 @@
                     <svg viewBox="0 0 24 24" width="18" height="18"><rect x="3" y="3" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="3" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>
                 </button>
             </div>
+            <button id="articleVocabBtn" type="button" class="article-vocab-btn" title="粘贴文章，自动精选值得学的词并加入墨墨学习列表">从文章选词</button>
+            <button id="recentReadingBtn" type="button" class="article-vocab-btn" title="用最近学过的词生成一篇四六级仔细阅读练习">近期词汇阅读</button>
             <button id="companionModeBtn" type="button" class="companion-mode-btn" title="左侧背词、右侧 Live2D 陪伴">✦ 陪伴学习</button>
         </div>
         <div class="topbar-right">
@@ -198,7 +201,7 @@
                     <span id="companionModelName" class="companion-model-name">尚未选择模型</span>
                     <span id="companionBirthdayBadge" class="companion-birthday-badge" hidden>9.06 Birthday</span>
                     <canvas id="companionLive2DCanvas" aria-label="Live2D 角色"></canvas>
-                    <div id="companionGifFallback" class="companion-gif-fallback"><img src="img/gifs/anon-think.gif" alt="角色陪伴备用图"></div>
+                    <div id="companionGifFallback" class="companion-gif-fallback"><img data-deferred-src="img/gifs/anon-think.gif" alt="角色陪伴备用图"></div>
                 </div>
                 <div class="companion-dialogue">
                     <div id="companionMood" class="companion-mood">待机</div>
@@ -240,7 +243,9 @@
                         <button id="maimemoConnectBtn" class="test-btn" type="button">连接墨墨账号</button>
                         <button id="maimemoReconnectBtn" class="test-btn" type="button" style="display:none">重新授权</button>
                         <button id="maimemoDisconnectBtn" class="danger-btn" type="button" style="display:none">断开连接</button>
+                        <button id="maimemoRetryBtn" class="test-btn" type="button" hidden data-standard-only>重新检测</button>
                     </div>
+                    <p id="maimemoConnectReason" class="settings-state-note" role="note" hidden data-standard-only></p>
                     <p class="hint">一键授权使用墨墨开放平台；访问令牌只保存在此 Windows 用户的加密凭据中。</p>
                     <details class="setting-item">
                         <summary>高级连接方式：手动 Token</summary>
@@ -580,12 +585,27 @@
     <script src="js/study-web.js?v=20260825-unified-ui"></script>
     <script src="js/live2d-companion.js?v=20260829-v078-hidden-worker-preload"></script>
     <script src="js/study-sync-ui.js?v=20260827-global-fix"></script>
+    <script src="js/study-event-bridge.js?v=20261116-companion"></script>
+    <script src="js/companion-progress.js?v=20261116-companion"></script>
+    <script src="js/companion-settlement.js?v=20261116-companion"></script>
+    <script src="js/article-vocab.js?v=20261116-article-vocab"></script>
+    <script src="js/article-vocab-wire.js?v=20261116-article-vocab"></script>
     <script>
         if (window.MemoUIStyle.isNotebook) {
             document.write('<script src="js/diary.js?v=20260825-unified-ui"><\/script><script src="js/gif-icons.js?v=20260825-unified-ui"><\/script>');
         }
     </script>
+    <!-- 主题专用适配层：两个设置导航模块各自早退，同一时刻只有一个生效。 -->
+    <script src="js/standard-companion-guard.js?v=20261117-standard-guard"></script>
+    <script src="js/standard-settings-nav.js?v=20261117-standard-settings"></script>
+    <script src="js/notebook-settings-nav.js?v=20261117-notebook-settings"></script>
     <script src="js/app-update.js?v=20260830-v078-app-update"></script>
     <script src="js/app.js?v=20260830-v078-app-update"></script>
+    <!-- 近期词汇阅读：业务层 + 界面层。两套主题共用同一份结构与逻辑，
+         差异只在样式表（见 js/ui-style.js 两个分支）。 -->
+    <script src="js/recent-vocab.js?v=20261118-reading"></script>
+    <script src="js/reading-practice.js?v=20261118-reading"></script>
+    <script src="js/reading-practice-ui.js?v=20261118-reading"></script>
+    <script src="js/reading-practice-wire.js?v=20261118-reading"></script>
 </body>
 </html>

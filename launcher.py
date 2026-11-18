@@ -193,6 +193,31 @@ class _DesktopTtsPackBridge:
         except Exception as exc:
             return {"error": self._public_error(exc, selected_path)}
 
+    def choose_role_packages(self):
+        """原生多选角色包 ZIP，返回受控 ``source_refs`` 供检查接口使用。
+
+        与浏览器上传的区别：桌面端能拿到本机路径，因此这里把选中的文件复制进
+        ``role_packages/incoming``，只返回**受控目录内**的引用。网页端永远拿不到
+        任意本机路径，也无法诱导服务端读取目录外的文件。
+        """
+        if not self._is_local_index():
+            raise RuntimeError("角色包原生导入只能从本地设置页发起")
+        if self._window is None:
+            raise RuntimeError("桌面窗口尚未就绪")
+        selected = self._window.create_file_dialog(
+            self._webview.FileDialog.OPEN,
+            allow_multiple=True,
+            file_types=("角色包 ZIP (*.zip)",),
+        )
+        if not selected:
+            return {"cancelled": True, "source_refs": []}
+        try:
+            import role_package_service
+            return {"cancelled": False,
+                    "source_refs": role_package_service.stage_local_files(list(selected))}
+        except Exception as exc:
+            return {"error": self._public_error(exc)}
+
     def _queue_pending_drop(self, local_path):
         """暂存原生拖放路径，等待网页确认丢弃未保存的角色编辑。"""
         if not str(local_path).lower().endswith(".zip"):
@@ -675,19 +700,285 @@ def forward_maimemo_oauth_callback(callback_url, port=None, timeout=0.9):
         return False
 
 
-def find_running_app_url(timeout=0.35):
-    """寻找已启动的 Memo 服务；用于重复启动网页模式时重新打开页面。"""
-    for port in (8888, 8889, 8890, 3000, 5000):
-        api_url = "http://127.0.0.1:%d/api/app/current-mode" % port
+# 健康检查要求的静态资源：只查"页面是否真能打开"，不做全量清单。
+HEALTH_PATHS = ("/index.html", "/js/api.js", "/css/style.css")
+# 首页最小合理字节数：拦截空响应或错误占位页被当成健康。
+HEALTH_MIN_HTML = 2000
+
+
+def probe_instance_health(port, timeout=1.2):
+    """真正判定某端口上的实例是否可用。
+
+    判定项（必须全部满足）：
+      1. 身份接口可读，且 mode 合法、带 data_dir；
+      2. 首页 200 且内容长度合理（不是空壳/错误页）；
+      3. 关键静态资源 200 且非空。
+
+    状态接口 200 **不能**代表实例可用 —— "进程活着、端口开着、页面 404"
+    正是启动后 404 的那种半死状态，必须靠首页与静态资源来识别。
+    """
+    base = "http://127.0.0.1:%d" % port
+    try:
+        with urllib.request.urlopen(base + "/api/app/current-mode", timeout=timeout) as response:
+            if response.status != 200:
+                return None
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if payload.get("mode") not in ("web", "desktop") or "data_dir" not in payload:
+        return None
+
+    try:
+        with urllib.request.urlopen(base + "/index.html", timeout=timeout) as response:
+            if response.status != 200:
+                return None
+            html = response.read()
+    except (OSError, ValueError):
+        return None
+    if len(html) < HEALTH_MIN_HTML:
+        return None
+    lowered = html[:400].lower()
+    if b"<html" not in lowered and b"<!doctype" not in lowered:
+        return None
+
+    for path in HEALTH_PATHS[1:]:
         try:
-            with urllib.request.urlopen(api_url, timeout=timeout) as response:
-                if response.status != 200:
-                    continue
-                payload = json.loads(response.read().decode("utf-8"))
-            if payload.get("mode") in ("web", "desktop") and "data_dir" in payload:
-                return "http://localhost:%d/index.html" % port
+            with urllib.request.urlopen(base + path, timeout=timeout) as response:
+                if response.status != 200 or not response.read(64):
+                    return None
         except (OSError, ValueError):
+            return None
+
+    return {"port": port, "url": base + "/index.html", "identity": payload}
+
+
+# PyInstaller 一次性解压目录的清理。
+#
+# onefile 正常退出时会自己删掉 _MEIPASS；但被强杀/崩溃时目录会留下
+# （实测 %TEMP% 下堆到 14 个，其中有的已缺 index.html）。这些残骸既占空间，
+# 也是"看起来有实例、其实页面打不开"的来源之一。
+#
+# 清理必须非常保守：
+#   · 只删"长得就是我们自己的页面载荷"的目录（index.html + js/api.js + js/app.js 齐全）；
+#   · 只删不在本次运行中的目录（跳过当前 sys._MEIPASS）；
+#   · 先尝试独占重命名，抢不到就当它被占用，直接跳过，绝不递归强删别人正在用的目录；
+#   · 不按进程名杀进程，只清文件。
+#
+# 判定必须看"内容确实属于本应用"，不能只看文件名：另一个用 PyInstaller 打包的
+# 程序完全可能也有 index.html / js/api.js / js/app.js，光凭文件名会误删别人的
+# 目录（已用 fake 目录实测复现过）。所以这里要求两道都过：
+#   1. 三个关键文件齐全；
+#   2. index.html 里出现本应用独有的标识串。
+# 任一不满足就当"不是我们的"，保持不动。
+RUNTIME_MARKER = ".memo-runtime"
+_RUNTIME_REQUIRED = ("index.html", os.path.join("js", "api.js"), os.path.join("js", "app.js"))
+# 出现在 index.html 里的独有标识（title 与 meta 都会命中）。
+_RUNTIME_SIGNATURES = ("Memo Superform", "memo-superform")
+_SIGNATURE_SCAN_BYTES = 64 * 1024
+
+
+def _looks_like_our_runtime(path):
+    """目录内容是否确实属于本应用。
+
+    只认"关键文件齐全 + index.html 含本应用标识"。仅凭文件名匹配会误删
+    其它 PyInstaller 程序的解压目录，因此必须再看内容。
+    """
+    for rel in _RUNTIME_REQUIRED:
+        if not os.path.isfile(os.path.join(path, rel)):
+            return False
+    index_path = os.path.join(path, "index.html")
+    try:
+        with open(index_path, "rb") as handle:
+            head = handle.read(_SIGNATURE_SCAN_BYTES)
+    except OSError:
+        return False
+    try:
+        text = head.decode("utf-8", "ignore")
+    except Exception:
+        return False
+    lowered = text.lower()
+    return any(sig.lower() in lowered for sig in _RUNTIME_SIGNATURES)
+
+
+def cleanup_stale_runtime_dirs(temp_root=None, max_age_seconds=0):
+    """清理自己遗留的 PyInstaller 解压目录；返回实际删除的数量。
+
+    只处理 `_MEI*` 且内容确实是本应用页面载荷的目录。删除失败（被占用）
+    一律跳过，不升级为强制删除。
+    """
+    if os.name != "nt":
+        return 0
+    root = temp_root or os.environ.get("TEMP") or os.environ.get("TMP")
+    if not root or not os.path.isdir(root):
+        return 0
+    current = os.path.realpath(getattr(sys, "_MEIPASS", "") or "")
+    removed = 0
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return 0
+    for entry in entries:
+        name = entry.name
+        if not name.startswith("_MEI"):
             continue
+        try:
+            if not entry.is_dir():
+                continue
+            full = os.path.realpath(entry.path)
+        except OSError:
+            continue
+        if current and full == current:
+            continue  # 自己正在用，绝不动
+        if not _looks_like_our_runtime(full):
+            continue  # 不是我们的载荷（可能是别的 PyInstaller 程序）
+        if max_age_seconds > 0:
+            try:
+                if time.time() - entry.stat().st_mtime < max_age_seconds:
+                    continue
+            except OSError:
+                continue
+        # 用重命名抢独占：目录被进程占用时 Windows 会拒绝，我们就跳过。
+        claim = full + ".memo-stale"
+        try:
+            os.rename(full, claim)
+        except OSError:
+            continue
+        try:
+            shutil.rmtree(claim, ignore_errors=True)
+            removed += 1
+            _log("removed stale runtime dir %s" % name)
+        except Exception:
+            pass
+    return removed
+
+
+def find_running_health():
+    """返回当前健康实例的探测结果；没有则 None。"""
+    for port in (8888, 8889, 8890, 3000, 5000):
+        health = probe_instance_health(port)
+        if health:
+            return health
+    return None
+
+
+def _lock_owner_pid(port=None):
+    """查出占着单实例锁端口的进程 PID；查不到返回 None。
+
+    不用进程名匹配——那会连带命中用户自己的其它同名程序。这里只看
+    "谁真的监听在 15191 这个本应用私有端口上"，是本应用独有的指纹。
+    """
+    if port is None:
+        port = _instance_port()
+    try:
+        import subprocess
+        completed = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:
+        _log("lock owner lookup failed: %r" % (exc,))
+        return None
+    needle = ":%d" % int(port)
+    for line in (completed.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        local, state, pid = parts[1], parts[3], parts[4]
+        if local.endswith(needle) and state.upper() == "LISTENING":
+            try:
+                return int(pid)
+            except ValueError:
+                continue
+    return None
+
+
+def _pid_is_our_executable(pid):
+    """确认该 PID 的可执行文件就是本应用，避免误伤占用同端口的其它程序。"""
+    try:
+        import subprocess
+        completed = subprocess.run(
+            ["tasklist", "/FI", "PID eq %d" % int(pid), "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:
+        _log("pid identity check failed: %r" % (exc,))
+        return False
+    out = (completed.stdout or "").strip()
+    if not out or out.upper().startswith("INFO:"):
+        return False
+    image = out.split(",")[0].strip('"').strip().lower()
+    ours = os.path.basename(sys.executable).lower()
+    if image == ours:
+        return True
+    # 冻结包内 sys.executable 就是 MemoSuperform.exe；源码模式下是 python.exe，
+    # 此时无法仅凭映像名确认，保守地不杀。
+    return image in ("memosuperform.exe",) and ours.endswith(".exe")
+
+
+def recover_stale_instance(mode, callback_url=None, wait_seconds=6.0):
+    """锁被占但没有健康实例时的恢复。
+
+    分两步，都不按进程名批量杀：
+      1. 先给那台实例一点时间自愈（它可能正在冷启动，或 resolve_web_dir 已修好）；
+      2. 仍然不健康，就**精确定位**占着本应用私有锁端口的那个进程，
+         确认映像确实是本应用后只结束它，然后自己重新启动。
+    这样用户不会看到"请手动去任务管理器"的死胡同。
+    """
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        time.sleep(0.6)
+        health = find_running_health()
+        if health:
+            _log("stale instance recovered by itself: %s" % health["url"])
+            if callback_url and forward_maimemo_oauth_callback(callback_url):
+                return True
+            if activate_existing_instance():
+                if mode == "web":
+                    reopen_running_web_app()
+                return True
+
+    _log("stale instance did not recover within %ss; attempting targeted termination" % wait_seconds)
+    pid = _lock_owner_pid()
+    if pid is None:
+        _log("no lock owner found; cannot recover precisely")
+        return False
+    if pid == os.getpid():
+        _log("lock owner is this very process; refusing to self-terminate")
+        return False
+    if not _pid_is_our_executable(pid):
+        _log("lock owner pid %s is not our executable; refusing to terminate" % pid)
+        return False
+    try:
+        import subprocess
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        _log("terminated stale instance pid %s" % pid)
+    except Exception as exc:
+        _log("targeted termination failed: %r" % (exc,))
+        return False
+
+    # 等锁真正释放，再确认端口空出来。
+    deadline = time.time() + 8.0
+    while time.time() < deadline:
+        time.sleep(0.4)
+        if _lock_owner_pid() is None:
+            _log("lock port released after termination")
+            return "restart"
+    _log("lock port still held after termination")
+    return False
+
+
+def find_running_app_url(timeout=0.35):
+    """寻找**健康**的已启动实例；半死实例不算（否则会把用户带回 404 页面）。"""
+    for port in (8888, 8889, 8890, 3000, 5000):
+        health = probe_instance_health(port, timeout=max(timeout, 1.2))
+        if health:
+            return health["url"].replace("127.0.0.1", "localhost")
     return None
 
 
@@ -1491,11 +1782,32 @@ def verify_build(report_path):
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
             base = "http://127.0.0.1:%s" % httpd.server_address[1]
             try:
-                for path in ("/", "/index-anon.html", "/js/api.js", "/js/study-content-editor.js", "/css/style.css", "/css/diary.css", "/vendor/echarts.min.js", "/img/icon.ico", "/api/maimemo-auth/status"):
+                # 普通版的样式层与新增模块也必须随包发布：这些文件缺失时页面
+                # 仍会“能打开”，只是悄悄退回旧外观，冻结包检查要能抓住这种情况。
+                for path in ("/", "/index-anon.html", "/js/api.js", "/js/study-content-editor.js", "/css/style.css", "/css/diary.css", "/vendor/echarts.min.js", "/img/icon.ico", "/api/maimemo-auth/status",
+                             "/css/standard-tokens.css", "/css/standard-shell.css", "/css/standard-settings.css",
+                             "/js/standard-settings-nav.js", "/js/standard-companion-guard.js",
+                             # 笔记本设置分类目录：缺任一文件时分类页会悄悄退回长页，
+                             # 因此在冻结包里必须能取到。
+                             "/css/notebook-settings.css", "/js/notebook-settings-nav.js",
+                             # 近期词汇阅读：入口按钮在 index.html 里，缺任一脚本/样式时
+                             # 按钮会照常显示但点了没反应，属于"能打开但功能静默失效"，
+                             # 因此必须逐个确认能取到。
+                             "/js/recent-vocab.js", "/js/reading-practice.js",
+                             "/js/reading-practice-ui.js", "/js/reading-practice-wire.js",
+                             "/css/reading-practice.css", "/css/reading-practice-notebook.css"):
                     with urllib.request.urlopen(base + path, timeout=10) as response:
                         if response.status != 200 or not response.read():
                             raise RuntimeError("打包资源校验失败: " + path)
                     report["checks"].append("http:" + path)
+                # 首页必须真的能渲染出页面，而不只是"文件存在"：这正是启动 404
+                # 的形态（状态接口 200、页面 404）。
+                with urllib.request.urlopen(base + "/index.html", timeout=10) as response:
+                    page = response.read()
+                if response.status != 200 or len(page) < 2000 or b"<html" not in page[:400].lower():
+                    raise RuntimeError("打包首页无法正常返回")
+                report["checks"].append("http:index.html-renders")
+
                 backup = server.db.create_database_backup()
                 if not os.path.isfile(backup):
                     raise RuntimeError("打包备份校验失败")
@@ -1561,17 +1873,65 @@ def main(argv=None):
 
     guard = acquire_single_instance()
     if guard is None:
-        if callback_url and forward_maimemo_oauth_callback(callback_url):
-            _log("maimemo OAuth callback forwarded to existing instance")
+        health = find_running_health()
+        if health is None:
+            # 锁被占但没有健康实例：这是"残留/半死实例"。
+            # 绝不继续激活那个坏页面 —— 要么明确恢复，要么明确报错。
+            _log("instance lock held but no healthy instance detected")
+            recovered = recover_stale_instance(mode, callback_url)
+            if recovered == "restart":
+                # 残留实例已被精确结束、锁已释放：本进程原本因为拿不到锁而
+                # 放弃启动，现在重新走一遍启动流程（此时应当能拿到锁）。
+                _log("stale instance cleared; restarting launcher flow")
+                guard = acquire_single_instance()
+                if guard is None:
+                    _log("lock still unavailable after cleanup")
+                    show_message(
+                        "Memo Superform",
+                        "检测到 Memo Superform 的残留实例并已尝试清理，但运行锁仍被占用。\n\n"
+                        "请稍等几秒再试；如果反复出现，重启电脑可彻底释放端口。")
+                    return 1
+                # 关键：拿到锁之后必须**离开**"锁被占"这段分支，直接进入正常启动。
+                # 否则会继续往下走 health["url"]（此时 health 是 None）而抛异常，
+                # 表现就是"恢复成功但程序卡死、端口没起来"。
+                _log("guard re-acquired; proceeding with normal startup")
+            elif recovered:
+                return 0
+            else:
+                show_message(
+                    "Memo Superform",
+                    "检测到 Memo Superform 的残留实例：它仍占着运行锁，但页面无法打开（启动后 404）。\n\n"
+                    "程序无法确认该进程属于本应用，因此没有自动结束它——"
+                    "这是为了避免误杀你自己的其它程序。\n\n"
+                    "请在任务管理器中结束残留的 MemoSuperform 进程后重试。")
+                return 1
+        else:
+            # 只有"确实存在健康实例"时才走"交给已有实例"这条路。
+            # 必须放在 else 里：早期版本让 recovered=="restart" 落到这里，
+            # health 是 None，health["url"] 直接抛异常，表现为
+            # "恢复成功但程序卡死、端口没起来"。
+            if callback_url and forward_maimemo_oauth_callback(callback_url):
+                _log("maimemo OAuth callback forwarded to existing instance")
+                return 0
+            if activate_existing_instance():
+                _log("existing instance activation requested (healthy: %s)" % health["url"])
+                if mode == "web":
+                    reopen_running_web_app()
+                return 0
+            if mode == "web" and reopen_running_web_app():
+                return 0
+            show_message("Memo Superform", "Memo Superform 已经在运行中。")
             return 0
-        if activate_existing_instance():
-            _log("existing instance activation requested")
-            return 0
-        if mode == "web" and reopen_running_web_app():
-            return 0
-        show_message("Memo Superform", "Memo Superform 已经在运行中。")
-        return 0
     _set_guard(guard)
+    # 拿到锁之后清一次自己遗留的解压目录：此刻确定没有别的 Memo 实例在启动，
+    # 不会误删并发启动的目录。只清"内容是本应用页面载荷"且非本次 _MEIPASS 的，
+    # 占用中的（重命名抢不到）一律跳过。失败不影响启动。
+    try:
+        removed = cleanup_stale_runtime_dirs()
+        if removed:
+            _log("cleaned %d stale runtime dir(s)" % removed)
+    except Exception as exc:
+        _log("stale runtime cleanup skipped: %r" % (exc,))
     _log("launcher main: mode=%s" % mode)
 
     if mode == "desktop":

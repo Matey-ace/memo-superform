@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -26,6 +27,9 @@ _DATA_DIR = os.environ.get("MEMO_DATA_DIR") or os.path.join(BASE_DIR, "data")
 _DB_PATH = os.path.join(_DATA_DIR, "memo-superform.db")
 _INIT_LOCK = threading.RLock()
 _INITIALISED = False
+# WAL 保活连接：见 keep_warm() 的说明。默认不启用，避免影响临时数据目录清理。
+_WARM_LOCK = threading.Lock()
+_WARM_CONN: Optional[sqlite3.Connection] = None
 
 
 def beijing_today() -> date:
@@ -87,6 +91,58 @@ def get_connection(autocommit: bool = True) -> sqlite3.Connection:
     return _connect(autocommit=autocommit)
 
 
+def keep_warm(enabled: bool = True) -> None:
+    """长驻服务可选地保持一条连接，避免 WAL 文件被反复删除重建。
+
+    实测依据（Windows + WAL，1k/10k/50k 合成库）：最后一个连接关闭时 SQLite 会删除
+    ``-wal`` / ``-shm``；下一次新建连接的首次查询需要重建它们，固定开销约 60 ms
+    （与记录数无关），保持长驻连接后降到约 2 ms。仪表盘每次读取会依次打开写/读/读
+    等多条连接，因此该固定开销在每个请求上被重复支付。
+
+    只有长期运行的服务（server/app 启动路径）应调用它；普通调用方和单元测试保持
+    关闭，因为持有连接会占用文件句柄，妨碍临时数据目录的清理。
+    """
+    global _WARM_CONN
+    with _WARM_LOCK:
+        if not enabled:
+            _close_warm()
+            return
+        if _WARM_CONN is not None:
+            return
+        if not _INITIALISED:
+            init_db()
+        conn = _connect(autocommit=True)
+        try:
+            # 只读探针：确保 -wal/-shm 已建立，且自身不产生任何写入。
+            conn.execute("SELECT 1").fetchone()
+        except Exception:
+            conn.close()
+            raise
+        _WARM_CONN = conn
+
+
+def close_warm() -> None:
+    """关闭保活连接（切换数据目录或退出服务时调用）。"""
+    with _WARM_LOCK:
+        _close_warm()
+
+
+def _close_warm() -> None:
+    global _WARM_CONN
+    if _WARM_CONN is None:
+        return
+    try:
+        _WARM_CONN.close()
+    except Exception:
+        pass
+    _WARM_CONN = None
+
+
+# 解释器退出时显式释放保活连接，使“启用—释放”成对可验证。这里的异常已被吞掉，
+# 因此不会因退出阶段的线程状态影响退出码。
+atexit.register(_close_warm)
+
+
 def init_db(data_dir: Optional[str] = None) -> str:
     """初始化或迁移可写 SQLite 数据库，并返回其路径。"""
     global _DATA_DIR, _DB_PATH, _INITIALISED
@@ -94,6 +150,8 @@ def init_db(data_dir: Optional[str] = None) -> str:
         if data_dir:
             resolved = os.path.abspath(data_dir)
             if resolved != os.path.abspath(_DATA_DIR):
+                # 切换数据目录前先释放保活连接，避免旧库的文件句柄被继续持有。
+                _close_warm()
                 _DATA_DIR = resolved
                 _DB_PATH = os.path.join(_DATA_DIR, "memo-superform.db")
                 _INITIALISED = False
@@ -767,6 +825,170 @@ def try_import_legacy_sqlserver(profile_id: Any = None) -> dict[str, Any]:
             source.close()
     except Exception as exc:
         return {"status": "unavailable", "error": str(exc)}
+
+
+# ===================== 陪伴升级：共享数据访问层 =====================
+# 契约 v1。业务模块（companion_memory / companion_sessions / companion_progress_sources /
+# role_package_service）只调用这里的函数，不自建连接、不直接拼 companion_* SQL。
+# 所有写路径经 _write_connection()（BEGIN IMMEDIATE）串行提交。
+
+def companion_account_state(profile_pk: int) -> dict[str, Any]:
+    """读取（必要时创建）账号代次控制行。"""
+    with _write_connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO companion_account_state(profile_pk,data_epoch,account_epoch,updated_at) VALUES(?,1,1,?)",
+                     (int(profile_pk), _utc_now()))
+        row = conn.execute("""SELECT profile_pk,data_epoch,account_epoch,updated_at
+            FROM companion_account_state WHERE profile_pk=?""", (int(profile_pk),)).fetchone()
+    return {"profile_pk": int(row[0]), "data_epoch": int(row[1]),
+            "account_epoch": int(row[2]), "updated_at": str(row[3])}
+
+
+def companion_bump_data_epoch(profile_pk: int) -> int:
+    """推进账号代次，使既有会话/片段/结算/记忆全部失效。返回新代次。"""
+    companion_account_state(profile_pk)
+    with _write_connection() as conn:
+        conn.execute("UPDATE companion_account_state SET data_epoch=data_epoch+1,updated_at=? WHERE profile_pk=?",
+                     (_utc_now(), int(profile_pk)))
+        row = conn.execute("SELECT data_epoch FROM companion_account_state WHERE profile_pk=?",
+                           (int(profile_pk),)).fetchone()
+    return int(row[0])
+
+
+# account_epoch 与 data_epoch 是两道**独立**的屏障：data_epoch 表示“学习数据被重置”，
+# account_epoch 表示“这个账号的身份归属变了（切号/重授权）”。二者混用会让切号时的
+# 清空误删另一个账号重建后的数据，因此记忆行单独记录 account_epoch。
+_ACCOUNT_EPOCH_DEFAULT = 1
+
+
+def companion_account_epoch(profile_pk: int) -> int:
+    """读取账号身份代次（与 data_epoch 独立）。"""
+    companion_account_state(profile_pk)
+    rows = companion_query(
+        "SELECT account_epoch FROM companion_account_state WHERE profile_pk=?", (int(profile_pk),))
+    if rows and rows[0].get("account_epoch") is not None:
+        return int(rows[0]["account_epoch"])
+    return _ACCOUNT_EPOCH_DEFAULT
+
+
+def companion_bump_account_epoch(profile_pk: int) -> int:
+    """推进账号身份代次。切号/重授权后，旧代次的记忆与票据一律不可见。"""
+    companion_account_state(profile_pk)
+    with _write_connection() as conn:
+        conn.execute("""UPDATE companion_account_state
+            SET account_epoch=COALESCE(account_epoch,1)+1, updated_at=? WHERE profile_pk=?""",
+                     (_utc_now(), int(profile_pk)))
+        row = conn.execute("SELECT account_epoch FROM companion_account_state WHERE profile_pk=?",
+                           (int(profile_pk),)).fetchone()
+    return int(row[0] or _ACCOUNT_EPOCH_DEFAULT)
+
+
+def companion_role_epoch(profile_pk: int, role_id: str) -> dict[str, Any]:
+    """读取（必要时创建）角色级记忆代次。"""
+    role_id = str(role_id or "")
+    with _write_connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO companion_role_state(profile_pk,role_id,role_epoch,updated_at) VALUES(?,?,1,?)",
+                     (int(profile_pk), role_id, _utc_now()))
+        row = conn.execute("SELECT role_epoch FROM companion_role_state WHERE profile_pk=? AND role_id=?",
+                           (int(profile_pk), role_id)).fetchone()
+    return {"role_id": role_id, "role_epoch": int(row[0])}
+
+
+def companion_bump_role_epoch(profile_pk: int, role_id: str) -> int:
+    companion_role_epoch(profile_pk, role_id)
+    with _write_connection() as conn:
+        conn.execute("UPDATE companion_role_state SET role_epoch=role_epoch+1,updated_at=? WHERE profile_pk=? AND role_id=?",
+                     (_utc_now(), int(profile_pk), str(role_id or "")))
+        row = conn.execute("SELECT role_epoch FROM companion_role_state WHERE profile_pk=? AND role_id=?",
+                           (int(profile_pk), str(role_id or ""))).fetchone()
+    return int(row[0])
+
+
+def companion_transaction():
+    """暴露事务上下文给业务模块，避免它们重新实现 BEGIN IMMEDIATE。"""
+    return _write_connection()
+
+
+def companion_query_with(conn, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+    """在调用方已有的事务连接内查询，使多步写入可以真正原子提交。"""
+    return rows_to_dicts(conn.execute(sql, tuple(params)))
+
+
+def companion_execute_with(conn, sql: str, params: Sequence[Any] = ()) -> dict[str, Any]:
+    """在调用方已有的事务连接内写入（不额外提交）。"""
+    cursor = conn.execute(sql, tuple(params))
+    return {"rowcount": int(cursor.rowcount or 0), "lastrowid": cursor.lastrowid}
+
+
+def companion_epochs_readonly(profile_pk: int, role_id: str = "") -> dict[str, int]:
+    """**只读**读取三道代次，缺行时返回默认 1，绝不写入。
+
+    为什么单独提供：写事务（``BEGIN IMMEDIATE``）内部不能再开第二个写事务，
+    而 SQLite 会直接报 ``database is locked``。任何已经在事务里的代码都需要这条
+    只读路径。控制行的创建由 ``companion_account_state`` / ``companion_role_epoch``
+    在事务外完成（``companion_runtime.account_context`` 与结算入口都会先调用）。
+    """
+    pk = int(profile_pk)
+    state = companion_query(
+        "SELECT data_epoch,account_epoch FROM companion_account_state WHERE profile_pk=?", (pk,))
+    role = companion_query(
+        "SELECT role_epoch FROM companion_role_state WHERE profile_pk=? AND role_id=?",
+        (pk, str(role_id or "")))
+    return {
+        "data_epoch": max(1, int((state[0] if state else {}).get("data_epoch") or 1)),
+        "account_epoch": max(1, int((state[0] if state else {}).get("account_epoch") or 1)),
+        "role_epoch": max(1, int((role[0] if role else {}).get("role_epoch") or 1)),
+    }
+
+
+def companion_ensure_epochs(profile_pk: int, role_id: str = "") -> dict[str, int]:
+    """确保控制行存在后返回三道代次。只在事务外调用。"""
+    companion_account_state(profile_pk)
+    companion_role_epoch(profile_pk, role_id)
+    return companion_epochs_readonly(profile_pk, role_id)
+
+
+def companion_query(sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
+    """只读查询：返回 dict 列表。调用方必须传完整 SQL（含 companion_* 表名）。"""
+    conn = get_connection()
+    try:
+        return rows_to_dicts(conn.execute(sql, tuple(params)))
+    finally:
+        conn.close()
+
+
+def companion_execute(sql: str, params: Sequence[Any] = ()) -> dict[str, Any]:
+    """单条写入。返回受影响行数与最后插入 rowid。"""
+    with _write_connection() as conn:
+        cursor = conn.execute(sql, tuple(params))
+        return {"rowcount": int(cursor.rowcount or 0), "lastrowid": cursor.lastrowid}
+
+
+def companion_purge_learning_data(profile_pk: int) -> dict[str, int]:
+    """清空陪伴功能派生事实并推进 data_epoch。
+
+    与 ``delete_profile_learning_data`` 分开：后者清墨墨同步派生表但保留代次，
+    本函数只在用户明确选择“删除本机学习数据（含陪伴记录）”时推进代次。
+    记忆 outbox 与派生记忆一并失效，主动偏好由记忆清理界面单独表达。
+    """
+    tables = (
+        "companion_outbox", "companion_rewards", "companion_settlements",
+        "companion_activity_leases", "companion_events", "companion_role_segments",
+        "companion_sessions", "companion_plan_snapshots", "companion_context_tickets",
+    )
+    deleted: dict[str, int] = {}
+    new_epoch = companion_bump_data_epoch(profile_pk)
+    with _write_connection() as conn:
+        for table in tables:
+            cursor = conn.execute("DELETE FROM " + table + " WHERE profile_pk=?", (int(profile_pk),))
+            deleted[table] = max(0, int(cursor.rowcount or 0))
+        # 派生记忆按新代次整体失效；主动偏好（无来源片段）保留并重绑定。
+        cursor = conn.execute("""DELETE FROM companion_memories
+            WHERE profile_pk=? AND (source_session_id IS NOT NULL OR source_segment_id IS NOT NULL)""",
+                              (int(profile_pk),))
+        deleted["companion_memories_derived"] = max(0, int(cursor.rowcount or 0))
+        conn.execute("UPDATE companion_memories SET data_epoch=? WHERE profile_pk=?", (new_epoch, int(profile_pk)))
+    deleted["data_epoch"] = new_epoch
+    return deleted
 
 
 def _parse_date(value: Any) -> Optional[date]:

@@ -50,3 +50,161 @@ html.memo-standard.memo-dark #memo-tts-exit:hover { background:#26344b; color:#b
 @media (prefers-reduced-motion: reduce) {
     html.memo-standard #memo-tts-exit { transition:none; }
 }
+
+/* SA-6: main-only visual skin. Tokens: paper/ink/vermilion from section 6.
+   Existing rules above remain byte-identical. No sizes, placement, spacing,
+   display, visibility, pointer-events or button order are changed below.
+   Selector evidence: maimemo-notebook.css and study-web.js, recorded in sa6-study.md.
+   Insets draw the double frame without changing the upstream border box. */
+html.memo-standard.memo-main-redesign {
+    --c-paper:#EFE7D6; --c-paper-2:#E5DBC6; --c-paper-3:#D8CCB2;
+    --c-ink:#1A1714; --c-ink-2:#3D3731; --c-ink-3:#6B6258;
+    --c-vermilion:#B8321F; --c-vermilion-2:#8E2416; --c-vermilion-bg:#F3D9CF;
+    --c-rule-soft:rgba(26,23,20,0.22);
+    --f-serif:Georgia,"Noto Serif SC","Source Han Serif SC","Songti SC",SimSun,serif;
+    --f-body:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    --text-color-primary:var(--c-ink); --text-color-secondary:var(--c-ink-2);
+    --text-color-title:var(--c-ink); --bg-color-primary:var(--c-paper);
+    --bg-color-secondary:var(--c-paper-2); --bg-color-review:var(--c-paper);
+    --bg-color-group-line:var(--c-paper-3); --divider-color:var(--c-rule-soft);
+    --border-color:var(--c-rule-soft); --popup-background-color:var(--c-paper);
+    --white:var(--c-paper);
+}
+html.memo-standard.memo-main-redesign.memo-dark {
+    --c-paper:#16130F; --c-paper-2:#211D18; --c-paper-3:#2E2922;
+    --c-ink:#ECE3CF; --c-ink-2:#C9BFAA; --c-ink-3:#968C7A;
+    --c-vermilion:#D2452E; --c-vermilion-2:#E8634B; --c-vermilion-bg:#3A1A13;
+    --c-rule-soft:rgba(236,227,207,0.20);
+}
+html.memo-standard.memo-main-redesign,
+html.memo-standard.memo-main-redesign body {
+    background:var(--c-paper) !important; /* Override upstream canvas and memo-dark background. */
+    color:var(--c-ink) !important; /* Override upstream text palette. */
+    font-family:var(--f-body);
+}
+html.memo-standard.memo-main-redesign .rev-root,
+html.memo-standard.memo-main-redesign .rev-scroller,
+html.memo-standard.memo-main-redesign .rev-bottom {
+    background:var(--c-paper) !important; /* Override upstream review canvas only. */
+    color:var(--c-ink) !important; /* Preserve detected review roots while changing palette. */
+}
+html.memo-standard.memo-main-redesign .rev-top {
+    background:var(--c-paper) !important; /* Replace upstream and memo-dark gradient. */
+    color:var(--c-ink) !important; /* Override word-card text palette. */
+    border-color:var(--c-ink);
+    border-radius:0;
+    box-shadow:inset 0 0 0 3px var(--c-paper),inset 0 0 0 4px var(--c-ink);
+}
+html.memo-standard.memo-main-redesign .rev-top .spelling,
+html.memo-standard.memo-main-redesign .phrase-spelling,
+html.memo-standard.memo-main-redesign .phrase-word,
+html.memo-standard.memo-main-redesign .rev-word {
+    font-family:var(--f-serif);
+    color:var(--c-ink) !important; /* Keep word size and interaction area, override only text paint. */
+}
+html.memo-standard.memo-main-redesign .rev-top .phonetic,
+html.memo-standard.memo-main-redesign .spelling-hint,
+html.memo-standard.memo-main-redesign .phrase-interpretation {
+    color:var(--c-ink-2) !important; /* Override upstream secondary text and memo-dark hint. */
+}
+html.memo-standard.memo-main-redesign .interp-ctn,
+html.memo-standard.memo-main-redesign .rev-content-container,
+html.memo-standard.memo-main-redesign .phrase-phrase {
+    background-color:var(--c-paper);
+    color:var(--c-ink) !important; /* Override upstream definition/example text. */
+    border-color:var(--c-rule-soft);
+    border-radius:0;
+}
+html.memo-standard.memo-main-redesign .rev-content-header {
+    color:var(--c-ink) !important; /* Override memo-dark section heading. */
+    border-bottom-color:var(--c-ink) !important; /* Recolor existing separator, no width change. */
+    font-family:var(--f-serif);
+}
+html.memo-standard.memo-main-redesign .phrase-root {
+    border-bottom-color:var(--c-rule-soft);
+}
+html.memo-standard.memo-main-redesign .phrase-hl {
+    color:var(--c-vermilion-2) !important; /* Readable emphasis in both modes, unlike dark primary red. */
+    text-decoration-color:var(--c-vermilion-2);
+}
+html.memo-standard.memo-main-redesign .phrase-play-btn {
+    color:var(--c-ink-2) !important; /* Override memo-dark play control text. */
+    border-color:var(--c-ink-2) !important; /* Preserve existing play control dimensions. */
+    background-color:var(--c-paper);
+}
+html.memo-standard.memo-main-redesign .verify-input {
+    color:var(--c-ink) !important; /* Override memo-dark spelling input color. */
+    background:var(--c-paper) !important; /* Remove upstream input fill without resizing it. */
+    caret-color:var(--c-vermilion-2) !important; /* Override memo-dark caret. */
+    border-color:var(--c-ink);
+    border-radius:0;
+}
+html.memo-standard.memo-main-redesign .rev-resp-btns > *,
+html.memo-standard.memo-main-redesign .rev-bottom .ask-spelling > * {
+    color:var(--c-ink) !important; /* Preserve all native answer actions, their order and hit areas. */
+    background:var(--c-paper-2) !important; /* Secondary ink/paper buttons; no semantic guessing by index. */
+    border-color:var(--c-ink) !important; /* Recolor only existing native borders. */
+    border-radius:0;
+    box-shadow:none;
+}
+html.memo-standard.memo-main-redesign .memo-word-popup,
+html.memo-standard.memo-main-redesign .taro-modal__content,
+html.memo-standard.memo-main-redesign .taro-modal__inner,
+html.memo-standard.memo-main-redesign .taro-model__bd,
+html.memo-standard.memo-main-redesign .taroify-dialog,
+html.memo-standard.memo-main-redesign .taroify-popup--center {
+    color:var(--c-ink) !important; /* Override upstream/native modal foreground. */
+    background:var(--c-paper) !important; /* Override upstream/native modal fill. */
+    border-color:var(--c-ink);
+    border-radius:0;
+    box-shadow:inset 0 0 0 3px var(--c-paper),inset 0 0 0 4px var(--c-ink);
+}
+html.memo-standard.memo-main-redesign .taro-modal__mask {
+    background-color:rgba(26,23,20,0.55) !important; /* Override existing memo-dark modal mask. */
+}
+html.memo-standard.memo-main-redesign #taro-navigation-bar.taro-navigation-bar-show,
+html.memo-standard.memo-main-redesign #taro-navigation-bar .taro-navigation-bar-back,
+html.memo-standard.memo-main-redesign #taro-navigation-bar .taro-navigation-bar-home,
+html.memo-standard.memo-main-redesign #memo-tts-exit {
+    color:var(--c-ink) !important; /* Override preserved native navigation foreground. */
+    background:var(--c-paper) !important; /* Override preserved native navigation fill. */
+    border-color:var(--c-ink);
+    border-radius:0;
+    box-shadow:none;
+}
+html.memo-standard.memo-main-redesign #memo-tts-exit:hover {
+    color:var(--c-paper) !important; /* Override main-theme normal navigation foreground for readable hover. */
+    background:var(--c-vermilion-2) !important; /* Readable main-theme hover over preserved old hover fill. */
+}
+html.memo-standard.memo-main-redesign :focus-visible {
+    outline:2px solid var(--c-vermilion-2);
+    outline-offset:3px;
+}
+
+/* SA-8 round 1: neutralize preserved legacy effects only inside the main skin. */
+html.memo-standard.memo-main-redesign #memo-tts-exit {
+    backdrop-filter:none;
+    transition:none;
+}
+html.memo-standard.memo-main-redesign #memo-tts-exit:hover,
+html.memo-standard.memo-main-redesign #memo-tts-exit:active {
+    transform:none;
+}
+html.memo-standard.memo-main-redesign #memo-tts-exit:focus-visible {
+    outline:2px solid var(--c-vermilion-2);
+    outline-offset:3px;
+}
+/* Match the original navigation modes; preserve their functional display rules. */
+html.memo-standard.memo-main-redesign #taro-navigation-bar.memo-navigation-back-fallback>.taro-navigation-bar-back,
+html.memo-standard.memo-main-redesign #taro-navigation-bar.taro-navigation-bar-back-icon>.taro-navigation-bar-back,
+html.memo-standard.memo-main-redesign #taro-navigation-bar.taro-navigation-bar-home-icon>.taro-navigation-bar-home {
+    color:var(--c-ink) !important; /* Override the preserved dark navigation foreground at equal specificity. */
+    background:var(--c-paper) !important; /* Override the preserved dark navigation background at equal specificity. */
+    border-color:var(--c-ink);
+}
+html.memo-standard.memo-main-redesign #taro-navigation-bar.memo-navigation-back-fallback>.taro-navigation-bar-back:hover,
+html.memo-standard.memo-main-redesign #taro-navigation-bar.taro-navigation-bar-back-icon>.taro-navigation-bar-back:hover,
+html.memo-standard.memo-main-redesign #taro-navigation-bar.taro-navigation-bar-home-icon>.taro-navigation-bar-home:hover {
+    color:var(--c-paper) !important; /* Override the preserved blue hover foreground. */
+    background:var(--c-vermilion-2) !important; /* Override the preserved blue hover background with readable red. */
+}

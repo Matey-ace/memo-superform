@@ -1,0 +1,554 @@
+/* ==========================================
+   普通版外壳：一个安静的个人自习桌面（standard only）
+   ==========================================
+   仅覆盖视觉，不改任何行为。每个选择器都带 html[data-ui-style="standard"]，
+   笔记本主题不会命中，也不会加载本文件。
+*/
+
+html[data-ui-style="standard"] body {
+    font-family: var(--sd-font);
+    font-size: var(--sd-font-size-body);
+    line-height: var(--sd-line);
+    background: var(--sd-canvas);
+    color: var(--sd-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 顶栏：一条安静的分隔，不做卡片 ---------- */
+
+html[data-ui-style="standard"] .topbar {
+    height: 60px;
+    padding: 0 var(--sd-gap-5);
+    background: var(--sd-surface);
+    border-bottom: 1px solid var(--sd-border);
+    box-shadow: none;
+    gap: var(--sd-gap-4);
+}
+
+html[data-ui-style="standard"] .topbar h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--sd-text);
+}
+
+html[data-ui-style="standard"] .logo {
+    font-size: 20px;
+    filter: saturate(0.9);
+}
+
+html[data-ui-style="standard"] .topbar-center {
+    gap: var(--sd-gap-2);
+}
+
+/* 布局切换做成安静的分段控件 */
+html[data-ui-style="standard"] .layout-switcher {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--sd-surface-sunken);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-control);
+}
+
+html[data-ui-style="standard"] .layout-btn {
+    width: 30px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: var(--sd-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    box-shadow: none;
+    cursor: pointer;
+    transition: background var(--sd-duration) var(--sd-ease), color var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .layout-btn:hover {
+    background: var(--sd-surface-hover);
+    color: var(--sd-text-secondary);
+}
+
+html[data-ui-style="standard"] .layout-btn.active {
+    background: var(--sd-surface);
+    color: var(--sd-accent);
+    box-shadow: 0 1px 2px rgba(24, 30, 43, 0.08);
+}
+
+/* 顶栏行动按钮：主操作低调，工具图标安静 */
+html[data-ui-style="standard"] .article-vocab-btn,
+html[data-ui-style="standard"] .companion-mode-btn {
+    height: 32px;
+    padding: 0 12px;
+    font-size: var(--sd-font-size-small);
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-control);
+    box-shadow: none;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color var(--sd-duration) var(--sd-ease),
+                color var(--sd-duration) var(--sd-ease),
+                background var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .article-vocab-btn:hover,
+html[data-ui-style="standard"] .companion-mode-btn:hover {
+    color: var(--sd-accent);
+    border-color: var(--sd-accent);
+    background: var(--sd-accent-soft);
+    transform: none;
+}
+
+html[data-ui-style="standard"] .icon-btn {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: var(--sd-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--sd-radius-control);
+    box-shadow: none;
+    cursor: pointer;
+    transition: background var(--sd-duration) var(--sd-ease), color var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .icon-btn:hover {
+    color: var(--sd-text);
+    background: var(--sd-surface-hover);
+    transform: none;
+}
+
+html[data-ui-style="standard"] .icon-btn:focus-visible,
+html[data-ui-style="standard"] .layout-btn:focus-visible,
+html[data-ui-style="standard"] .article-vocab-btn:focus-visible,
+html[data-ui-style="standard"] .companion-mode-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--sd-shadow-focus);
+}
+
+/* 服务状态做成胶囊：状态一眼可辨，又不抢注意力 */
+html[data-ui-style="standard"] .server-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface-sunken);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-pill);
+}
+
+/* 胶囊底色自带浅绿/深绿，文字与底色成对定义（两套主题各自达标）。 */
+html[data-ui-style="standard"] .server-status.online {
+    color: var(--sd-success);
+    background: var(--sd-success-soft);
+    border-color: transparent;
+}
+
+html[data-ui-style="standard"] .server-status.error {
+    color: var(--sd-danger);
+    background: var(--sd-danger-soft);
+    border-color: transparent;
+}
+
+html[data-ui-style="standard"] .auto-refresh-group {
+    height: 30px;
+    padding: 0 4px 0 8px;
+    background: var(--sd-surface-sunken);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-control);
+    gap: 4px;
+}
+
+html[data-ui-style="standard"] .auto-refresh-btn {
+    width: 24px;
+    height: 24px;
+    color: var(--sd-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    box-shadow: none;
+}
+
+html[data-ui-style="standard"] .auto-refresh-btn:hover { background: var(--sd-surface-hover); }
+
+html[data-ui-style="standard"] .auto-refresh-select {
+    height: 24px;
+    font-size: 12px;
+    color: var(--sd-text-secondary);
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+html[data-ui-style="standard"] .auto-refresh-countdown {
+    font-size: 12px;
+    color: var(--sd-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 40px;
+}
+
+/* 配色名等在浅底上用纯强调色时对比度不足，统一降到可读的次级文字色。 */
+html[data-ui-style="standard"] .swatch-name {
+    color: var(--sd-text-secondary);
+}
+
+/* 欢迎引导层的按钮与标题：去掉渐变，用主色实心；标题不再做渐变文字。 */
+html[data-ui-style="standard"] .welcome-card h2 {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--sd-text);
+    font-size: 20px;
+    font-weight: 600;
+}
+
+html[data-ui-style="standard"] .primary-btn {
+    height: 38px;
+    padding: 0 20px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--sd-accent-text);
+    background: var(--sd-accent);
+    border: 1px solid transparent;
+    border-radius: var(--sd-radius-control);
+    box-shadow: none;
+    cursor: pointer;
+    transition: background var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .primary-btn:hover {
+    background: var(--sd-accent-hover);
+    transform: none;
+    box-shadow: none;
+}
+
+html[data-ui-style="standard"] .welcome-card {
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-panel);
+    box-shadow: var(--sd-shadow-pop);
+}
+
+/* 引导层正文沿用全局 --text-secondary，在浅底上刚好低于 4.5:1。 */
+html[data-ui-style="standard"] .welcome-card p,
+html[data-ui-style="standard"] .welcome-card .welcome-steps p,
+html[data-ui-style="standard"] .welcome-card strong {
+    color: var(--sd-text-secondary);
+}
+
+/* ---------- 主区域与磁贴 ---------- */
+
+html[data-ui-style="standard"] .dashboard {
+    padding: var(--sd-gap-5);
+    gap: var(--sd-gap-4);
+    background: var(--sd-canvas);
+}
+
+/* 磁贴：一层表面、一条极淡边框，不再是厚重纸卡 */
+html[data-ui-style="standard"] .tile {
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border);
+    border-radius: var(--sd-radius-card);
+    box-shadow: var(--sd-shadow-card);
+    overflow: hidden;
+    transition: border-color var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .tile:hover {
+    border-color: var(--sd-border-strong);
+    transform: none;
+    box-shadow: var(--sd-shadow-card);
+}
+
+html[data-ui-style="standard"] .tile-header {
+    display: flex;
+    align-items: center;
+    gap: var(--sd-gap-2);
+    height: 48px;
+    padding: 0 var(--sd-gap-4);
+    background: transparent;
+    border-bottom: 1px solid var(--sd-border);
+}
+
+html[data-ui-style="standard"] .tile-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--sd-text);
+}
+
+html[data-ui-style="standard"] .tile-icon {
+    font-size: 15px;
+    opacity: 0.85;
+    filter: saturate(0.85);
+}
+
+html[data-ui-style="standard"] .tile-body {
+    padding: var(--sd-gap-3);
+    background: transparent;
+}
+
+/* 图表下拉与工具栏：统一成安静的小控件 */
+html[data-ui-style="standard"] .chart-selector,
+html[data-ui-style="standard"] .auto-refresh-select {
+    height: 28px;
+    padding: 0 8px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border);
+    border-radius: 8px;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+html[data-ui-style="standard"] .chart-selector:focus-visible {
+    outline: none;
+    box-shadow: var(--sd-shadow-focus);
+}
+
+html[data-ui-style="standard"] .range-btn {
+    height: 26px;
+    padding: 0 9px;
+    font-size: 12px;
+    color: var(--sd-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    box-shadow: none;
+    cursor: pointer;
+}
+
+html[data-ui-style="standard"] .range-btn:hover {
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface-hover);
+}
+
+html[data-ui-style="standard"] .range-btn.active {
+    color: var(--sd-accent);
+    background: var(--sd-accent-soft);
+    border-color: transparent;
+}
+
+/* ---------- 通用按钮 / 输入 / 状态 ---------- */
+
+html[data-ui-style="standard"] .test-btn,
+html[data-ui-style="standard"] .save-btn {
+    height: 34px;
+    padding: 0 14px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sd-accent-text);
+    background: var(--sd-accent);
+    border: 1px solid transparent;
+    border-radius: var(--sd-radius-control);
+    box-shadow: none;
+    cursor: pointer;
+    transition: background var(--sd-duration) var(--sd-ease);
+}
+
+/* 次要动作（设置里的大量 test-btn）保持描边风格，主操作另有标识 */
+html[data-ui-style="standard"] .setting-item .test-btn,
+html[data-ui-style="standard"] .settings-footer .test-btn,
+html[data-ui-style="standard"] .tts-role-toolbar .test-btn,
+html[data-ui-style="standard"] .settings-inline-actions .test-btn {
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface);
+    border-color: var(--sd-border-strong);
+}
+
+html[data-ui-style="standard"] .test-btn:hover,
+html[data-ui-style="standard"] .save-btn:hover {
+    background: var(--sd-accent-hover);
+    transform: none;
+}
+
+html[data-ui-style="standard"] .setting-item .test-btn:hover,
+html[data-ui-style="standard"] .settings-footer .test-btn:hover,
+html[data-ui-style="standard"] .tts-role-toolbar .test-btn:hover,
+html[data-ui-style="standard"] .settings-inline-actions .test-btn:hover {
+    color: var(--sd-accent);
+    background: var(--sd-accent-soft);
+    border-color: var(--sd-accent);
+}
+
+html[data-ui-style="standard"] .test-btn:disabled,
+html[data-ui-style="standard"] .save-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+html[data-ui-style="standard"] .danger-btn {
+    height: 34px;
+    padding: 0 14px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--sd-danger);
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border-strong);
+    border-radius: var(--sd-radius-control);
+    box-shadow: none;
+    cursor: pointer;
+}
+
+html[data-ui-style="standard"] .danger-btn:hover {
+    background: var(--sd-danger-soft);
+    border-color: var(--sd-danger);
+    transform: none;
+}
+
+html[data-ui-style="standard"] input[type="text"],
+html[data-ui-style="standard"] input[type="password"],
+html[data-ui-style="standard"] input[type="number"],
+html[data-ui-style="standard"] input[type="search"],
+html[data-ui-style="standard"] textarea,
+html[data-ui-style="standard"] select {
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--sd-text);
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border-strong);
+    border-radius: var(--sd-radius-control);
+    box-shadow: none;
+    padding: 7px 10px;
+    transition: border-color var(--sd-duration) var(--sd-ease), box-shadow var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] input[type="text"]:focus,
+html[data-ui-style="standard"] input[type="password"]:focus,
+html[data-ui-style="standard"] input[type="number"]:focus,
+html[data-ui-style="standard"] input[type="search"]:focus,
+html[data-ui-style="standard"] textarea:focus,
+html[data-ui-style="standard"] select:focus {
+    outline: none;
+    border-color: var(--sd-accent);
+    box-shadow: var(--sd-shadow-focus);
+}
+
+html[data-ui-style="standard"] .status-text.success { color: var(--sd-success); }
+html[data-ui-style="standard"] .status-text.error { color: var(--sd-danger); }
+html[data-ui-style="standard"] .hint { color: var(--sd-muted); font-size: var(--sd-font-size-small); }
+
+/* 状态说明块：给出原因与恢复入口，不用红色警报条 */
+html[data-ui-style="standard"] .settings-state-note {
+    margin-top: var(--sd-gap-2);
+    padding: 10px 12px;
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface-sunken);
+    border-left: 3px solid var(--sd-warning);
+    border-radius: 8px;
+    line-height: 1.6;
+}
+
+/* ---------- 学习磁贴的退出入口 ---------- */
+
+html[data-ui-style="standard"] .study-web-exitbar {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 6;
+    display: flex;
+    gap: var(--sd-gap-2);
+    pointer-events: none;
+}
+
+html[data-ui-style="standard"] .study-web-exit {
+    pointer-events: auto;
+    height: 30px;
+    padding: 0 12px;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--sd-text-secondary);
+    background: var(--sd-surface);
+    border: 1px solid var(--sd-border-strong);
+    border-radius: var(--sd-radius-pill);
+    box-shadow: var(--sd-shadow-card);
+    cursor: pointer;
+    transition: color var(--sd-duration) var(--sd-ease), border-color var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .study-web-exit:hover {
+    color: var(--sd-accent);
+    border-color: var(--sd-accent);
+    background: var(--sd-surface);
+}
+
+html[data-ui-style="standard"] .study-web-exit:focus-visible {
+    outline: none;
+    box-shadow: var(--sd-shadow-focus);
+}
+
+/* ---------- 浮层（通用） ---------- */
+
+html[data-ui-style="standard"] .fullscreen-modal,
+html[data-ui-style="standard"] .article-vocab-overlay {
+    background: rgba(16, 18, 22, 0.32);
+    backdrop-filter: none;
+}
+
+html[data-ui-style="standard"] .fullscreen-content {
+    border-radius: var(--sd-radius-panel);
+    border: 1px solid var(--sd-border);
+    background: var(--sd-surface);
+    box-shadow: var(--sd-shadow-pop);
+    overflow: hidden;
+}
+
+html[data-ui-style="standard"] .close-btn {
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--sd-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    transition: background var(--sd-duration) var(--sd-ease), color var(--sd-duration) var(--sd-ease);
+}
+
+html[data-ui-style="standard"] .close-btn:hover {
+    color: var(--sd-text);
+    background: var(--sd-surface-hover);
+}
+
+html[data-ui-style="standard"] .close-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--sd-shadow-focus);
+}
+
+/* ---------- 窄窗口：顶栏不换行、工具收拢 ---------- */
+
+@media (max-width: 1100px) {
+    html[data-ui-style="standard"] .topbar { padding: 0 var(--sd-gap-4); }
+    html[data-ui-style="standard"] .dashboard { padding: var(--sd-gap-4); }
+}
+
+@media (max-width: 860px) {
+    html[data-ui-style="standard"] .topbar-center { display: none; }
+    html[data-ui-style="standard"] .auto-refresh-group { display: none; }
+    html[data-ui-style="standard"] .dashboard {
+        padding: var(--sd-gap-3);
+        gap: var(--sd-gap-3);
+    }
+}

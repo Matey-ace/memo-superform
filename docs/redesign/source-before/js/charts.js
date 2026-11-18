@@ -1,0 +1,1350 @@
+// ==========================================
+// Memo Superform - 图表模块
+// 使用 ECharts 渲染多个核心图表
+// ==========================================
+
+const ChartManager = (function() {
+    const toBeijingDate = MemoDashboard.toBeijingDate;
+    const getTodayBeijing = MemoDashboard.todayBeijing;
+    const shiftDateString = MemoDashboard.shiftDate;
+    const getDateRange = MemoDashboard.dateRange;
+    const escapeHtml = MemoDashboard.escapeHtml;
+    // 存储所有图表实例 { tileIndex: { chartType, instance } }
+    const chartInstances = {};
+    // 缓存数据
+    let cachedRecords = null;
+    let cachedAIClassification = null;
+    let cachedNotepadWords = null;
+    // 仪表盘被隐藏（陪伴模式）期间被跳过的重绘请求标记。
+    // 退出陪伴模式由 live2d-companion.js 统一触发一次可见重绘，因此这里只记标记，
+    // 不自己排重试定时器——避免和退出路径各画一次。
+    let pendingVisibleRender = false;
+
+    // 热力图配色预设（6 套，每套含亮色/暗色）
+    const heatmapPalettes = [
+        { name: 'GitHub绿', colors: ['#c6e48b', '#7bc96f', '#239a3b', '#216e39'], darkColors: ['#155e63', '#0e7490', '#06b6d4', '#22d3ee'] },
+        { name: '樱粉', colors: ['#ffe0e6', '#ffb3c4', '#ff8899', '#d63d5a'], darkColors: ['#831843', '#be185d', '#ff8899', '#ffb3c4'] },
+        { name: '紫韵', colors: ['#e1bee7', '#ba68c8', '#8e24aa', '#4a148c'], darkColors: ['#4a148c', '#7b1fa2', '#ab47bc', '#e1bee7'] },
+        { name: '暖橙', colors: ['#ffe0b2', '#ffa726', '#ef6c00', '#e65100'], darkColors: ['#7c2d12', '#c2410c', '#f97316', '#fdba74'] },
+        { name: '玫红', colors: ['#f8bbd0', '#f06292', '#c2185b', '#880e4f'], darkColors: ['#831843', '#be185d', '#ec4899', '#f9a8d4'] },
+        { name: '靛蓝', colors: ['#c5cae9', '#5c6bc0', '#283593', '#1a237e'], darkColors: ['#1e1b4b', '#4338ca', '#6366f1', '#a5b4fc'] }
+    ];
+    let currentPaletteIndex = parseInt(localStorage.getItem('heatmap_palette') || '0', 10);
+    
+    // ---- 数据处理工具 ----
+    
+    // 从学习记录中聚合每日学习数据
+    function aggregateDailyData(records, days) {
+        const dateMap = {};
+        const dates = getDateRange(days);
+        
+        // 初始化
+        dates.forEach(d => {
+            dateMap[d] = { newCount: 0, reviewCount: 0, totalCount: 0, correctCount: 0, studyTime: 0 };
+        });
+        
+        // 根据 last_study_date 聚合（学习过的单词在那天有记录）
+        // 注意：墨墨 API 每条记录是一个单词，不是每日记录
+        // 我们用 study_count 来推断哪些天学过这个单词
+        for (const record of records) {
+            const lastDate = toBeijingDate(record.last_study_date);
+            const addDate = toBeijingDate(record.add_date);
+            
+            // 统计最后一次学习
+            if (lastDate && dateMap[lastDate]) {
+                dateMap[lastDate].totalCount++;
+                // 根据 response 判断是否正确
+                if (record.last_response === 'FAMILIAR' || 
+                    record.last_response === 'WELL_FAMILIAR') {
+                    dateMap[lastDate].correctCount++;
+                }
+            }
+            
+            // 新学单词：add_date 在范围内
+            if (addDate && dateMap[addDate]) {
+                dateMap[addDate].newCount++;
+            }
+            
+            // 对于历史学习，study_count 表示学习过多少次
+            // 但我们没法精确知道每天学了多少，只能近似
+            // 用 study_count > 0 且 last_study_date 在范围内的作为复习数
+            if (lastDate && dateMap[lastDate] && record.study_count > 1) {
+                // 这个单词在这天学过且不是第一次，算复习
+                if (addDate !== lastDate) {
+                    dateMap[lastDate].reviewCount++;
+                }
+            }
+        }
+        
+        return { dates, dateMap };
+    }
+    
+    // 格式化日期为 YYYY-MM
+    function formatMonth(date) {
+        return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+    }
+
+    // 获取当月最后一天
+    function getDaysInMonth(year, month) {
+        return new Date(year, month, 0).getDate(); // month 是 1-12
+    }
+
+    // 生成月度热力图数据
+    function generateMonthHeatmapData(records, monthStr) {
+        // monthStr 格式：'YYYY-MM'
+        const [year, month] = monthStr.split('-').map(Number);
+        const daysInMonth = getDaysInMonth(year, month);
+        const today = getTodayBeijing();
+
+        // 初始化每天计数
+        const dailyCount = {};
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+            dailyCount[dateStr] = 0;
+        }
+
+        // 用 last_study_date 统计哪天学过单词
+        for (const record of records) {
+            const lastDate = toBeijingDate(record.last_study_date);
+            if (lastDate && dailyCount[lastDate] !== undefined) {
+                dailyCount[lastDate]++;
+            }
+        }
+
+        // 统计信息
+        let checkinDays = 0;
+        let totalWords = 0;
+        let maxCount = 0;
+        for (const dateStr in dailyCount) {
+            const c = dailyCount[dateStr];
+            if (c > 0) { checkinDays++; totalWords += c; }
+            if (c > maxCount) maxCount = c;
+        }
+
+        // 连续打卡天数（从今天往前数，今天没学则从昨天算）
+        let streak = 0;
+        const todayStr = getTodayBeijing();
+        let cursorStr = todayStr;
+        if (dailyCount[todayStr] === 0) {
+            cursorStr = shiftDateString(cursorStr, -1);
+        }
+        // 只在查看本月时计算连续打卡
+        if (cursorStr.slice(0, 7) === monthStr) {
+            while (true) {
+                if (dailyCount[cursorStr] > 0) {
+                    streak++;
+                    cursorStr = shiftDateString(cursorStr, -1);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // ECharts 数据格式：[[date, count], ...]
+        const heatmapData = [];
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+            heatmapData.push([dateStr, dailyCount[dateStr]]);
+        }
+
+        return {
+            data: heatmapData,
+            maxCount,
+            checkinDays,
+            totalWords,
+            streak,
+            daysInMonth,
+            monthStr,
+            year,
+            month
+        };
+    }
+    
+    // 生成记忆保持曲线数据
+    // 理念：回答「学过的单词现在还记得多少」
+    // 按「距上次学习的间隔」分组，用每个单词最近一次学习反馈计算该间隔下的记忆保持率
+    function generateMemoryCurveData(records) {
+        const buckets = [
+            { label: '≤3天', min: 0, max: 3, total: 0, well: 0, familiar: 0, vague: 0, forget: 0 },
+            { label: '4-7天', min: 4, max: 7, total: 0, well: 0, familiar: 0, vague: 0, forget: 0 },
+            { label: '8-14天', min: 8, max: 14, total: 0, well: 0, familiar: 0, vague: 0, forget: 0 },
+            { label: '15-30天', min: 15, max: 30, total: 0, well: 0, familiar: 0, vague: 0, forget: 0 },
+            { label: '31-60天', min: 31, max: 60, total: 0, well: 0, familiar: 0, vague: 0, forget: 0 },
+            { label: '>60天', min: 61, max: Infinity, total: 0, well: 0, familiar: 0, vague: 0, forget: 0 }
+        ];
+
+        const now = new Date();
+
+        for (const record of records) {
+            const lastDate = record.last_study_date;
+            const response = record.last_response;
+            if (!lastDate || !response) continue;
+
+            const days = Math.floor((now.getTime() - new Date(lastDate).getTime()) / (24 * 60 * 60 * 1000));
+            if (days < 0) continue;
+
+            const bucket = buckets.find(b => days >= b.min && days <= b.max);
+            if (!bucket) continue;
+
+            switch (response) {
+                case 'WELL_FAMILIAR': bucket.total++; bucket.well++; break;
+                case 'FAMILIAR': bucket.total++; bucket.familiar++; break;
+                case 'VAGUE': bucket.total++; bucket.vague++; break;
+                case 'FORGET': bucket.total++; bucket.forget++; break;
+                default: break; // 其他状态（如取消熟知）不计入
+            }
+        }
+
+        // 每个分组的保持率（熟知 + 认识 视为「还记得」）
+        const series = buckets.map(b => ({
+            label: b.label,
+            total: b.total,
+            rate: b.total > 0 ? Math.round((b.well + b.familiar) / b.total * 100) : null,
+            well: b.well,
+            familiar: b.familiar,
+            vague: b.vague,
+            forget: b.forget
+        }));
+
+        // 总体保持率与记忆状态汇总
+        let totalWithFeedback = 0;
+        let remembered = 0;
+        let wellTotal = 0;
+        let familiarTotal = 0;
+        let vagueTotal = 0;
+        let forgetTotal = 0;
+        for (const r of records) {
+            switch (r.last_response) {
+                case 'WELL_FAMILIAR': wellTotal++; remembered++; totalWithFeedback++; break;
+                case 'FAMILIAR': familiarTotal++; remembered++; totalWithFeedback++; break;
+                case 'VAGUE': vagueTotal++; totalWithFeedback++; break;
+                case 'FORGET': forgetTotal++; totalWithFeedback++; break;
+                default: break;
+            }
+        }
+
+        return {
+            series,
+            overallRate: totalWithFeedback > 0 ? Math.round(remembered / totalWithFeedback * 100) : 0,
+            totalWithFeedback,
+            wellTotal,
+            familiarTotal,
+            vagueTotal,
+            forgetTotal
+        };
+    }
+    
+
+    // 根据当前主题返回图表文字颜色
+    function getThemeColors() {
+        const dark = document.body.classList.contains('dark');
+        return {
+            type: dark ? 'dark' : 'light',
+            title: dark ? '#e5e7eb' : '#1a1a2e',
+            subtext: dark ? '#9ca3af' : '#6b7280',
+            axis: dark ? '#8b95a5' : '#9ca3af',
+            axisLine: dark ? '#374151' : '#e5e7eb',
+            splitLine: dark ? '#1f2937' : '#f3f4f6',
+            tooltipBg: dark ? '#1f2937' : '#ffffff',
+            tooltipBorder: dark ? '#374151' : '#e5e7eb',
+            tooltipText: dark ? '#e5e7eb' : '#1a1a2e'
+        };
+    }
+
+    // ---- 图表渲染函数 ----
+    
+    // 1. 热力图 - 月度学习日历
+    // 当月颜色（按学习量分级）
+    function getHeatColor(count, maxCount, C, palette) {
+        const dark = C && C.type === 'dark';
+        if (count === 0) return dark ? '#2a2a3a' : '#ebedf0';
+        const ratio = count / Math.max(maxCount, 1);
+        const colors = dark ? palette.darkColors : palette.colors;
+        if (ratio < 0.25) return colors[0];
+        if (ratio < 0.5) return colors[1];
+        if (ratio < 0.75) return colors[2];
+        return colors[3];
+    }
+
+    function renderHeatmap(containerId, records, options = {}) {
+        const C = getThemeColors();
+        const chart = echarts.init(document.getElementById(containerId));
+
+        // 目标月份：options.month 或当前月
+        const currentMonth = getTodayBeijing().slice(0, 7);
+        const targetMonth = options.month || currentMonth;
+        const [ty, tm] = targetMonth.split('-').map(Number);
+
+        const result = generateMonthHeatmapData(records, targetMonth);
+
+        // 统计数据文本
+        const statsLine = `打卡 ${result.checkinDays} 天 · 学习 ${result.totalWords} 词次` +
+            (result.streak > 0 ? ` · 连续 ${result.streak} 天` : '');
+
+        // 格子数据带颜色
+        // 每个数据项单独指定格子颜色和数字颜色，保证深色格子上数字清晰可见
+        const coloredData = result.data.map(([dateStr, count]) => {
+            const palette = heatmapPalettes[currentPaletteIndex] || heatmapPalettes[0];
+            const color = getHeatColor(count, result.maxCount, C, palette);
+            const darkTheme = C.type === 'dark';
+            const ratio = count / Math.max(result.maxCount, 1);
+            const isDarkCell = count > 0 && ratio >= 0.5;
+            let labelColor, borderColor;
+            if (count === 0) {
+                labelColor = darkTheme ? '#4a5568' : '#b0b7c3';
+            } else if (darkTheme) {
+                labelColor = '#ffffff';
+            } else {
+                labelColor = isDarkCell ? '#ffffff' : '#1a1a2e';
+            }
+            borderColor = darkTheme ? '#1a1a2e' : (isDarkCell ? palette.colors[3] : '#ffffff');
+            return {
+                value: [dateStr, count],
+                itemStyle: {
+                    color: color,
+                    borderRadius: 6
+                },
+                label: {
+                    color: labelColor,
+                    textBorderColor: borderColor,
+                    textBorderWidth: isDarkCell ? 2 : 1.5
+                }
+            };
+        });
+
+        const option = {
+            title: {
+                text: targetMonth + ' 学习日历',
+                subtext: statsLine,
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
+            },
+            tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
+                formatter: function(params) {
+                    const count = params.value[1];
+                    const dateStr = params.value[0];
+                    const dayNum = parseInt(dateStr.slice(8), 10);
+                    const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date(ty, tm - 1, dayNum).getDay()];
+                    const todayStr = getTodayBeijing();
+                    const isToday = dateStr === todayStr ? '（今天）' : '';
+                    return `<strong>${dateStr} ${week}${isToday}</strong><br/>学习 ${count} 个单词`;
+                }
+            },
+            visualMap: {
+                show: false
+            },
+            calendar: {
+                top: 70,
+                left: 30,
+                right: 30,
+                bottom: 20,
+                cellSize: ['auto', 22],
+                range: targetMonth,
+                itemStyle: {
+                    borderWidth: 3,
+                    borderColor: C.type === 'dark' ? '#1a1a2e' : '#fff',
+                    borderRadius: 6
+                },
+                yearLabel: { show: false },
+                monthLabel: { show: false },
+                dayLabel: {
+                    firstDay: 1,
+                    nameMap: ['日', '一', '二', '三', '四', '五', '六'],
+                    fontSize: 11,
+                    color: C.subtext,
+                    position: 'start',
+                    margin: 8
+                },
+                splitLine: { show: false }
+            },
+            series: [{
+                type: 'heatmap',
+                coordinateSystem: 'calendar',
+                data: coloredData,
+                label: {
+                    show: true,
+                    formatter: function(params) {
+                        return params.value[1] > 0 ? params.value[1] : '';
+                    },
+                    fontSize: 12,
+                    fontWeight: 600
+                },
+                emphasis: {
+                    itemStyle: {
+                        borderColor: '#1890ff',
+                        borderWidth: 2,
+                        shadowBlur: 8,
+                        shadowColor: 'rgba(24, 144, 255, 0.4)'
+                    }
+                }
+            }]
+        };
+
+        chart.setOption(option);
+        return chart;
+    }
+    
+    // 2. 学习趋势图
+    function renderTrendChart(containerId, records, days = 30) {
+        const C = getThemeColors();
+        const chart = echarts.init(document.getElementById(containerId));
+        const { dates, dateMap } = aggregateDailyData(records, days);
+        
+        const newData = dates.map(d => dateMap[d].newCount);
+        const reviewData = dates.map(d => dateMap[d].reviewCount);
+        const totalData = dates.map(d => dateMap[d].totalCount);
+        
+        // 计算汇总
+        const totalNew = newData.reduce((a, b) => a + b, 0);
+        const totalReview = reviewData.reduce((a, b) => a + b, 0);
+        const avgDaily = Math.round(totalData.reduce((a, b) => a + b, 0) / days);
+        
+        const option = {
+            title: {
+                text: `学习趋势（近 ${days} 天）`,
+                subtext: `新学 ${totalNew} 词 · 复习 ${totalReview} 词 · 日均 ${avgDaily} 词`,
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
+            },
+            tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
+                trigger: 'axis',
+                axisPointer: { type: 'cross' }
+            },
+            legend: {
+                data: ['新学', '复习', '总计'],
+                bottom: 5,
+                textStyle: { fontSize: 11, color: C.subtext }
+            },
+            grid: {
+                left: 50,
+                right: 30,
+                top: 60,
+                bottom: 45
+            },
+            xAxis: {
+                type: 'category',
+                data: dates,
+                axisLabel: {
+                    fontSize: 10,
+                    color: C.axis,
+                    rotate: days > 30 ? 45 : 0,
+                    formatter: function(value) {
+                        if (days <= 7) return value.slice(5); // MM-DD
+                        if (days <= 30) return value.slice(8); // DD
+                        // 90天以上：显示月份
+                        return value.slice(5);
+                    }
+                },
+                axisLine: { lineStyle: { color: C.axisLine } }
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { fontSize: 10, color: C.axis },
+                splitLine: { lineStyle: { color: C.splitLine } }
+            },
+            series: [
+                {
+                    name: '新学',
+                    type: 'bar',
+                    stack: 'total',
+                    data: newData,
+                    itemStyle: { 
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: '#52c41a' },
+                            { offset: 1, color: '#95de64' }
+                        ]),
+                        borderRadius: [0, 0, 0, 0]
+                    }
+                },
+                {
+                    name: '复习',
+                    type: 'bar',
+                    stack: 'total',
+                    data: reviewData,
+                    itemStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: '#1890ff' },
+                            { offset: 1, color: '#69c0ff' }
+                        ]),
+                        borderRadius: [4, 4, 0, 0]
+                    }
+                },
+                {
+                    name: '总计',
+                    type: 'line',
+                    data: totalData,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 6,
+                    lineStyle: { color: '#722ed1', width: 2 },
+                    itemStyle: { color: '#722ed1' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(114, 46, 209, 0.15)' },
+                            { offset: 1, color: 'rgba(114, 46, 209, 0)' }
+                        ])
+                    }
+                }
+            ]
+        };
+        
+        chart.setOption(option);
+        return chart;
+    }
+    
+    // 3. 记忆曲线图
+    function renderMemoryChart(containerId, records) {
+        var C = getThemeColors();
+        var chart = echarts.init(document.getElementById(containerId));
+        var result = generateMemoryCurveData(records);
+        var series = result.series;
+
+        var categories = series.map(function(s) { return s.label; });
+        var rateData = series.map(function(s) { return s.rate; });
+        var wellData = series.map(function(s) { return s.well; });
+        var familiarData = series.map(function(s) { return s.familiar; });
+        var vagueData = series.map(function(s) { return s.vague; });
+        var forgetData = series.map(function(s) { return s.forget; });
+
+        var totalWords = result.totalWithFeedback || 0;
+        var rating = '';
+        var ratingColor = '#52c41a';
+        if (result.overallRate >= 80) { rating = '记忆状态优秀'; }
+        else if (result.overallRate >= 60) { rating = '记忆状态良好'; }
+        else if (result.overallRate >= 40) { rating = '需要加强复习'; ratingColor = '#fa8c16'; }
+        else { rating = '急需巩固'; ratingColor = '#f5222d'; }
+
+        var option = {
+            title: {
+                text: '记忆保持曲线',
+                subtext: '总掌握率 ' + result.overallRate + '% · ' + rating + ' · 共 ' + totalWords + ' 词',
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
+            },
+            tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
+                trigger: 'axis',
+                formatter: function(params) {
+                    var idx2 = params[0].dataIndex;
+                    var s = series[idx2];
+                    var html = '<strong>距上次学习 ' + s.label + '</strong><br/>';
+                    html += '保持率：' + (s.rate !== null ? s.rate + '%' : '无数据') + '<br/>';
+                    html += '总词数：' + s.total + '<br/>';
+                    html += '<span style="color:#52c41a">● 已熟知：' + s.well + '</span><br/>';
+                    html += '<span style="color:#1890ff">● 认识：' + s.familiar + '</span><br/>';
+                    html += '<span style="color:#fa8c16">● 模糊：' + s.vague + '</span><br/>';
+                    html += '<span style="color:#f5222d">● 忘记：' + s.forget + '</span>';
+                    return html;
+                }
+            },
+            legend: {
+                data: ['保持率', '已熟知', '认识', '模糊', '忘记'],
+                bottom: 2,
+                textStyle: { fontSize: 11, color: C.subtext },
+                itemWidth: 12,
+                itemHeight: 8,
+                itemGap: 6,
+                type: 'scroll'
+            },
+            grid: {
+                left: 8,
+                right: 12,
+                top: 55,
+                bottom: 36,
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                name: '距上次学习',
+                nameTextStyle: { fontSize: 10, color: C.subtext },
+                data: categories,
+                axisLabel: { fontSize: 10, color: C.axis },
+                axisLine: { lineStyle: { color: C.axisLine } },
+                boundaryGap: false
+            },
+            yAxis: [
+                {
+                    type: 'value',
+                    name: '保持率(%)',
+                    nameTextStyle: { fontSize: 10, color: C.subtext },
+                    min: 0,
+                    max: 100,
+                    axisLabel: { fontSize: 10, color: C.axis, formatter: '{value}%' },
+                    splitLine: { lineStyle: { color: C.splitLine } },
+                    axisLine: { show: false }
+                },
+                {
+                    type: 'value',
+                    name: '词数',
+                    nameTextStyle: { fontSize: 10, color: C.subtext },
+                    min: 0,
+                    axisLabel: { fontSize: 10, color: C.axis },
+                    splitLine: { show: false },
+                    axisLine: { show: false }
+                }
+            ],
+            series: [
+                {
+                    name: '保持率',
+                    type: 'line',
+                    yAxisIndex: 0,
+                    data: rateData,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    lineStyle: { color: '#722ed1', width: 3 },
+                    itemStyle: { color: '#722ed1', borderColor: '#fff', borderWidth: 2 },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(114, 46, 209, 0.25)' },
+                            { offset: 1, color: 'rgba(114, 46, 209, 0)' }
+                        ])
+                    },
+                    z: 3,
+                    connectNulls: true,
+                    markLine: {
+                        silent: true,
+                        symbol: 'none',
+                        lineStyle: { color: ratingColor, type: 'dashed', width: 1.5 },
+                        label: { show: false },
+                        data: [{ yAxis: result.overallRate }]
+                    }
+                },
+                {
+                    name: '已熟知',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: wellData,
+                    barWidth: '35%',
+                    itemStyle: { color: '#52c41a' }
+                },
+                {
+                    name: '认识',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: familiarData,
+                    itemStyle: { color: '#1890ff' }
+                },
+                {
+                    name: '模糊',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: vagueData,
+                    itemStyle: { color: '#fa8c16' }
+                },
+                {
+                    name: '忘记',
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    stack: '词数',
+                    data: forgetData,
+                    itemStyle: { color: '#f5222d' }
+                }
+            ]
+        };
+
+        chart.setOption(option);
+        return chart;
+    }
+    
+    // 4. AI 单词分类图
+    function renderAIClassificationChart(containerId, classificationData) {
+        const C = getThemeColors();
+        const chart = echarts.init(document.getElementById(containerId));
+        
+        if (!classificationData) {
+            // 占位提示
+            chart.setOption({
+                title: {
+                    text: 'AI 单词分类',
+                    subtext: '点击上方按钮，使用 AI 分析你的单词分类',
+                    left: 'center',
+                    top: 'center',
+                    textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                    subtextStyle: { fontSize: 11, color: C.subtext }
+                }
+            });
+            return chart;
+        }
+        
+        // 转换数据格式
+        const pieData = Object.entries(classificationData).map(([name, words]) => ({
+            name: name,
+            value: Array.isArray(words) ? words.length : 0
+        })).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+        
+        const totalWords = pieData.reduce((sum, d) => sum + d.value, 0);
+        
+        const option = {
+            title: {
+                text: 'AI 单词主题分类',
+                subtext: `共分析 ${totalWords} 个单词 · ${pieData.length} 个类别`,
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
+            },
+            tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
+                trigger: 'item',
+                formatter: function(params) {
+                    const words = classificationData[params.name] || [];
+                    const sample = words.slice(0, 5).join(', ');
+                    return `<strong>${escapeHtml(params.name)}</strong><br/>
+                            单词数: ${params.value}<br/>
+                            占比: ${params.percent}%<br/>
+                            示例: ${escapeHtml(sample)}${words.length > 5 ? '...' : ''}`;
+                }
+            },
+            legend: {
+                type: 'scroll',
+                orient: 'vertical',
+                right: 10,
+                top: 50,
+                bottom: 20,
+                textStyle: { fontSize: 11, color: C.subtext }
+            },
+            series: [
+                {
+                    name: '单词分类',
+                    type: 'pie',
+                    radius: ['40%', '70%'],
+                    center: ['40%', '55%'],
+                    avoidLabelOverlap: true,
+                    itemStyle: {
+                        borderRadius: 8,
+                        borderColor: '#fff',
+                        borderWidth: 2
+                    },
+                    label: {
+                        show: false,
+                        position: 'center'
+                    },
+                    emphasis: {
+                        label: {
+                            show: true,
+                            fontSize: 14,
+                            fontWeight: 'bold',
+                            formatter: '{b}\n{c}词 ({d}%)'
+                        }
+                    },
+                    labelLine: { show: false },
+                    data: pieData
+                }
+            ]
+        };
+        
+        chart.setOption(option);
+        return chart;
+    }
+    
+    // 5. 词书单词进度表
+    // 展示每个云词本（词书）的单词量，以及各词的记忆状态分布
+    function renderNotepadProgress(containerId, records, notepadWords) {
+        const C = getThemeColors();
+        const chart = echarts.init(document.getElementById(containerId));
+
+        if (!notepadWords || notepadWords.length === 0) {
+            chart.setOption({
+                title: {
+                    text: '词书单词进度',
+                    subtext: '云词本里还没有单词，先添加一些单词到词书吧',
+                    left: 'center',
+                    top: 'center',
+                    textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                    subtextStyle: { fontSize: 11, color: C.subtext }
+                }
+            });
+            return chart;
+        }
+
+        // 构建 单词 -> 记忆状态 映射（小写拼写）
+        const statusMap = {};
+        for (const r of records) {
+            const w = (r.voc_spelling || '').toLowerCase().trim();
+            if (w) statusMap[w] = r.last_response || '';
+        }
+
+        // 按词书分组统计
+        const notepadMap = Object.create(null);
+        for (const item of notepadWords) {
+            const name = item.notepad || '未分类';
+            const id = String(item.notepad_id || name);
+            if (!notepadMap[id]) {
+                notepadMap[id] = { name: name, total: 0, unlearned: 0, well: 0, familiar: 0, vague: 0, forget: 0 };
+            }
+            const stat = notepadMap[id];
+            stat.total++;
+            const resp = statusMap[item.word] || '';
+            switch (resp) {
+                case 'WELL_FAMILIAR': stat.well++; break;
+                case 'FAMILIAR': stat.familiar++; break;
+                case 'VAGUE': stat.vague++; break;
+                case 'FORGET': stat.forget++; break;
+                default: stat.unlearned++; break; // 词本里有但学习记录中没反馈 = 尚未学习
+            }
+        }
+
+        const stats = Object.values(notepadMap);
+        const notepads = stats.map(stat => stat.name);
+        const totalWords = stats.reduce((s, x) => s + x.total, 0);
+
+        const seriesDefs = [
+            { key: 'unlearned', name: '未学习', color: '#d9d9d9' },
+            { key: 'well', name: '已熟知', color: '#52c41a' },
+            { key: 'familiar', name: '认识', color: '#1890ff' },
+            { key: 'vague', name: '模糊', color: '#fa8c16' },
+            { key: 'forget', name: '忘记', color: '#f5222d' }
+        ];
+
+        const option = {
+            title: {
+                text: '词书单词进度',
+                subtext: notepads.length + ' 本词书 · 共 ' + totalWords + ' 词' + (notepadWords.partial ? ' · 部分读取失败，请刷新重试' : ''),
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
+            },
+            tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: function(params) {
+                    const idx = params[0].dataIndex;
+                    const s = stats[idx];
+                    let html = '<strong>' + escapeHtml(notepads[idx]) + '</strong><br/>' +
+                        '总词数：' + s.total + '<br/>' +
+                        '未学习：' + s.unlearned + '<br/>' +
+                        '已熟知：' + s.well + '<br/>' +
+                        '认识：' + s.familiar + '<br/>' +
+                        '模糊：' + s.vague + '<br/>' +
+                        '忘记：' + s.forget;
+                    return html;
+                }
+            },
+            legend: {
+                data: seriesDefs.map(s => s.name),
+                bottom: 5,
+                textStyle: { fontSize: 11, color: C.subtext }
+            },
+            grid: {
+                left: 30,
+                right: 40,
+                top: 60,
+                bottom: 40
+            },
+            xAxis: {
+                type: 'value',
+                axisLabel: { fontSize: 10, color: C.axis },
+                splitLine: { lineStyle: { color: C.splitLine } }
+            },
+            yAxis: {
+                type: 'category',
+                data: notepads,
+                axisLabel: {
+                    fontSize: 11,
+                    color: C.subtext,
+                    width: 90,
+                    overflow: 'truncate'
+                },
+                axisLine: { lineStyle: { color: C.axisLine } },
+                axisTick: { show: false }
+            },
+            series: seriesDefs.map(def => ({
+                name: def.name,
+                type: 'bar',
+                stack: 'total',
+                barWidth: 26,
+                data: stats.map(s => s[def.key]),
+                itemStyle: { color: def.color, borderRadius: 0 },
+                label: {
+                    show: def.key === 'unlearned' || def.key === 'well',
+                    position: 'inside',
+                    fontSize: 10,
+                    color: def.key === 'unlearned' ? '#8c8c8c' : '#fff',
+                    formatter: function(p) { return p.value > 0 ? p.value : ''; }
+                }
+            }))
+        };
+
+        chart.setOption(option);
+        return chart;
+    }
+
+    // 6. 词汇量增长曲线
+    // 按添加日期累计展示词汇量的增长过程
+    function renderVocabularyGrowth(containerId, records) {
+        const C = getThemeColors();
+        const chart = echarts.init(document.getElementById(containerId));
+
+        // 按月份聚合新增词汇
+        const monthMap = {};
+        for (const r of records) {
+            const addDate = r.add_date;
+            if (!addDate) continue;
+            const day = toBeijingDate(addDate);
+            if (!day) continue;
+            const key = day.slice(0, 7);
+            monthMap[key] = (monthMap[key] || 0) + 1;
+        }
+
+        const months = Object.keys(monthMap).sort();
+        const monthlyNew = months.map(m => monthMap[m]);
+        const cumulative = [];
+        let sum = 0;
+        for (const n of monthlyNew) { sum += n; cumulative.push(sum); }
+
+        const totalWords = cumulative.length > 0 ? cumulative[cumulative.length - 1] : 0;
+
+        const option = {
+            title: {
+                text: '词汇量增长曲线',
+                subtext: '累计 ' + totalWords + ' 词 · 最早从 ' + (months[0] || '-') + ' 开始',
+                left: 'center',
+                top: 5,
+                textStyle: { fontSize: 14, fontWeight: 600, color: C.title },
+                subtextStyle: { fontSize: 11, color: C.subtext }
+            },
+            tooltip: {
+                backgroundColor: C.tooltipBg,
+                borderColor: C.tooltipBorder,
+                textStyle: { color: C.tooltipText },
+                trigger: 'axis',
+                formatter: function(params) {
+                    const idx = params[0].dataIndex;
+                    let html = '<strong>' + months[idx] + '</strong><br/>';
+                    html += '当月新增：' + monthlyNew[idx] + ' 词<br/>';
+                    html += '累计词汇：' + cumulative[idx] + ' 词';
+                    return html;
+                }
+            },
+            legend: {
+                data: ['累计词汇量', '当月新增'],
+                bottom: 5,
+                textStyle: { fontSize: 11, color: C.subtext }
+            },
+            grid: {
+                left: 50,
+                right: 30,
+                top: 60,
+                bottom: 45
+            },
+            xAxis: {
+                type: 'category',
+                data: months,
+                axisLabel: {
+                    fontSize: 10,
+                    color: C.axis,
+                    interval: Math.max(0, Math.floor(months.length / 10))
+                },
+                axisLine: { lineStyle: { color: C.axisLine } }
+            },
+            yAxis: {
+                type: 'value',
+                name: '词汇量',
+                nameTextStyle: { fontSize: 11, color: C.subtext },
+                axisLabel: { fontSize: 10, color: C.axis },
+                splitLine: { lineStyle: { color: C.splitLine } }
+            },
+            series: [
+                {
+                    name: '累计词汇量',
+                    type: 'line',
+                    data: cumulative,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 6,
+                    lineStyle: { color: '#eb2f96', width: 3 },
+                    itemStyle: { color: '#eb2f96' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(235, 47, 150, 0.2)' },
+                            { offset: 1, color: 'rgba(235, 47, 150, 0)' }
+                        ])
+                    }
+                },
+                {
+                    name: '当月新增',
+                    type: 'bar',
+                    data: monthlyNew,
+                    barWidth: '40%',
+                    itemStyle: {
+                        color: 'rgba(19, 194, 194, 0.65)',
+                        borderRadius: [3, 3, 0, 0]
+                    }
+                }
+            ]
+        };
+
+        chart.setOption(option);
+        return chart;
+    }
+
+    // ---- 公共 API ----
+    
+    // 设置/更新学习记录数据
+    function setRecords(records) {
+        cachedRecords = records;
+    }
+    
+    function getRecords() {
+        return cachedRecords;
+    }
+    
+    function setAIClassification(data) {
+        cachedAIClassification = data;
+    }
+    
+    function getAIClassification() {
+        return cachedAIClassification;
+    }
+
+    // 设置/获取云词本单词列表
+    function setNotepadWords(words) {
+        cachedNotepadWords = words;
+    }
+
+    function getNotepadWords() {
+        return cachedNotepadWords;
+    }
+    
+    // 渲染指定图表
+    function render(tileIndex, chartType, options = {}) {
+        const containerId = 'chart-' + tileIndex;
+        const container = document.getElementById(containerId);
+        if (!container) return null;
+        // 隐藏容器（display:none、祖先 hidden、零尺寸）下不建图：ECharts 会拿到 0x0 画布。
+        // 这条覆盖 renderVisibleFromSelectors 之外的旁路入口（AI 分类完成、趋势/热力图
+        // 选择器、磁贴类型切换），它们不经过可见性筛选。
+        if (!container.offsetParent && !container.getClientRects().length) {
+            pendingVisibleRender = true;
+            return null;
+        }
+        
+        // 背单词磁贴：已加载时不重复渲染（避免自动刷新重载iframe）
+        if (chartType === 'study-web' && container.querySelector('.study-web-iframe')) {
+            return chartInstances[tileIndex] ? chartInstances[tileIndex].instance : null;
+        }
+        
+        // 销毁旧图表
+        if (chartInstances[tileIndex]) {
+            chartInstances[tileIndex].instance.dispose();
+        }
+        
+        let chart = null;
+        
+        switch (chartType) {
+            case 'heatmap':
+                chart = renderHeatmap(containerId, cachedRecords || [], options);
+                break;
+            case 'trend':
+                chart = renderTrendChart(containerId, cachedRecords || [], options.days || 30);
+                break;
+            case 'memory':
+                chart = renderMemoryChart(containerId, cachedRecords || []);
+                break;
+            case 'aiclass':
+                chart = renderAIClassificationChart(containerId, cachedAIClassification);
+                break;
+            case 'notepad':
+                chart = renderNotepadProgress(containerId, cachedRecords || [], cachedNotepadWords);
+                break;
+            case 'growth':
+                chart = renderVocabularyGrowth(containerId, cachedRecords || []);
+                break;
+            case 'recommend':
+                chart = renderRecommendationChart(containerId);
+                break;
+            case 'study-web':
+                chart = StudyWeb.render(containerId);
+                break;
+            case 'diary':
+                chart = (window.DiaryChart ? DiaryChart.render(containerId, options) : null);
+                break;
+        }
+        
+        if (chart) {
+            chartInstances[tileIndex] = {
+                chartType: chartType,
+                instance: chart,
+                options: options
+            };
+        }
+        
+        return chart;
+    }
+    
+    // 重新渲染所有可见图表
+    function rerenderAll() {
+        Object.keys(chartInstances).forEach(tileIndex => {
+            const info = chartInstances[tileIndex];
+            const tileEl = document.querySelector(`.tile[data-tile="${tileIndex}"]`);
+            if (tileEl && tileEl.style.display !== 'none') {
+                if (typeof info.instance.resize === 'function') info.instance.resize();
+            }
+        });
+    }
+
+    // 按当前主题重绘所有已渲染图表（用于主题切换）
+    function renderAll() {
+        Object.keys(chartInstances).forEach(tileIndex => {
+            const info = chartInstances[tileIndex];
+            render(parseInt(tileIndex), info.chartType, info.options || {});
+        });
+    }
+    // 重新渲染所有可见图表（跳过 AI 分类，用于自动刷新）
+    // 根据磁贴下拉框的实际值渲染所有可见图表（统一入口，确保标题与内容始终一致）
+    // skipAI 为 true 时跳过 AI 分类（用于自动刷新）。
+        // ========== 智能复习推荐 ==========
+    function renderRecommendationChart(containerId) {
+        var container = document.getElementById(containerId);
+        if (!container) return null;
+        container.innerHTML = '<div class="rec-loading">加载推荐中...</div>';
+        var disposed = false;
+        (async function() {
+            try {
+                var data = await RecommendAPI.getToday();
+                if (!disposed) renderRecCards(container, data, () => !disposed);
+            } catch (e) {
+                if (!disposed) container.innerHTML = '<div class="rec-error">推荐加载失败：' + escapeHtml(e.message || '') + '<br><span class="rec-hint">请检查本机学习数据服务，并重试刷新</span></div>';
+            }
+        })();
+        return { dispose: function() { disposed = true; container.innerHTML = ''; } };
+    }
+
+    function renderRecCards(container, data, isCurrent) {
+        isCurrent = isCurrent || (() => true);
+        var recs = data.recommendations || [];
+        var s = data.summary || {};
+        var pending = recs.filter(function(r) { return r.status !== 'reviewed'; });
+        var reviewed = recs.filter(function(r) { return r.status === 'reviewed'; });
+
+        var html = '<div class="rec-wrap">';
+        html += '<div class="rec-summary">';
+        html += '<div class="rec-sum-item high"><span class="rec-sum-num">' + (s.high || 0) + '</span><span class="rec-sum-lbl">紧急</span></div>';
+        html += '<div class="rec-sum-item mid"><span class="rec-sum-num">' + (s.mid || 0) + '</span><span class="rec-sum-lbl">建议</span></div>';
+        html += '<div class="rec-sum-item low"><span class="rec-sum-num">' + (s.low || 0) + '</span><span class="rec-sum-lbl">稳定</span></div>';
+        html += '<div class="rec-sum-item done"><span class="rec-sum-num">' + (s.reviewed || 0) + '</span><span class="rec-sum-lbl">已复习</span></div>';
+        html += '<button class="rec-refresh" title="刷新推荐">\u21bb</button>';
+        html += '<button class="rec-speak" title="朗读推荐摘要">\ud83d\udd0a</button>';
+        html += '</div>';
+
+        if (recs.length === 0) {
+            html += '<div class="rec-empty">今日暂无推荐<br><span class="rec-hint">每日首次加载会自动生成</span></div>';
+            html += '</div>';
+            container.innerHTML = html;
+            bindRecEvents(container, data, isCurrent);
+            return;
+        }
+
+        var pending = recs.filter(function(r) { return r.status !== 'reviewed'; });
+
+        html += '<div class="rec-list">';
+        pending.forEach(function(r) { html += recCardHtml(r, false); });
+        html += '</div>';
+
+        if (reviewed.length) {
+            html += '<div class="rec-reviewed-title">已复习 (' + reviewed.length + ')</div>';
+            html += '<div class="rec-list reviewed">';
+            reviewed.forEach(function(r) { html += recCardHtml(r, true); });
+            html += '</div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+        bindRecEvents(container, data, isCurrent);
+        if (window.TTS && TTS.isReady() && localStorage.getItem('tts_auto_read') === 'true' && pending.length) {
+            TTS.speak(buildRecSummary(s, pending));
+        }
+    }
+
+    function recCardHtml(r, isReviewed) {
+        var level = ['low', 'mid', 'high'].includes(r.level) ? r.level : 'low';
+        var color = /^#[a-f0-9]{3}(?:[a-f0-9]{3})?$/i.test(r.level_color || '') ? r.level_color : '#999';
+        var score = Number.isFinite(Number(r.risk_score)) ? Number(r.risk_score) : 0;
+        var cls = 'rec-card level-' + level + (isReviewed ? ' reviewed' : '');
+        var meta = [];
+        if (r.overdue_days != null && r.overdue_days > 0) meta.push('逾期 ' + r.overdue_days + ' 天');
+        if (r.gap_days != null) meta.push('间隔 ' + r.gap_days + ' 天');
+        meta.push(r.last_response_label || '');
+        return '<div class="' + cls + '" data-id="' + escapeHtml(String(r.id)).replace(/"/g, '&quot;') + '">' +
+            '<div class="rec-card-main"><div class="rec-word">' + escapeHtml(r.word) + '</div>' +
+            '<div class="rec-meta">' + escapeHtml(meta.join(' \u00b7 ')) + '</div></div>' +
+            '<div class="rec-card-side"><div class="rec-score" style="background:' + color + '">' + score + '</div>' +
+            '<div class="rec-level-lbl">' + escapeHtml(r.level_label || '') + '</div>' +
+            '<button class="rec-speak-card" title="朗读该单词">\ud83d\udd0a</button></div>' +
+            '<button class="rec-review-btn">' + (isReviewed ? '\u2713' : '已复习') + '</button>' +
+            '</div>';
+    }
+
+    function buildRecSummary(s, pending) {
+        var words = pending.slice(0, 10).map(function(r) { return r.word; }).join('，');
+        var text = '今日智能复习推荐：紧急 ' + (s.high || 0) + ' 个，建议 ' + (s.mid || 0) +
+            ' 个，稳定 ' + (s.low || 0) + ' 个，共 ' + (pending.length || 0) + ' 个单词待复习。';
+        if (words) text += '包括：' + words + '。';
+        return text;
+    }
+
+    function bindRecEvents(container, data, isCurrent) {
+        var busy = false;
+        function feedback(message) {
+            var el = container.querySelector('.rec-action-status');
+            if (!el) { el = document.createElement('p'); el.className = 'rec-action-status'; el.setAttribute('role', 'status'); container.appendChild(el); }
+            el.textContent = message;
+        }
+        container.querySelectorAll('.rec-review-btn').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var card = btn.closest('.rec-card');
+                var id = card.getAttribute('data-id');
+                if (busy || card.classList.contains('reviewed')) return;
+                busy = true; btn.disabled = true;
+                RecommendAPI.markReviewed(id).then(async function(ok) {
+                    if (!isCurrent()) return;
+                    if (!ok) throw new Error('复习标记失败，请重试');
+                    card.classList.add('reviewed'); btn.textContent = '\u2713';
+                    var refreshed = await RecommendAPI.getToday();
+                    if (isCurrent()) renderRecCards(container, refreshed, isCurrent);
+                }).catch(function(error) { if (isCurrent()) feedback(error.message || '更新失败，请重试'); })
+                    .finally(function() { busy = false; if (isCurrent()) btn.disabled = false; });
+            });
+        });
+        container.querySelectorAll('.rec-speak').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (!window.TTS || !TTS.isReady()) return;
+                var summary = container.querySelector('.rec-summary');
+                var nums = summary ? summary.querySelectorAll('.rec-sum-num') : [];
+                var s = { high: 0, mid: 0, low: 0 };
+                var labels = summary ? summary.querySelectorAll('.rec-sum-lbl') : [];
+                labels.forEach(function(lbl, i) {
+                    if (nums[i] && lbl.textContent === '紧急') s.high = parseInt(nums[i].textContent) || 0;
+                    if (nums[i] && lbl.textContent === '建议') s.mid = parseInt(nums[i].textContent) || 0;
+                    if (nums[i] && lbl.textContent === '稳定') s.low = parseInt(nums[i].textContent) || 0;
+                });
+                var pending = [];
+                container.querySelectorAll('.rec-card:not(.reviewed) .rec-word').forEach(function(el) {
+                    pending.push(el.textContent);
+                });
+                TTS.speak(buildRecSummary(s, pending.map(function(w) { return { word: w }; })));
+            });
+        });
+        container.querySelectorAll('.rec-speak-card').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (!window.TTS || !TTS.isReady()) return;
+                var card = btn.closest('.rec-card');
+                var wordEl = card ? card.querySelector('.rec-word') : null;
+                var levelEl = card ? card.querySelector('.rec-level-lbl') : null;
+                var text = (wordEl ? wordEl.textContent : '') + '，' + (levelEl ? levelEl.textContent : '');
+                TTS.speak(text);
+            });
+        });
+        var refresh = container.querySelector('.rec-refresh');
+        if (refresh) refresh.addEventListener('click', function() {
+            if (busy) return;
+            busy = true; refresh.disabled = true;
+            feedback('正在刷新推荐…');
+            RecommendAPI.getToday().then(function(data) { if (isCurrent()) renderRecCards(container, data, isCurrent); })
+                .catch(function(error) { if (isCurrent()) feedback(error.message || '刷新失败，请重试'); })
+                .finally(function() { busy = false; if (isCurrent()) refresh.disabled = false; });
+        });
+    }
+
+function renderVisibleFromSelectors(skipAI) {
+        // 仪表盘被 hidden（陪伴模式）时没有布局盒：echarts.init 会拿到 0x0 画布，
+        // 既画不出东西，也会在退出后留下尺寸错误的实例。磁贴自身 display 仍是 flex，
+        // 所以必须查 #dashboard.hidden，不能只看 tile.style.display。
+        var dashboardEl = document.getElementById('dashboard');
+        if (dashboardEl && dashboardEl.hidden) {
+            pendingVisibleRender = true;
+            return;
+        }
+        pendingVisibleRender = false;
+        document.querySelectorAll('.tile').forEach(function(tile) {
+            if (tile.style.display === 'none') return;
+            var tileIndex = parseInt(tile.dataset.tile);
+            var selector = tile.querySelector('.chart-selector');
+            if (!selector || !selector.value) return;
+            var chartType = selector.value;
+            if (skipAI && chartType === 'aiclass') return;
+            var info = chartInstances[tileIndex];
+            var opts = info ? Object.assign({}, info.options || {}) : {};
+            if (chartType === 'trend') {
+                // 优先从工具栏 active 按钮读取用户最新选择，避免刷新覆盖
+                var activeBtn = tile.querySelector('.range-btn.active');
+                if (activeBtn && activeBtn.dataset.range) {
+                    opts.days = activeBtn.dataset.range === 'all' ? 365 : parseInt(activeBtn.dataset.range);
+                } else if (!opts.days) {
+                    opts.days = 30;
+                }
+            }
+            render(tileIndex, chartType, opts);
+        });
+    }
+    
+        // 获取指定 tile 的图表实例
+    function getInstance(tileIndex) {
+        return chartInstances[tileIndex]?.instance || null;
+    }
+    
+    // 获取指定 tile 的图表类型
+    function getChartType(tileIndex) {
+        return chartInstances[tileIndex]?.chartType || null;
+    }
+    
+    // 销毁所有图表
+    function disposeAll() {
+        Object.values(chartInstances).forEach(info => {
+            info.instance.dispose();
+        });
+        Object.keys(chartInstances).forEach(k => delete chartInstances[k]);
+    }
+    
+    function getHeatmapPalettes() { return heatmapPalettes; }
+    function getPaletteIndex() { return currentPaletteIndex; }
+    function setPaletteIndex(idx) {
+        currentPaletteIndex = idx;
+        localStorage.setItem('heatmap_palette', String(idx));
+    }
+
+    return {
+        setRecords,
+        getRecords,
+        setAIClassification,
+        getAIClassification,
+        setNotepadWords,
+        getNotepadWords,
+        render,
+        rerenderAll,
+        renderAll,
+        renderVisibleFromSelectors,
+        getInstance,
+        getChartType,
+        getHeatmapPalettes,
+        getPaletteIndex,
+        setPaletteIndex,
+        disposeAll
+    };
+})();

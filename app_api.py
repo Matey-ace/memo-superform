@@ -16,6 +16,12 @@ _legacy_lock = threading.Lock()
 # 避免两个连续启用/编辑请求提交 TTS 角色 A 却留下渲染器偏好 B。
 _role_live2d_lock = threading.RLock()
 
+# 文章选词的 operation_id 幂等表。只放进程内存：它防的是"同一次点击重复提交"，
+# 不是跨进程的持久幂等；进程重启后用户再点会重新走一次官方查重（官方对已添加词
+# 返回较小 added_count），因此不需要落盘，也不该让它进入用户数据目录。
+_article_vocab_lock = threading.Lock()
+_article_vocab_operations = {}
+
 
 def configure_local_api(**values):
     globals().update(values)
@@ -125,6 +131,266 @@ class LocalApiMixin:
             result["reason"] = "角色绑定的 Live2D 模型不可用：%s" % exc
         return result
 
+    def _article_vocab_error(self, exc):
+        """把选词/官方接口异常映射成统一响应，保留 ``uncertain`` 语义。
+
+        ``uncertain`` 必须传给前端：写请求超时可能已生效，前端不能自动重试，
+        也不能显示成"失败"。
+        """
+        import article_vocab
+        import official_vocab_api
+        if isinstance(exc, official_vocab_api.OfficialVocabError):
+            data = exc.as_dict()
+            if exc.status in (401, 403, 429):
+                code = exc.status
+            elif exc.code in ("invalid_request", "unauthorized", "forbidden"):
+                code = 400
+            else:
+                code = 502
+            return self._send_json(code, data)
+        if isinstance(exc, (article_vocab.ArticleVocabError, ValueError)):
+            return self._send_json(400, {"error": str(exc) or "输入无效", "code": "invalid"})
+        return self._send_json(500, {"error": "选词服务暂时不可用"})
+
+    def _article_vocab_transport(self, retryable):
+        """把宿主 handler 的代理调用包装成 ``official_vocab_api`` 的 transport。
+
+        ``retryable=False`` 用于 ``add_words``：非幂等写请求不允许自动重试。
+        """
+        import official_vocab_api
+
+        def transport(api_path, body):
+            # MAIMEMO_BASE / MAX_UPSTREAM_JSON 由 server.py 注入；测试可直接导入
+            # app_api 时给一个安全默认，避免依赖注入顺序。
+            base = globals().get("MAIMEMO_BASE") or "https://open.maimemo.com/open"
+            limit = globals().get("MAX_UPSTREAM_JSON") or (8 * 1024 * 1024)
+            url = base + "/api/v1/memo/" + api_path
+            raw_body = json.dumps(body).encode("utf-8")
+            status, payload, retry_after = self._proxy_call(
+                url, method="POST", body=raw_body, retryable=retryable)
+            if status is None:
+                # 无上游响应：连接失败/超时。是否 uncertain 由 official_vocab_api 判断。
+                raise RuntimeError(payload.get("error") or "上游调用失败")
+            data = None
+            try:
+                if len(payload) <= limit:
+                    data = json.loads(payload.decode("utf-8"))
+            except (ValueError, UnicodeError):
+                data = None
+            result = {"status": status, "body": data if data is not None else {}}
+            if retry_after is not None:
+                result["headers"] = {"Retry-After": retry_after}
+            return result
+
+        return transport
+
+    def _article_vocab_get(self, path, parsed):
+        """文章选词 GET 路由。返回 None 表示不属于本模块。"""
+        if not path.startswith("/api/article-vocab/"):
+            return None
+        if path != "/api/article-vocab/status":
+            return self._send_json(404, {"error": "未知接口"})
+        context = self._companion_context()
+        if context is None:
+            return None
+        return self._send_json(200, {
+            "ok": True,
+            "account_epoch": context["account_epoch"],
+            "data_epoch": context["data_epoch"],
+            "auto_add_default": False,
+        })
+
+    def _article_vocab_post(self, path, parsed):
+        """文章选词 POST 路由。这是唯一会写云端的功能入口。"""
+        if not path.startswith("/api/article-vocab/"):
+            return None
+        try:
+            return self._article_vocab_route(path, parsed)
+        except Exception as exc:
+            # 官方接口错误必须变成带 code/uncertain 的响应，而不是 500 栈。
+            return self._article_vocab_error(exc)
+
+    def _article_vocab_route(self, path, parsed):
+        import article_vocab
+        import official_vocab_api
+
+        context = self._companion_context()
+        if context is None:
+            return None
+        try:
+            body = self._read_json_body()
+        except (json.JSONDecodeError, ValueError):
+            return self._send_json(400, {"error": "Invalid JSON body"})
+        if not isinstance(body, dict):
+            return self._send_json(400, {"error": "请求体必须是 JSON 对象"})
+
+        if path == "/api/article-vocab/select":
+            # 只读：分析文章并给出候选，不写云端。
+            article = body.get("article")
+            extracted = article_vocab.extract_english(article)
+            if not extracted["text"]:
+                reason = extracted.get("reason") or "no_english"
+                if reason == "empty":
+                    return self._send_json(400, {"error": "文章为空", "code": "empty"})
+                return self._send_json(400, {"error": "文章中没有可分析的英文", "code": "no_english"})
+            candidates = article_vocab.local_candidates(extracted["text"])
+            messages = article_vocab.build_prompt(
+                extracted["text"], candidates,
+                target_level=str(body.get("targetLevel") or ""),
+                purpose=str(body.get("purpose") or ""),
+                word_count=body.get("wordCount") or article_vocab.DEFAULT_WORD_COUNT)
+            return self._send_json(200, {
+                "chars": extracted["chars"],
+                "truncated": extracted["truncated"],
+                "candidates": len(candidates),
+                "messages": messages,
+            })
+
+        if path == "/api/article-vocab/parse":
+            # 把 AI 原始返回校验成受信任的候选列表。
+            source = body.get("article")
+            extracted = article_vocab.extract_english(source)
+            selection = article_vocab.parse_selection(
+                body.get("raw"),
+                source_text=extracted["text"],
+                max_words=body.get("wordCount") or article_vocab.DEFAULT_WORD_COUNT)
+            return self._send_json(200, selection)
+
+        if path == "/api/article-vocab/query-ids":
+            # 只读：批量查真实词 ID。绝不按下标映射。
+            lemmas = body.get("lemmas")
+            if not isinstance(lemmas, list):
+                return self._send_json(400, {"error": "lemmas 必须是数组"})
+            transport = self._article_vocab_transport(retryable=True)
+            matched_all, missing_all, ambiguous_all = {}, [], {}
+            for batch in article_vocab.plan_query_batches(lemmas):
+                result = official_vocab_api.query_vocabulary(
+                    transport=transport, spellings=batch)
+                mapped = article_vocab.map_voc_ids(batch, result["voc"])
+                matched_all.update(mapped["matched"])
+                missing_all.extend(mapped["missing"])
+                ambiguous_all.update(mapped["ambiguous"])
+            return self._send_json(200, {
+                "matched": matched_all, "missing": missing_all,
+                "ambiguous": ambiguous_all, "requested": len(matched_all) + len(missing_all) + len(ambiguous_all),
+            })
+
+        if path == "/api/article-vocab/add":
+            # 唯一的云端写入。要求显式确认 + 账号一致 + operation_id 幂等。
+            if body.get("confirm") is not True:
+                return self._send_json(400, {"error": "需要用户确认后才能加入学习列表",
+                                             "code": "confirm_required"})
+            if body.get("advance") not in (None, False):
+                return self._send_json(400, {"error": "本版本固定 advance=false", "code": "invalid"})
+            lemmas = body.get("lemmas")
+            if not isinstance(lemmas, list) or not lemmas:
+                return self._send_json(400, {"error": "没有可提交的单词", "code": "empty"})
+            expected_epoch = body.get("account_epoch")
+            if expected_epoch is not None and expected_epoch != context["account_epoch"]:
+                # 账号已切换：绝不能把上一个账号的选词写进当前账号。
+                return self._send_json(409, {"error": "账号已切换，请重新选择",
+                                             "code": "stale", "retryable": False})
+            operation_id = str(body.get("operationId") or "").strip()
+            if not operation_id:
+                return self._send_json(400, {"error": "缺少 operationId", "code": "invalid"})
+            cached = self._article_vocab_recall(operation_id)
+            if cached is not None:
+                # 幂等表**只按 operation_id 查**，不参与账号代次过滤。
+                # 理由：这个 id 对应的操作已经真的写过云端了，无论现在问的是
+                # 哪个账号，都绝不能再写一次。
+                #
+                # 代次不符也回 200 回放：前端每次 submit 都会新生成 operation_id
+                # (article-vocab.js:831，全仓唯一生成点、不持久化)，所以这条路径
+                # 现实中只可能是"同一次提交被打断后的重放"，而不是"用户想在新账号
+                # 下重试"。既然都不写云端，回放完整结果比只说一句"不会重复提交"
+                # 信息量更大——用户需要知道上次到底加进去多少词。
+                payload = dict(cached["result"], deduplicated=True)
+                if cached["account_epoch"] != context["account_epoch"]:
+                    payload["account_switched"] = True
+                return self._send_json(200, payload)
+
+            transport = self._article_vocab_transport(retryable=False)
+            matched, missing, ambiguous = {}, [], {}
+            for batch in article_vocab.plan_query_batches(lemmas):
+                result = official_vocab_api.query_vocabulary(transport=transport, spellings=batch)
+                mapped = article_vocab.map_voc_ids(batch, result["voc"])
+                matched.update(mapped["matched"])
+                missing.extend(mapped["missing"])
+                ambiguous.update(mapped["ambiguous"])
+
+            plan = article_vocab.build_add_plan(
+                [{"lemma": str(item)} for item in lemmas],
+                {"matched": matched, "ambiguous": ambiguous})
+            ids = [entry["id"] for entry in plan["submittable"]]
+            # 未命中官方词库的词不能提交，但也不能因此不告诉用户。
+            if not ids:
+                payload = {"submitted": 0, "added_count": 0, "shortfall": 0,
+                           "status": "none", "note": "所选词未在墨墨词库中查到，未提交",
+                           "missing": missing, "ambiguous": list(ambiguous), "skipped": plan["skipped"]}
+                self._article_vocab_remember(operation_id, context["account_epoch"], payload)
+                return self._send_json(200, payload)
+
+            added_total, submitted_total = 0, 0
+            for batch in article_vocab.plan_add_batches(ids):
+                # 查 ID 与写入之间有网络往返，用户可能在此期间切换账号。
+                # 每次真正写云端之前重新核对一次代次，避免把上一个账号的选词
+                # 写进当前账号。不一致就停下，已写入的批次如实报告。
+                current = self._companion_context()
+                if current is None:
+                    # `_companion_context()` 失败时**已经**把 401/503 写给客户端了
+                    # （见它的 docstring）。这里再发一次 409 会把第二个响应的
+                    # 状态行塞进第一个响应的 body，客户端 `response.json()` 直接
+                    # JSONDecodeError，于是"已写入多少词"的关键信息全部丢失。
+                    # 直接收工，不要发第二次。
+                    return
+                if current["account_epoch"] != context["account_epoch"]:
+                    stale = article_vocab.interpret_add_result(submitted_total, added_total)
+                    payload = dict(stale, missing=missing, ambiguous=list(ambiguous),
+                                   skipped=plan["skipped"], partial_account_switch=True)
+                    # 必须也记住这个 operation_id：否则客户端拿同一个 id 重放时，
+                    # 幂等表里没有记录，已提交的那几批会被**再写一次**。
+                    # 记住"已经提交过的部分"比记住"成功"更重要。
+                    self._article_vocab_remember(
+                        operation_id, context["account_epoch"], payload)
+                    return self._send_json(409, dict(
+                        payload,
+                        error="账号已切换，已停止提交；已提交的部分可能已生效，请在新账号下核对",
+                        code="stale", retryable=False,
+                        submitted=submitted_total, added_count=added_total))
+                result = official_vocab_api.add_words(batch, transport=transport, advance=False)
+                added_total += result["added_count"]
+                submitted_total += result["submitted"]
+            outcome = article_vocab.interpret_add_result(submitted_total, added_total)
+            payload = dict(outcome, missing=missing, ambiguous=list(ambiguous),
+                           skipped=plan["skipped"])
+            self._article_vocab_remember(operation_id, context["account_epoch"], payload)
+            return self._send_json(200, payload)
+
+        return self._send_json(404, {"error": "未知接口"})
+
+    def _article_vocab_recall(self, operation_id):
+        """按 operation_id 读取历史结果。
+
+        故意**不**按账号代次过滤：该 id 代表的操作可能已经写过云端，
+        代次不符时调用方必须拒绝再次写入，而不是当作"没记录"重写一遍。
+        """
+        with _article_vocab_lock:
+            cached = _article_vocab_operations.get(operation_id)
+        if cached is None:
+            return None
+        return dict(cached)
+
+    def _article_vocab_remember(self, operation_id, account_epoch, result):
+        """记住已完成的 operation_id（进程内），保证重复提交不再写云端。"""
+        with _article_vocab_lock:
+            if len(_article_vocab_operations) >= 512:
+                # 绝不能 clear() 整表：表里可能有**已经写过云端**的 operation_id，
+                # 清掉之后同一个 id 重放就会再写一次（G 实测复现过真实重复写入）。
+                # dict 保序，弹掉最早插入的一个即可。
+                _article_vocab_operations.pop(next(iter(_article_vocab_operations)), None)
+            _article_vocab_operations[operation_id] = {
+                "account_epoch": account_epoch, "result": result}
+
     def _start_legacy_import_once(self, profile_id):
         if not profile_id or not DB_READY:
             return
@@ -135,7 +401,305 @@ class LocalApiMixin:
         threading.Thread(target=db.try_import_legacy_sqlserver, args=(profile_id,),
                          name="memo-legacy-readonly-import", daemon=True).start()
 
+    # ===================== 陪伴升级：共享辅助 =====================
+    def _companion_context(self):
+        """解析当前账号并返回带持久代次的上下文；失败时已发送响应并返回 None。"""
+        if not DB_READY:
+            self._send_json(503, {"error": "数据库未就绪"})
+            return None
+        token, account_key = self._memo_identity(required=True)
+        if not token or not account_key:
+            return None
+        import companion_runtime
+        try:
+            return companion_runtime.account_context(token, account_key)
+        except Exception as exc:
+            self._send_json(401, {"error": str(exc)})
+            return None
+
+    def _companion_error(self, exc):
+        """把业务模块的异常映射成统一错误对象，不泄漏内部名词。"""
+        import companion_memory
+        import companion_sessions
+        if isinstance(exc, companion_sessions.ConflictError):
+            return self._send_json(409, {"error": str(exc), "code": "conflict", "retryable": True})
+        if isinstance(exc, companion_sessions.StaleEpochError):
+            return self._send_json(409, {"error": "学习数据已重置，请重新进入", "code": "stale", "retryable": False})
+        if isinstance(exc, companion_memory.MemoryConflictError):
+            return self._send_json(409, {"error": str(exc), "code": "conflict", "retryable": True})
+        if isinstance(exc, (companion_memory.MemoryStoreError, companion_sessions.SessionError)):
+            return self._send_json(400, {"error": str(exc), "code": "invalid", "retryable": False})
+        traceback.print_exc()
+        return self._send_json(500, {"error": "陪伴服务暂时不可用"})
+
+    def _companion_epoch_guard(self, context, parsed_or_body):
+        """客户端带上自己记得的代次时，代次不符就返回 409 stale。
+
+        为什么需要：会话行按当前代次过滤，数据重置后旧会话只会「查不到」。
+        如果只返回 ``available=False``，前端无法区分「还没结算」与「数据被清空了」，
+        会一直等在错误的界面上。这里给出可区分的信号。
+        """
+        try:
+            if hasattr(parsed_or_body, "query"):
+                raw = parse_qs(parsed_or_body.query).get("data_epoch", [None])[0]
+            elif isinstance(parsed_or_body, dict):
+                raw = parsed_or_body.get("data_epoch")
+            else:
+                raw = None
+            if raw in (None, ""):
+                return False
+            if int(raw) != int(context["data_epoch"]):
+                self._send_json(409, {"error": "学习数据已重置，请重新进入",
+                                      "code": "stale", "retryable": False})
+                return True
+        except (TypeError, ValueError):
+            return False
+        return False
+
+    def _companion_get(self, path, parsed):
+        """陪伴升级 GET 路由。返回 None 表示未命中，交回既有分发。"""
+        if not path.startswith("/api/companion/") and not path.startswith("/api/role-packages/"):
+            return None
+        try:
+            if path == "/api/companion/memory/settings":
+                context = self._companion_context()
+                if context is None:
+                    return None
+                import companion_memory
+                return self._send_json(200, companion_memory.get_settings(context["profile_pk"]))
+
+            if path == "/api/companion/memory/context":
+                context = self._companion_context()
+                if context is None:
+                    return None
+                import companion_memory
+                import companion_runtime
+                role = companion_runtime.active_role()
+                query = parse_qs(parsed.query).get("q", [""])[0]
+                settings = companion_memory.get_settings(context["profile_pk"])
+                if not settings.get("use_enabled") or not settings.get("outbound_enabled"):
+                    # 出站关闭时本地仍可检索，但不下发可发送的上下文文本。
+                    return self._send_json(200, {"available": False, "items": [], "chars": 0})
+                return self._send_json(200, companion_memory.retrieve(context["profile_pk"], role["role_id"], query))
+
+            if path == "/api/companion/memories":
+                context = self._companion_context()
+                if context is None:
+                    return None
+                import companion_memory
+                import companion_runtime
+                query = parse_qs(parsed.query)
+                role_id = (query.get("role_id") or [companion_runtime.active_role()["role_id"]])[0]
+                role_epoch = companion_runtime.db.companion_role_epoch(context["profile_pk"], role_id)
+                return self._send_json(200, {
+                    "role_id": role_id,
+                    "role_epoch": role_epoch["role_epoch"],
+                    "items": companion_memory.list_memories(context["profile_pk"], role_id),
+                })
+
+            if path.startswith("/api/companion/sessions/"):
+                context = self._companion_context()
+                if context is None:
+                    return None
+                if self._companion_epoch_guard(context, parsed):
+                    return None
+                import companion_sessions
+                parts = path.strip("/").split("/")
+                session_id = parts[3] if len(parts) > 3 else ""
+                if len(parts) == 5 and parts[4] == "settlement":
+                    return self._send_json(200, companion_sessions.get_settlement(
+                        context["profile_pk"], context["data_epoch"], session_id) or {"available": False})
+                if len(parts) == 4:
+                    return self._send_json(200, companion_sessions.get_session(
+                        context["profile_pk"], context["data_epoch"], session_id) or {"available": False})
+                return self._send_json(404, {"error": "未知接口"})
+
+            if path == "/api/companion/sessions":
+                context = self._companion_context()
+                if context is None:
+                    return None
+                import companion_sessions
+                return self._send_json(200, {
+                    "items": companion_sessions.list_settlements(context["profile_pk"], context["data_epoch"]),
+                })
+
+            if path.startswith("/api/role-packages/jobs/"):
+                import role_package_service
+                job_id = path.rsplit("/", 1)[-1]
+                return self._send_json(200, role_package_service.job_status(job_id))
+
+            if path == "/api/role-packages/jobs":
+                import role_package_service
+                return self._send_json(200, {"items": role_package_service.list_jobs()})
+
+            if path == "/api/role-packages/registry":
+                import role_package_service
+                return self._send_json(200, role_package_service.read_registry())
+
+            return self._send_json(404, {"error": "未知接口"})
+        except Exception as exc:
+            return self._companion_error(exc)
+
     # ===================== /api/* 查询 =====================
+    def _companion_post(self, path, parsed):
+        """陪伴升级 POST 路由。所有写请求都需要自定义头与同源校验。"""
+        try:
+            if path.startswith("/api/role-packages/"):
+                return self._role_package_post(path, parsed)
+            context = self._companion_context()
+            if context is None:
+                return None
+            body = self._read_json_body()
+            profile_pk = context["profile_pk"]
+            data_epoch = context["data_epoch"]
+            import companion_memory
+            import companion_runtime
+
+            if path == "/api/companion/memory/settings":
+                return self._send_json(200, companion_memory.update_settings(
+                    profile_pk,
+                    use_enabled=body.get("use_enabled"),
+                    outbound_enabled=body.get("outbound_enabled"),
+                    retention_days=body.get("retention_days"),
+                    expected_settings_revision=body.get("expected_settings_revision"),
+                ))
+
+            if path == "/api/companion/memories":
+                kind = str(body.get("kind") or "")
+                text = str(body.get("text") or "")
+                role_id = str(body.get("role_id") or companion_runtime.active_role()["role_id"])
+                return self._send_json(200, companion_memory.set_preference(
+                    profile_pk, role_id, kind, text,
+                    expected_revision=body.get("expected_revision"),
+                ))
+
+            if path.startswith("/api/companion/memories/") and path.endswith("/edit"):
+                parts = path.strip("/").split("/")
+                memory_id = parts[3] if len(parts) > 3 else ""
+                return self._send_json(200, companion_memory.set_preference(
+                    profile_pk, str(body.get("role_id") or companion_runtime.active_role()["role_id"]),
+                    str(body.get("kind") or ""), str(body.get("text") or ""),
+                    expected_revision=body.get("expected_revision"),
+                ))
+
+            if path == "/api/companion/memory/clear":
+                scope = str(body.get("scope") or "").strip()
+                role_id = str(body.get("role_id") or "").strip()
+                if scope == "account":
+                    # 清空整个账号的记忆是破坏性操作，必须由用户显式确认。
+                    if body.get("confirm") is not True:
+                        return self._send_json(400, {
+                            "error": "清空全部记忆需要显式确认", "code": "confirm_required"})
+                    return self._send_json(200, companion_memory.clear_account(profile_pk))
+                if scope == "role" or (not scope and role_id):
+                    target_role = role_id or str(companion_runtime.active_role().get("role_id") or "")
+                    if not target_role:
+                        return self._send_json(400, {
+                            "error": "没有可清空的角色记忆", "code": "invalid"})
+                    return self._send_json(200, companion_memory.clear_role(profile_pk, target_role))
+                # 不猜范围：默认静默清空会让用户丢数据。
+                return self._send_json(400, {"error": "请指定清空范围", "code": "invalid"})
+
+            import companion_sessions
+            if path == "/api/companion/sessions":
+                role = companion_runtime.active_role()
+                study_day = companion_runtime.study_day()
+                goal_kind = str(body.get("goal_kind") or "session_goal")
+                target = body.get("target_count")
+                return self._send_json(200, companion_sessions.open_session(
+                    profile_pk=profile_pk, data_epoch=data_epoch, study_day=study_day,
+                    task_key=companion_runtime.canonical_task_key(study_day, role["role_id"]),
+                    goal_kind=goal_kind,
+                    target_count=int(target) if isinstance(target, int) else None,
+                    role_id=role["role_id"], role_name=role["role_name"],
+                    binding=companion_runtime.identity_binding(context["account_key"]),
+                    new_round=bool(body.get("new_round")),
+                    operation_id=str(body.get("operation_id") or ""),
+                ))
+
+            if path.startswith("/api/companion/sessions/"):
+                parts = path.strip("/").split("/")
+                session_id = parts[3] if len(parts) > 3 else ""
+                action = parts[4] if len(parts) > 4 else ""
+                if action == "state":
+                    return self._send_json(200, companion_sessions.set_state(
+                        profile_pk=profile_pk, data_epoch=data_epoch, session_id=session_id,
+                        action=str(body.get("action") or ""),
+                        expected_revision=body.get("expected_revision"),
+                        target_count=body.get("target_count"),
+                    ))
+                if action == "events":
+                    return self._send_json(200, companion_sessions.record_events(
+                        profile_pk=profile_pk, data_epoch=data_epoch, session_id=session_id,
+                        events=body.get("events") or [],
+                    ))
+                if action == "heartbeat":
+                    return self._send_json(200, companion_sessions.touch_lease(
+                        profile_pk=profile_pk, data_epoch=data_epoch, session_id=session_id,
+                        instance_id=str(body.get("instance_id") or ""),
+                    ))
+                if action == "reconcile":
+                    import companion_progress_sources
+                    snapshot = companion_progress_sources.build_snapshot(
+                        profile_pk, data_epoch, companion_runtime.study_day(),
+                        companion_runtime.canonical_task_key(),
+                        body.get("raw_items") or [],
+                        raw_count=body.get("raw_count"),
+                        upstream_plan_known=bool(body.get("upstream_plan_known")),
+                        source=str(body.get("source") or "official_today_items"),
+                    )
+                    return self._send_json(200, companion_sessions.reconcile(
+                        profile_pk=profile_pk, data_epoch=data_epoch, session_id=session_id,
+                        snapshot=snapshot,
+                        binding=companion_runtime.identity_binding(context["account_key"]),
+                    ))
+                if action == "complete":
+                    return self._send_json(200, companion_sessions.complete_session(
+                        profile_pk=profile_pk, data_epoch=data_epoch, session_id=session_id,
+                        expected_revision=body.get("expected_revision"),
+                        evidence_refs=body.get("evidence_refs") or {},
+                    ))
+                return self._send_json(404, {"error": "未知接口"})
+
+            return self._send_json(404, {"error": "未知接口"})
+        except Exception as exc:
+            return self._companion_error(exc)
+
+    def _role_package_post(self, path, parsed):
+        """角色包扫描/安装/队列与模型目录批量下载。"""
+        import role_package_service
+        body = self._read_json_body()
+        if path == "/api/role-packages/inspect":
+            sources = body.get("sources")
+            if not isinstance(sources, list) or not sources:
+                return self._send_json(400, {"error": "请至少选择一个角色包"})
+            return self._send_json(200, role_package_service.inspect(sources))
+        if path == "/api/role-packages/install":
+            inspection_id = str(body.get("inspection_id") or "")
+            selections = body.get("selections")
+            if not inspection_id or not isinstance(selections, list):
+                return self._send_json(400, {"error": "缺少扫描结果或角色选择"})
+            return self._send_json(202, role_package_service.install(
+                inspection_id, selections,
+                conflict_policy=str(body.get("conflict_policy") or "keep_persona"),
+            ))
+        if path.startswith("/api/role-packages/jobs/") and path.endswith("/cancel"):
+            return self._send_json(200, role_package_service.cancel(path.rstrip("/").split("/")[4]))
+        if path == "/api/role-packages/uploads":
+            return self._send_json(400, {
+                "error": "浏览器上传需使用 multipart 通道，请使用桌面版原生多选",
+                "code": "native_import_required",
+            })
+        if path == "/api/live2d/catalog-batches":
+            live2d = globals().get("LIVE2D_SERVICE")
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            items = body.get("items")
+            if not isinstance(items, list) or not items:
+                return self._send_json(400, {"error": "请选择要下载的模型"})
+            return self._send_json(202, live2d.start_catalog_batch(items, self._profile_id(required=False)))
+        return self._send_json(404, {"error": "未知接口"})
+
     def _handle_api_get(self, path, parsed):
         # 与数据库无关的本地接口（运行模式 / 语音资源包状态）
         if path == "/api/app/current-mode":
@@ -249,6 +813,25 @@ class LocalApiMixin:
                 return self._send_json(503, {"error": "Live2D 服务未就绪"})
             return self._send_json(200, live2d.download_status(path.rsplit("/", 1)[-1]))
 
+        if path.startswith("/api/live2d/catalog-batches/"):
+            if not live2d:
+                return self._send_json(503, {"error": "Live2D 服务未就绪"})
+            return self._send_json(200, live2d.catalog_batch_status(path.rsplit("/", 1)[-1]))
+
+        # ---- 陪伴升级：记忆、角色包、学习会话 ----
+        companion = self._companion_get(path, parsed)
+        if companion is not None:
+            return companion
+
+        # ---- 文章选词：状态查询（只读）----
+        # 注意：这个路由自己用 `_send_json` 写响应、返回 `None`。
+        # 若像下面这样用 `if result is not None` 判断，`None` 会被误判成
+        # "不属于本模块"，于是继续往下走并**再发一个 404** —— 第二个响应的
+        # 状态行会塞进第一个响应的 body，客户端 `response.json()` 直接炸。
+        # 所以先判前缀：属于本模块的一律直接返回，不再往下走。
+        if path.startswith("/api/article-vocab/"):
+            return self._article_vocab_get(path, parsed)
+
         known_db_paths = {
             "/api/recommendations/today",
             "/api/stats/history",
@@ -298,7 +881,11 @@ class LocalApiMixin:
                 result = dict(persistent)
                 result.update(live)
                 # records_count 是 SQLite 已提交的完整状态，不只是本次拉取数量。
-                result["records_count"] = len(db.get_records(profile_id))
+                # 用 COUNT(*) 而不是 len(get_records())：状态接口只需要数量，
+                # 不需要把 11 个投影列全部取出、按 NOCASE 排序并构造 10 键 dict 列表。
+                # 语义与 get_records() 一致（同样按 profile_id + is_active=1 过滤），
+                # 由 tests/perf/test_record_count_equivalence.py 逐场景对照。
+                result["records_count"] = db.get_record_count(profile_id)
                 if persistent.get("needs_reconcile"):
                     result["needs_reconcile"] = True
                 return self._send_json(200, result)
@@ -355,6 +942,13 @@ class LocalApiMixin:
                     return self._send_json(400, {"error": str(exc)})
             if path.startswith("/api/tts/roles/") and path.endswith("/upload"):
                 return self._upload_tts_role_file(path, parsed)
+            # 陪伴升级的写入口自带来源校验与正文上限，且不使用 JSON body 之外的
+            # 上传流；放在通用 JSON 解析之前，避免上传路径被误判。
+            if path.startswith("/api/companion/") or path.startswith("/api/role-packages/"):
+                return self._companion_post(path, parsed)
+            # 文章选词：自带 body 解析与账号/代次校验，放在通用 JSON 解析之前。
+            if path.startswith("/api/article-vocab/"):
+                return self._article_vocab_post(path, parsed)
             try:
                 body = self._read_json_body()
             except (json.JSONDecodeError, ValueError):

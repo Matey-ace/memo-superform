@@ -17,6 +17,16 @@ const App = (function() {
     let studyDataGeneration = 0;
     let wordDataGeneration = 0;
     let settingsPreviousFocus = null;
+    // 设置面板内的两个轮询句柄必须放在模块作用域：closeSettings() 在面板关闭时
+    // 统一停掉它们，而它们的启动位置在 setupSettingsPanel() 的更深的闭包里。
+    let maimemoPollTimer = null;
+    let codexPollTimer = null;
+    // 设置面板建好后由 setupSettingsPanel 赋值：账号凭据可能在面板之外变化
+    // （bootstrap 迁移旧 Token、OAuth 回调完成），那时也需要重绘账号区。
+    let repaintMaimemoPanel = null;
+    // 账号区是普通版与笔记本共用的 DOM。普通版新增的状态面板只允许在普通版
+    // 生效，笔记本主题一律走改动前的实现。
+    const standardAuthUi = !!(window.MemoUIStyle && !window.MemoUIStyle.isNotebook);
     const VALID_REFRESH_INTERVALS = [5, 10, 15, 30, 60];
     let autoRefreshEnabled = localStorage.getItem('auto_refresh_enabled') !== 'false';
     let autoRefreshInterval = parseInt(localStorage.getItem('auto_refresh_interval') || '10', 10);
@@ -33,12 +43,24 @@ const App = (function() {
         setupTheme();
         LayoutManager.init();
         if (typeof Live2DCompanion !== 'undefined') Live2DCompanion.init();
+        // 文章选词入口：只绑按钮，不预加载、不轮询；真正打开时才创建实例。
+        if (typeof ArticleVocabUI !== 'undefined') ArticleVocabUI.init();
         window.addEventListener('memo-study-sync-status', updateCountdown);
         StudySyncUI.init({ onRecordsChanged: handleStudyRecordsChanged });
         window.addEventListener('memo-account-changed', function() {
             resetStudyDataForProfileChange();
+            // 凭据变化后账号面板必须重绘：bootstrap 迁移旧 Token、或别处完成授权，
+            // 都只更新共享状态，不会自己回到设置页把界面画一遍。
+            // 只在普通版重绘：笔记本主题的账号区保持改动前的行为。
+            if (standardAuthUi && typeof repaintMaimemoPanel === 'function') repaintMaimemoPanel();
             if (window.TTS) TTS.stop();
             if (typeof Live2DCompanion !== 'undefined' && Live2DCompanion.isOpen()) Live2DCompanion.exit();
+            // 切换账号必须撤销文章选词的"自动添加"授权并关掉面板：
+            // 授权是上一个账号给的，不能延续到另一个账号。
+            if (typeof ArticleVocabUI !== 'undefined') ArticleVocabUI.close();
+            if (typeof ArticleVocab !== 'undefined' && ArticleVocab.resetAutoAddPref) {
+                ArticleVocab.resetAutoAddPref();
+            }
         });
         setupAutoRefresh();
         
@@ -90,6 +112,9 @@ const App = (function() {
                 if (resp.ok) {
                     modeStatus.textContent = '✓ 已保存，下次启动生效';
                     modeStatus.className = 'status-text success';
+                    // 运行模式由这个按钮单独保存，#saveSettingsBtn 不写它；不同步
+                    // 基线的话用户怎么点都消不掉“还有未保存的改动”。
+                    if (window.MemoSettingsNav && MemoSettingsNav.markSaved) MemoSettingsNav.markSaved();
                 } else {
                     modeStatus.textContent = '✗ ' + (data.error || '保存失败');
                     modeStatus.className = 'status-text error';
@@ -246,7 +271,6 @@ const App = (function() {
         const codexStatus = document.getElementById('codexStatus');
         const codexLoginBtn = document.getElementById('codexLoginBtn');
         const codexLogoutBtn = document.getElementById('codexLogoutBtn');
-        let codexPollTimer = null;
 
         function syncProviderFields() {
             const codex = providerSelect.value === 'codex';
@@ -319,78 +343,310 @@ const App = (function() {
         const maimemoManualSaveBtn = document.getElementById('maimemoManualSaveBtn');
         const maimemoManualToken = document.getElementById('maimemoManualToken');
         const maimemoDeleteDataBtn = document.getElementById('maimemoDeleteDataBtn');
-        let maimemoPollTimer = null;
+        // “重新检测”和原因提示是普通版新增的状态面板元素，笔记本主题里不存在
+        // （标记了 data-standard-only，会被隐藏）。笔记本的账号区保持原样。
+        const maimemoRetryBtn = document.getElementById('maimemoRetryBtn');
+        const maimemoReason = document.getElementById('maimemoConnectReason');
+        // 界面自己也要有代次：状态查询可能在保存 Token / 断开之后才返回，
+        // 迟到的旧快照不许覆盖用户刚刚完成的凭据操作。
+        let maimemoUiSequence = 0;
+        let maimemoBusy = '';
 
         function stopMaimemoPolling() {
             if (maimemoPollTimer) { clearInterval(maimemoPollTimer); maimemoPollTimer = null; }
         }
-        async function refreshMaimemoAccount() {
-            try {
-                const previousProfile = MaimemoAPI.connectionStatus().profile_id;
-                const status = await MaimemoAPI.refreshConnection();
-                const connected = Boolean(status.connected);
-                // 新版桌面启动器会报告 Windows 自定义协议注册结果。旧服务没有
-                // 这个字段时保持兼容，视为可用。
-                const callbackReady = status.callback_ready !== false;
-                if (connected) {
-                    const label = status.mode === 'oauth'
-                        ? ('✓ 已连接' + (status.display_name ? ' · ' + status.display_name : ''))
-                        : '✓ 已连接 · 手动 Token';
-                    maimemoStatus.textContent = label;
-                    maimemoStatus.className = 'status-text success';
-                    maimemoConnectBtn.style.display = 'none';
-                    maimemoReconnectBtn.style.display = status.configured && callbackReady ? '' : 'none';
-                    maimemoDisconnectBtn.style.display = '';
-                    maimemoDeleteDataBtn.style.display = '';
-                    maimemoConnectBtn.disabled = false;
-                    maimemoConnectBtn.title = '';
-                    stopMaimemoPolling();
-                    // OAuth 回调在外部浏览器完成后只会更新本机凭据。这里检测到
-                    // 状态转换后主动刷新仪表盘，不要求用户再手动保存设置。
-                    if (previousProfile !== status.profile_id) {
-                        hideWelcome();
-                        loadAllData();
-                    }
-                } else {
-                    maimemoStatus.textContent = status.error ? ('✗ ' + status.error)
-                        : (status.pending ? '请在浏览器中完成墨墨授权...' : '尚未连接墨墨账号');
-                    maimemoStatus.className = status.error ? 'status-text error' : 'hint';
-                    maimemoConnectBtn.style.display = status.configured ? '' : 'none';
-                    maimemoConnectBtn.disabled = !callbackReady;
-                    maimemoConnectBtn.title = callbackReady ? '' : (status.callback_error || '一键授权回调协议未注册');
-                    maimemoReconnectBtn.style.display = 'none';
-                    maimemoDisconnectBtn.style.display = 'none';
-                    maimemoDeleteDataBtn.style.display = 'none';
-                    if (!status.configured && !status.pending) {
-                        maimemoStatus.textContent = '一键授权将在开放平台 client_id 配置后可用；可先使用下方手动 Token。';
-                    } else if (!callbackReady && !status.pending) {
-                        maimemoStatus.textContent = '一键授权暂不可用：' + (status.callback_error || '授权回调协议未注册。请重新启动 MemoSuperform.exe。');
+
+        // 把服务端快照翻译成一个显式状态。区分“还没查到”“查询失败”“未配置”
+        // “回调不可用”“未连接”“授权中”“已连接”，而不是用 undefined 当 false。
+        function maimemoStateOf(status, error) {
+            if (error) return { kind: 'error', reason: error };
+            if (!status) return { kind: 'loading' };
+            const callbackReady = status.callback_ready !== false;
+            const callbackError = status.callback_error || '';
+            if (status.connected) return { kind: 'connected', status: status };
+            if (status.error) return { kind: 'error', reason: status.error };
+            if (status.pending) return { kind: 'pending' };
+            if (!status.configured) return { kind: 'unconfigured' };
+            if (!callbackReady) return { kind: 'callback-missing', reason: callbackError };
+            return { kind: 'ready' };
+        }
+
+        // 账号区原来的 markup 用内联 style="display:none" 控制显隐（那段 markup 与
+        // 笔记本主题共用，不能改）。这里同时写 hidden 和内联 display，否则内联样式
+        // 会盖住 hidden，按钮永远不出现。
+        function showMaimemo(selector, visible) {
+            if (!selector) return;
+            selector.hidden = !visible;
+            selector.style.display = visible ? '' : 'none';
+        }
+
+        // 笔记本主题的账号区保持改动前的样子：文案、class 名、用 style.display
+        // 控制显隐都逐一复刻，避免普通版的新状态面板渗进冻结的主题。
+        function renderMaimemoLegacy(status) {
+            const connected = Boolean(status && status.connected);
+            const callbackReady = !status || status.callback_ready !== false;
+            if (connected) {
+                const label = status.mode === 'oauth'
+                    ? ('✓ 已连接' + (status.display_name ? ' · ' + status.display_name : ''))
+                    : '✓ 已连接 · 手动 Token';
+                maimemoStatus.textContent = label;
+                maimemoStatus.className = 'status-text success';
+                maimemoConnectBtn.style.display = 'none';
+                maimemoReconnectBtn.style.display = status.configured && callbackReady ? '' : 'none';
+                maimemoDisconnectBtn.style.display = '';
+                maimemoDeleteDataBtn.style.display = '';
+                maimemoConnectBtn.disabled = false;
+                maimemoConnectBtn.title = '';
+            } else {
+                maimemoStatus.textContent = status && status.error ? ('✗ ' + status.error)
+                    : (status && status.pending ? '请在浏览器中完成墨墨授权...' : '尚未连接墨墨账号');
+                maimemoStatus.className = status && status.error ? 'status-text error' : 'hint';
+                maimemoConnectBtn.style.display = status && status.configured ? '' : 'none';
+                maimemoConnectBtn.disabled = !callbackReady;
+                maimemoConnectBtn.title = callbackReady ? '' : ((status && status.callback_error) || '一键授权回调协议未注册');
+                maimemoReconnectBtn.style.display = 'none';
+                maimemoDisconnectBtn.style.display = 'none';
+                maimemoDeleteDataBtn.style.display = 'none';
+                if (status && !status.configured && !status.pending) {
+                    maimemoStatus.textContent = '一键授权将在开放平台 client_id 配置后可用；可先使用下方手动 Token。';
+                } else if (status && !callbackReady && !status.pending) {
+                    maimemoStatus.textContent = '一键授权暂不可用：' + (status.callback_error || '授权回调协议未注册。请重新启动 MemoSuperform.exe。');
+                    maimemoStatus.className = 'status-text error';
+                }
+            }
+        }
+
+        // 单一渲染入口：任何状态变化都走这里，避免某个分支忘了恢复按钮。
+        function renderMaimemoState(state) {
+            if (!standardAuthUi) { renderMaimemoLegacy(state.status || null); return; }
+            showMaimemo(maimemoConnectBtn, false);
+            showMaimemo(maimemoReconnectBtn, false);
+            showMaimemo(maimemoDisconnectBtn, false);
+            showMaimemo(maimemoDeleteDataBtn, false);
+            // “重新检测”是状态查询的恢复入口。默认隐藏，只在确实需要重新确认
+            // 状态的分支里打开（检测中 / 查询失败 / 未配置 / 回调不可用 / 授权中）。
+            showMaimemo(maimemoRetryBtn, false);
+            if (maimemoReason) { maimemoReason.hidden = true; maimemoReason.textContent = ''; }
+            maimemoConnectBtn.disabled = false;
+            maimemoConnectBtn.title = '';
+            if (maimemoStatus) maimemoStatus.className = 'status-text hint';
+
+            const status = state.status || null;
+            switch (state.kind) {
+                case 'loading':
+                    if (maimemoStatus) maimemoStatus.textContent = '正在检查墨墨连接状态…';
+                    // 查询未完成时仍给出入口，但标记为“检测中”，避免入口凭空消失。
+                    showMaimemo(maimemoConnectBtn, true);
+                    maimemoConnectBtn.disabled = true;
+                    maimemoConnectBtn.title = '正在检查本机授权配置';
+                    showMaimemo(maimemoRetryBtn, true);
+                    break;
+                case 'error':
+                    if (maimemoStatus) {
+                        maimemoStatus.textContent = '✗ 读取墨墨连接状态失败：' + state.reason;
                         maimemoStatus.className = 'status-text error';
                     }
+                    // 查询失败时保留一键授权入口（可重试），并显示原因与重试按钮。
+                    showMaimemo(maimemoConnectBtn, true);
+                    maimemoConnectBtn.disabled = false;
+                    maimemoConnectBtn.title = '状态查询失败，仍可尝试打开授权页';
+                    showMaimemo(maimemoRetryBtn, true);
+                    if (maimemoReason) {
+                        maimemoReason.hidden = false;
+                        maimemoReason.textContent = '无法确认本机授权配置：' + state.reason +
+                            ' 可点击“重新检测”重试；也可以直接使用下方手动 Token。';
+                    }
+                    break;
+                case 'unconfigured':
+                    if (maimemoStatus) maimemoStatus.textContent = '尚未连接墨墨账号';
+                    showMaimemo(maimemoConnectBtn, true);
+                    maimemoConnectBtn.disabled = true;
+                    maimemoConnectBtn.title = '开放平台 client_id 未配置';
+                    showMaimemo(maimemoRetryBtn, true);
+                    if (maimemoReason) {
+                        maimemoReason.hidden = false;
+                        maimemoReason.textContent = '一键授权暂不可用：当前安装包没有内置开放平台 client_id。' +
+                            '请安装官方发布版，或使用下方“高级连接方式：手动 Token”。';
+                    }
+                    break;
+                case 'callback-missing':
+                    if (maimemoStatus) maimemoStatus.textContent = '尚未连接墨墨账号';
+                    showMaimemo(maimemoConnectBtn, true);
+                    maimemoConnectBtn.disabled = true;
+                    maimemoConnectBtn.title = state.reason || '一键授权回调协议未注册';
+                    showMaimemo(maimemoRetryBtn, true);
+                    if (maimemoReason) {
+                        maimemoReason.hidden = false;
+                        maimemoReason.textContent = '一键授权暂不可用：' + (state.reason ||
+                            '墨墨授权回调协议未注册。') + ' 请从 MemoSuperform.exe 或 launcher.py 启动后重试（' +
+                            '直接运行 server.py 不会注册回调）；在此之前可使用下方手动 Token。';
+                    }
+                    break;
+                case 'pending':
+                    if (maimemoStatus) maimemoStatus.textContent = '请在浏览器中完成墨墨授权…';
+                    // 授权占位会在服务端保留 10 分钟。用户可能关掉浏览器或放弃这次
+                    // 授权，此时只显示“重新检测”会让入口消失整整十分钟，所以保留
+                    // 一个可以重新发起授权的按钮。
+                    showMaimemo(maimemoConnectBtn, false);
+                    showMaimemo(maimemoReconnectBtn, true);
+                    maimemoReconnectBtn.disabled = false;
+                    showMaimemo(maimemoRetryBtn, true);
+                    if (maimemoReason) {
+                        maimemoReason.hidden = false;
+                        maimemoReason.textContent = '授权页已在浏览器中打开。完成授权后此面板会自动更新，无需手动刷新；' +
+                            '如果浏览器已关闭或想重新开始，可点“重新授权”。';
+                    }
+                    break;
+                case 'ready':
+                    if (maimemoStatus) maimemoStatus.textContent = '尚未连接墨墨账号';
+                    showMaimemo(maimemoConnectBtn, true);
+                    maimemoConnectBtn.disabled = false;
+                    if (maimemoReason) {
+                        maimemoReason.hidden = false;
+                        maimemoReason.textContent = '点击“连接墨墨账号”会打开墨墨开放平台授权页，完成后自动回到本应用。';
+                    }
+                    break;
+                case 'connected':
+                    if (maimemoStatus) {
+                        maimemoStatus.textContent = status.mode === 'oauth'
+                            ? ('✓ 已连接' + (status.display_name ? ' · ' + status.display_name : ''))
+                            : '✓ 已连接 · 手动 Token';
+                        maimemoStatus.className = 'status-text success';
+                    }
+                    // 已连接时“一键授权”改为“重新授权”，只有配置与回调都可用才提供。
+                    showMaimemo(maimemoReconnectBtn, Boolean(status.configured) && status.callback_ready !== false);
+                    showMaimemo(maimemoDisconnectBtn, true);
+                    showMaimemo(maimemoDeleteDataBtn, true);
+                    break;
+            }
+        }
+
+        // 让模块级的 memo-account-changed 监听器能要求账号区重绘。
+        repaintMaimemoPanel = function() {
+            maimemoUiSequence += 1;
+            return refreshMaimemoAccount();
+        };
+
+        async function refreshMaimemoAccount() {
+            // 笔记本主题：完全按改动前的实现走，包括失败时显示错误文案而不是
+            // “尚未连接”，以及不做代次去重。
+            if (!standardAuthUi) {
+                try {
+                    const previousProfile = MaimemoAPI.connectionStatus().profile_id;
+                    const status = await MaimemoAPI.refreshConnection();
+                    renderMaimemoLegacy(status);
+                    if (status.connected) {
+                        stopMaimemoPolling();
+                        if (previousProfile !== status.profile_id) { hideWelcome(); loadAllData(); }
+                    }
+                    return status;
+                } catch (e) {
+                    if (maimemoStatus) {
+                        maimemoStatus.textContent = '✗ ' + e.message;
+                        maimemoStatus.className = 'status-text error';
+                    }
+                    return null;
+                }
+            }
+            const sequence = ++maimemoUiSequence;
+            const previousProfile = MaimemoAPI.connectionStatus().profile_id;
+            try {
+                const status = await MaimemoAPI.refreshConnection();
+                if (sequence !== maimemoUiSequence) return status; // 更新的一次查询已经接管界面
+                renderMaimemoState(maimemoStateOf(status, ''));
+                if (status.connected) stopMaimemoPolling();
+                // OAuth 回调在外部浏览器完成后只会更新本机凭据。这里检测到状态
+                // 转换后主动刷新仪表盘，不要求用户再手动保存设置。
+                if (status.connected && previousProfile !== status.profile_id) {
+                    hideWelcome();
+                    loadAllData();
                 }
                 return status;
             } catch (e) {
-                maimemoStatus.textContent = '✗ ' + e.message;
-                maimemoStatus.className = 'status-text error';
+                if (sequence !== maimemoUiSequence) return null;
+                renderMaimemoState(maimemoStateOf(null, e.message || '未知错误'));
                 return null;
             }
         }
+
         async function startMaimemoLogin() {
+            if (!standardAuthUi) {
+                // 笔记本主题：保持改动前的一键授权流程（同样的文案、同样的轮询）。
+                if (maimemoStatus) {
+                    maimemoStatus.textContent = '正在打开浏览器授权...';
+                    maimemoStatus.className = 'hint';
+                }
+                try {
+                    const result = await MaimemoAPI.connect();
+                    if (!result.opened && result.authorization_url) window.open(result.authorization_url, '_blank', 'noopener');
+                    stopMaimemoPolling();
+                    maimemoPollTimer = setInterval(refreshMaimemoAccount, 1500);
+                } catch (e) {
+                    if (maimemoStatus) {
+                        maimemoStatus.textContent = '✗ ' + e.message;
+                        maimemoStatus.className = 'status-text error';
+                    }
+                }
+                return;
+            }
+            if (maimemoBusy === 'authorizing') return;
+            maimemoBusy = 'authorizing';
+            maimemoConnectBtn.disabled = true;
+            maimemoReconnectBtn.disabled = true;
+            if (maimemoStatus) {
+                maimemoStatus.textContent = '正在打开浏览器授权…';
+                maimemoStatus.className = 'status-text hint';
+            }
+            const sequence = ++maimemoUiSequence;
             try {
                 const result = await MaimemoAPI.connect();
-                maimemoStatus.textContent = '正在打开浏览器授权...';
-                maimemoStatus.className = 'hint';
-                if (!result.opened && result.authorization_url) window.open(result.authorization_url, '_blank', 'noopener');
-                stopMaimemoPolling();
-                maimemoPollTimer = setInterval(refreshMaimemoAccount, 1500);
+                // 只有“这次授权请求仍然有效且真的打开了授权页”才轮询。被取代或
+                // 失败的流程不该留下每秒一次的状态请求。
+                if (sequence === maimemoUiSequence) {
+                    if (!result.opened && result.authorization_url) window.open(result.authorization_url, '_blank', 'noopener');
+                    renderMaimemoState({ kind: 'pending' });
+                    stopMaimemoPolling();
+                    maimemoPollTimer = setInterval(refreshMaimemoAccount, 1500);
+                }
             } catch (e) {
-                maimemoStatus.textContent = '✗ ' + e.message;
-                maimemoStatus.className = 'status-text error';
+                if (sequence === maimemoUiSequence) {
+                    if (maimemoStatus) {
+                        maimemoStatus.textContent = '✗ ' + e.message;
+                        maimemoStatus.className = 'status-text error';
+                    }
+                    // 这段只在普通版可达（笔记本分支在上面已 return），仍然显式判断
+                    // 一次，避免以后调整分支时把普通版的提示泄漏进冻结的主题。
+                    if (standardAuthUi && maimemoReason) {
+                        maimemoReason.hidden = false;
+                        maimemoReason.textContent = '无法开始一键授权：' + e.message +
+                            ' 可改用下方“高级连接方式：手动 Token”。';
+                    }
+                }
+            } finally {
+                maimemoBusy = '';
+                maimemoConnectBtn.disabled = false;
+                maimemoReconnectBtn.disabled = false;
+                refreshMaimemoAccount();
             }
         }
         maimemoConnectBtn.addEventListener('click', startMaimemoLogin);
         maimemoReconnectBtn.addEventListener('click', startMaimemoLogin);
         maimemoDisconnectBtn.addEventListener('click', async function() {
+            if (!standardAuthUi) {
+                // 笔记本主题：改动前的断开流程。
+                try {
+                    await MaimemoAPI.disconnect();
+                    await refreshMaimemoAccount();
+                    showWelcome();
+                } catch (e) {
+                    maimemoStatus.textContent = '✗ ' + e.message;
+                    maimemoStatus.className = 'status-text error';
+                }
+                return;
+            }
+            if (maimemoBusy) return;
+            maimemoBusy = 'disconnecting';
+            maimemoDisconnectBtn.disabled = true;
             try {
                 await MaimemoAPI.disconnect();
                 await refreshMaimemoAccount();
@@ -398,20 +654,56 @@ const App = (function() {
             } catch (e) {
                 maimemoStatus.textContent = '✗ ' + e.message;
                 maimemoStatus.className = 'status-text error';
+                // 断开失败时恢复真实状态，避免界面停在“断开中”。
+                refreshMaimemoAccount();
+            } finally {
+                maimemoBusy = '';
+                maimemoDisconnectBtn.disabled = false;
             }
+        });
+        if (maimemoRetryBtn) maimemoRetryBtn.addEventListener('click', function() {
+            if (maimemoStatus) { maimemoStatus.textContent = '正在重新检测…'; maimemoStatus.className = 'status-text hint'; }
+            refreshMaimemoAccount();
         });
         maimemoManualSaveBtn.addEventListener('click', async function() {
             const value = maimemoManualToken.value.trim();
             if (!value) { maimemoStatus.textContent = '请输入 Token'; maimemoStatus.className = 'status-text error'; return; }
             this.disabled = true;
+            if (!standardAuthUi) {
+                // 笔记本主题：改动前的顺序与文案（先写结果再刷新）。
+                try {
+                    await MaimemoAPI.saveManualToken(value);
+                    maimemoManualToken.value = '';
+                    const progress = await MaimemoAPI.getStudyProgress(false);
+                    const p = progress.progress || progress;
+                    maimemoStatus.textContent = '✓ Token 已保存并连接成功' +
+                        (p && p.total !== undefined ? (' · 今日 ' + (p.finished || 0) + '/' + p.total) : '');
+                    maimemoStatus.className = 'status-text success';
+                    await refreshMaimemoAccount();
+                    hideWelcome();
+                    loadAllData();
+                } catch (e) {
+                    maimemoStatus.textContent = '✗ ' + e.message;
+                    maimemoStatus.className = 'status-text error';
+                }
+                this.disabled = false;
+                return;
+            }
             try {
                 await MaimemoAPI.saveManualToken(value);
                 maimemoManualToken.value = '';
-                const progress = await MaimemoAPI.getStudyProgress(false);
-                const p = progress.progress || progress;
-                maimemoStatus.textContent = '✓ Token 已保存并连接成功' + (p && p.total !== undefined ? (' · 今日 ' + (p.finished || 0) + '/' + p.total) : '');
-                maimemoStatus.className = 'status-text success';
+                // 先按最新凭据重绘，再补一次进度提示；即使取进度失败，
+                // 也不能把已经保存成功的连接显示成未连接。
                 await refreshMaimemoAccount();
+                try {
+                    const progress = await MaimemoAPI.getStudyProgress(false);
+                    const p = progress.progress || progress;
+                    if (p && p.total !== undefined) {
+                        maimemoStatus.textContent = '✓ 已连接 · 手动 Token · 今日 ' + (p.finished || 0) + '/' + p.total;
+                    }
+                } catch (progressError) {
+                    // 进度读取失败不影响连接状态，保持上一步渲染的“已连接”。
+                }
                 hideWelcome();
                 loadAllData();
             } catch (e) {
@@ -451,6 +743,9 @@ const App = (function() {
                 localStorage.setItem('companion_language', companionLanguageSelect.value === 'ja' ? 'ja' : 'zh');
             }
             notifyCompanionReminderSettingsChanged(saveCompanionReminderSettings());
+            // 值已经落盘，基线必须同步前移，否则紧接着的 closeSettings 会误报
+            // “还有未保存的改动”（普通版分类导航的守卫）。
+            if (window.MemoSettingsNav && MemoSettingsNav.markSaved) MemoSettingsNav.markSaved();
             if (nextStyle !== window.MemoUIStyle.name) {
                 window.MemoUIStyle.save(nextStyle);
                 location.replace('index.html');
@@ -514,18 +809,33 @@ const App = (function() {
         panel.classList.add('show');
         panel.setAttribute('aria-hidden', 'false');
         setSettingsBackgroundInert(true);
+        // 每次打开都回到分类目录并重对基线：程序化打开（例如“去配置 AI”）
+        // 也必须走这里，不能只靠那两个按钮的点击回调。
+        if (window.MemoSettingsNav && MemoSettingsNav.prepareOpen) MemoSettingsNav.prepareOpen();
         const closeButton = document.getElementById('closeSettings');
         setTimeout(function() {
             if (panel.classList.contains('show') && closeButton) closeButton.focus();
         }, 0);
         if (typeof StudySyncUI !== 'undefined' && StudySyncUI) StudySyncUI.refreshStatus();
     }
+    // 关闭设置页时必须停掉面板内启动的轮询。之前授权/Codex 的 1.5s 轮询
+    // 会一直跑到授权完成，即使用户早就关掉面板。
+    function stopSettingsPolling() {
+        if (maimemoPollTimer) { clearInterval(maimemoPollTimer); maimemoPollTimer = null; }
+        if (codexPollTimer) { clearInterval(codexPollTimer); codexPollTimer = null; }
+    }
+
     function closeSettings() {
         const panel = document.getElementById('settingsPanel');
         if (!panel.classList.contains('show')) return;
+        // 未保存的设置不能被关闭动作静默丢弃。普通版把检查放在分类导航模块里，
+        // 它同时负责“切换分类/返回目录”的同一套提示。
+        if (window.MemoSettingsNav && typeof MemoSettingsNav.confirmLeave === 'function' &&
+            !MemoSettingsNav.confirmLeave('关闭设置')) return;
         panel.classList.remove('show');
         panel.setAttribute('aria-hidden', 'true');
         setSettingsBackgroundInert(false);
+        stopSettingsPolling();
         const previousFocus = settingsPreviousFocus;
         settingsPreviousFocus = null;
         const fallback = document.getElementById('settingsBtn');
