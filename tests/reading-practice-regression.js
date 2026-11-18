@@ -517,6 +517,17 @@ group('提示词明确是仔细阅读，并且显式禁止段落匹配', () => {
   assert.ok(prompt.indexOf('禁止') >= 0, '应以禁止形式列出旧格式');
 });
 
+group('窄窗切换面板：各自记住滚动位置，不互相裁切', () => {
+  // 回归：曾经两个面板共用一个 scrollTop，文章滚到 164px 再切到题目时，
+  // 第 1 题题干会被顶到可视区外（实测 q1Top=48 < bodyBottom 起点）。
+  const src = require('fs').readFileSync('js/reading-practice-ui.js', 'utf8');
+  assert.ok(src.indexOf('paneScroll') >= 0, '界面需要按面板分别记录滚动位置');
+  assert.ok(/state\.paneScroll\[state\.pane\]\s*=/.test(src),
+    '切换前要先把当前面板的位置存进 paneScroll');
+  assert.ok(/body\.scrollTop\s*=\s*state\.paneScroll\[/.test(src),
+    '切换后要用目标面板自己的位置，而不是共用同一个 scrollTop');
+});
+
 group('两档难度不只是篇幅差异', () => {
   const mk = (level) => P.buildGenerationPrompt({
     level: level, words: [{ vocId: 'v1', spelling: 'alpha' }], theme: 'campus',

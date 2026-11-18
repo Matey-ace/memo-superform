@@ -59,6 +59,8 @@
         showExplanation: {},
         pane: 'article',         // 窄窗口：article | questions
         scrollTop: 0,
+        /* 每个面板各自的滚动位置。共用一个会让切过去的那个面板从中间开始显示。 */
+        paneScroll: Object.create(null),
         busy: false,
         notice: null,
         progress: null,
@@ -558,10 +560,15 @@
             btn.type = 'button';
             btn.setAttribute('aria-pressed', String(state.pane === pair[0]));
             btn.addEventListener('click', function () {
+                if (state.pane === pair[0]) return;
+                /* 两个面板的内容高度不同，共用一个 scrollTop 会出问题：
+                 * 文章滚到 164px 再切到题目，题目页会直接从 164px 处开始显示，
+                 * 第 1 题的题干被顶到可视区外面（实测 q1Top=48 < bodyTop=65）。
+                 * 所以按面板分别记住滚动位置，切过去就用它自己的位置。 */
+                state.paneScroll[state.pane] = body.scrollTop;
                 state.pane = pair[0];
-                state.scrollTop = body.scrollTop;
                 renderPractice();
-                body.scrollTop = state.scrollTop;
+                body.scrollTop = state.paneScroll[state.pane] || 0;
             });
             switchRow.appendChild(btn);
         });

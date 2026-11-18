@@ -277,6 +277,25 @@ html[data-ui-style="notebook"] .settings-layout {
 - **题材永远是"校园"**：界面从不传 theme。已按目标词稳定散列轮换，并显示在文章信息里
   （同组词必得同一题材，换组词会换题材）。
 
+### 人工看图后发现并修掉的视觉缺陷
+
+之前所有界面结论都来自程序化断言（元素存在、可点、样式有差异），**没有真正"看"过截图**。
+本轮看图后发现一个程序化断言抓不到的缺陷：
+
+- **窄窗里从「读文章」切到「做题目」，第 1 题题干被截掉一截。**
+  原因：两个面板共用同一个 `.reading-body` 滚动容器，切换时把文章的 `scrollTop`
+  （实测 164px）原样套给了题目页，题干因此被顶到可视区上方
+  （实测 `q1Top=48 < bodyTop=65`，"可见"判定确实为 false）。
+  已改为按面板分别记住滚动位置（`state.paneScroll`），切过去用目标面板自己的位置。
+  修后：`scrollTop` 归 0，题干完整可见，且切回文章时原来的阅读位置仍在（161 → 161）。
+
+  这条同时说明：先前"窄窗口切换保留阅读位置"的验证是**没测到真问题**的
+  ——旧脚本用 `pane.scrollTop` 取值恒为 0（真正的滚动容器是 `.reading-body`），
+  等于什么都没验证。新脚本用真实滚轮并定位真正的滚动容器。
+
+另外复核了结果页「其他选项」在截图里贴住面板底边的情况：用真实滚轮滚到底，
+最后一条解析在每个尺寸下都能完整进入视野（`RESULT_SCROLL_PASS`），是视口截断而非内容丢失。
+
 ---
 
 ## 五、两主题隔离
@@ -298,10 +317,10 @@ html[data-ui-style="notebook"] .settings-layout {
 - 目录：`D:\MeMo1\dist\MemoSuperform-0.92-reading-practice\`
 - 主程序：`D:\MeMo1\dist\MemoSuperform-0.92-reading-practice\MemoSuperform.exe`
 - 版本：0.92，`frozen=true`
-- 大小：98,281,558 字节
+- 大小：98,283,947 字节
 - 启动：双击，或 `MemoSuperform.exe --mode web` / `--mode desktop`
 - 构建标识：`0.92`，`--verify-build` 通过 30 项检查
-- SHA256：`CD123B2BEEBF3EBFBEBE09C9ACAC75766457DFB4BB663A704C1971BD94419832`
+- SHA256：`328A1125AC094F1F0562F0FF8137E4822C826FBD003AB3175EA332684AE8BFBB`
 
 ---
 
